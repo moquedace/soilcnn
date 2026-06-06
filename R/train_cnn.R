@@ -134,6 +134,9 @@ extract_gate_analysis <- function(model, data_loader, points_valid,
 #' @param gradient_clip  Max gradient norm (0 = disabled).
 #' @param print_every    Print progress every N epochs.
 #' @param model_name     Label written into the pred/obs output.
+#' @param augment        Apply D4 (rotation/flip) augmentation during training.
+#'   Patches are rotation/mirror invariant for a centre-point target, so this
+#'   is a label-preserving regulariser. Applied to training batches only.
 #'
 #' @return A list with: history, pred_all, perf_all, perf_quantile,
 #'   gate, best_epoch, runtime, config.
@@ -154,7 +157,8 @@ train_one_cnn <- function(
   min_lr             = 1e-6,
   gradient_clip      = 1.0,
   print_every        = 5L,
-  model_name         = "cnn"
+  model_name         = "cnn",
+  augment            = TRUE
 ) {
   base_lr       <- cfg$base_lr
   batch_size    <- cfg$batch_size
@@ -205,6 +209,7 @@ train_one_cnn <- function(
     coro::loop(for (batch in loaders$train) {
       inputs <- lapply(batch[-length(batch)], function(t) t$to(device = device))
       y      <- batch[[length(batch)]]$to(device = device)
+      if (augment) inputs <- augment_d4_batch(inputs)
       optimizer$zero_grad()
       pred   <- do.call(model, inputs)
       loss   <- loss_fn(pred, y)
@@ -445,7 +450,7 @@ run_cnn_tuning <- function(
       ),
       dplyr::select(cfg, -config_id, -window_sizes, -conv_channels),
       dplyr::rename_with(test_perf, ~ paste0("test_", .x),
-                         .cols = c(ccc, r2, mae, nse, rmse, mqi))
+                         .cols = c(ccc, r2, mae, nse, rmse, rpd, rpiq, mqi))
     )
     comparison <- dplyr::bind_rows(comparison, row)
     safe_write_csv2(comparison,
@@ -491,8 +496,11 @@ run_cnn_tuning <- function(
   val_ds   <- make_ds("validation")
   test_ds  <- make_ds("test")
 
+  # drop_last = TRUE on the training loader: prevents a final batch of size 1,
+  # which would make BatchNorm fail (variance of a single sample). Eval loaders
+  # keep all samples (no BatchNorm update in eval mode).
   list(
-    train      = torch::dataloader(train_ds, batch_size = bs_train, shuffle = TRUE),
+    train      = torch::dataloader(train_ds, batch_size = bs_train, shuffle = TRUE, drop_last = TRUE),
     train_eval = torch::dataloader(train_ds, batch_size = bs_eval,  shuffle = FALSE),
     validation = torch::dataloader(val_ds,   batch_size = bs_eval,  shuffle = FALSE),
     test       = torch::dataloader(test_ds,  batch_size = bs_eval,  shuffle = FALSE)

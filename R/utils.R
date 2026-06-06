@@ -131,3 +131,45 @@ set_optimizer_lr <- function(optimizer, lr) {
 make_activation <- function() {
   if ("nn_silu" %in% getNamespaceExports("torch")) torch::nn_silu() else torch::nn_relu()
 }
+
+# ── Data augmentation: dihedral (D4) symmetries ───────────────────────────────
+#
+# A raster patch can be rotated by 90°/180°/270° and mirrored without changing
+# the value at its centre — the geographic orientation of the patch is arbitrary
+# for predicting a point property. These 8 symmetries (the dihedral group D4) are
+# therefore label-preserving augmentations that multiply the effective training
+# data ×8 for free. This is the most natural regulariser for patch-based CNNs and
+# directly counters the early overfitting seen with larger architectures.
+#
+# Dims of a torch tensor are 1-based here: (N=1, C=2, H=3, W=4).
+
+#' Apply one of the 8 D4 symmetries to a 4D tensor (N, C, H, W). Square patches.
+#'
+#' @param x A 4D torch tensor.
+#' @param k Integer 1–8 selecting the symmetry.
+apply_d4 <- function(x, k) {
+  switch(k,
+    x,                                                    # 1: identity
+    torch::torch_flip(x$transpose(3, 4), dims = 4),       # 2: rotate 90
+    torch::torch_flip(x, dims = c(3, 4)),                 # 3: rotate 180
+    torch::torch_flip(x$transpose(3, 4), dims = 3),       # 4: rotate 270
+    torch::torch_flip(x, dims = 3),                       # 5: flip vertical
+    torch::torch_flip(x, dims = 4),                       # 6: flip horizontal
+    x$transpose(3, 4),                                    # 7: transpose (diagonal)
+    torch::torch_flip(x$transpose(3, 4), dims = c(3, 4))  # 8: anti-diagonal
+  )
+}
+
+#' Apply the SAME random D4 transform to every tensor in a list.
+#'
+#' Both branch inputs (e.g. 3×3 and 5×5 patches of the same samples) receive the
+#' same symmetry, keeping the two spatial scales geometrically consistent.
+#' Applied per training step (batch-level): all samples in a step share one
+#' orientation, but shuffling pairs each sample with many orientations across
+#' epochs. Call only during training — never on validation/test loaders.
+#'
+#' @param tensor_list List of 4D torch tensors (one per branch).
+augment_d4_batch <- function(tensor_list) {
+  k <- sample.int(8L, 1L)
+  lapply(tensor_list, apply_d4, k = k)
+}
