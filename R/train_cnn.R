@@ -451,7 +451,7 @@ run_cnn_tuning <- function(
     safe_write_csv2(comparison,
                     file.path(run_dir, "comparison", "comparison_all.csv"))
 
-    gc(); torch::gc()
+    gc()
   }
 
   # Rank and select best
