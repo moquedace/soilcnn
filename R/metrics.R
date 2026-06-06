@@ -12,13 +12,10 @@
 #   RMSE – Root Mean Squared Error: penalises large errors more than MAE.
 #   RPD  – Ratio of Performance to Deviation = sd(obs) / RMSE. Standard
 #           pedometric metric. RPD < 1.4 poor, 1.4–2.0 fair, > 2.0 good.
-#           Assumes a roughly normal target; less reliable for skewed data.
-#   RPIQ – Ratio of Performance to Inter-Quartile range = IQR(obs) / RMSE
-#           (Bellon-Maurel et al., 2010). Robust alternative to RPD for
-#           skewed soil properties (e.g. SOC); preferred for non-normal targets.
-#   MQI  – Model Quality Index (auxiliary, non-standard): composite
-#           (CCC × NSE) / (MAE / mean(obs)). Used only as an internal summary;
-#           report CCC, RMSE, R² and RPIQ as the primary metrics in papers.
+#   MQI  – Model Quality Index: (CCC × NSE) / (MAE / mean(obs)).
+#           Composite that balances agreement, efficiency and relative error.
+#           No direct literature precedent — treated as a project innovation.
+#           Higher is better; use alongside CCC and RMSE for paper reporting.
 
 # ── Core metric function ──────────────────────────────────────────────────────
 
@@ -26,8 +23,7 @@
 #'
 #' @param obs  Numeric vector of observed values.
 #' @param pred Numeric vector of predicted values (same length as obs).
-#' @return A one-row tibble with columns:
-#'   n, ccc, r2, mae, nse, rmse, rpd, rpiq, mqi.
+#' @return A one-row tibble with columns: n, ccc, r2, mae, nse, rmse, rpd, mqi.
 calc_metrics <- function(obs, pred) {
   obs  <- as.numeric(obs)
   pred <- as.numeric(pred)
@@ -39,7 +35,7 @@ calc_metrics <- function(obs, pred) {
   if (length(obs) < 2) {
     return(tibble::tibble(n = length(obs), ccc = NA_real_, r2 = NA_real_,
                           mae = NA_real_, nse = NA_real_, rmse = NA_real_,
-                          rpd = NA_real_, rpiq = NA_real_, mqi = NA_real_))
+                          rpd = NA_real_, mqi = NA_real_))
   }
 
   ccc_val <- tryCatch(
@@ -57,10 +53,8 @@ calc_metrics <- function(obs, pred) {
   rmse_val <- sqrt(mean((pred - obs)^2, na.rm = TRUE))
   mean_obs <- mean(obs, na.rm = TRUE)
 
-  sd_obs   <- stats::sd(obs, na.rm = TRUE)
-  iqr_obs  <- stats::IQR(obs, na.rm = TRUE)
-  rpd_val  <- if (rmse_val == 0) NA_real_ else sd_obs  / rmse_val
-  rpiq_val <- if (rmse_val == 0) NA_real_ else iqr_obs / rmse_val
+  sd_obs  <- stats::sd(obs, na.rm = TRUE)
+  rpd_val <- if (rmse_val == 0) NA_real_ else sd_obs / rmse_val
 
   mqi_val <- if (any(is.na(c(ccc_val, nse_val, mae_val))) ||
                  mean_obs == 0 || mae_val == 0) {
@@ -70,8 +64,7 @@ calc_metrics <- function(obs, pred) {
   }
 
   tibble::tibble(n = length(obs), ccc = ccc_val, r2 = r2_val, mae = mae_val,
-                 nse = nse_val, rmse = rmse_val,
-                 rpd = rpd_val, rpiq = rpiq_val, mqi = mqi_val)
+                 nse = nse_val, rmse = rmse_val, rpd = rpd_val, mqi = mqi_val)
 }
 
 # ── Aggregated tables ─────────────────────────────────────────────────────────

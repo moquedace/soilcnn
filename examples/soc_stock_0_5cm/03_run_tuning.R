@@ -50,11 +50,13 @@ training_args <- list(
   es_min_delta        = 0.0005,
   warmup_start_lr     = 1e-5,
   lr_plateau_factor   = 0.5,
-  lr_plateau_patience = 15L,
+  lr_plateau_patience = 25L,   # raised from 15: the exploratory run cut LR too
+                               # early, before models could settle on the plateau
   lr_plateau_min_delta = 0.0005,
   min_lr              = 1e-6,
   gradient_clip       = 1.0,
-  print_every         = 10L
+  print_every         = 10L,
+  augment             = TRUE   # D4 rotation/flip augmentation (regulariser)
 )
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
@@ -92,21 +94,33 @@ points_valid <- list(
 # ── Tuning grid ───────────────────────────────────────────────────────────────
 # See R/tune_grid.R and docs/tuning_guide.md for full parameter descriptions.
 #
-# make_tune_grid(): random sample from the full parameter space (like caret's
-#   tuneLength). Good for exploration.
+# FOCUSED grid, informed by the exploratory run (10 random configs):
+#   • 7×7 window dominated (CCC ~0.61) — 3×3 / 5×5 alone plateaued at ~0.20.
+#   • Low learning rate (1e-4) converged cleanly; high LR (1e-3–3e-3) was cut
+#     early and underperformed.
+#   • Lean architectures matched/beat large ones (64_128 ≈ 128_256_256).
+# So we restrict the search to the productive region and let the remaining
+# knobs (depth, SE, dropout, embedding, single-vs-dual 7×7) vary. Augmentation
+# is now on, so a little more capacity/regularisation is worth re-testing.
 #
-# make_manual_tune_grid(): explicit grid over selected parameters. Good for
-#   follow-up experiments after identifying promising regions.
-#
-# fixed = list(...): parameters to hold constant across all configs.
-#   Useful when you already know good values for some parameters.
+# `fixed` both fixes single values and restricts multi-value pools (see
+# R/tune_grid.R). make_manual_tune_grid() is the alternative for a full
+# factorial over a few parameters.
 
 tune_grid <- make_tune_grid(
-  tune_length = 10L,
+  tune_length = 12L,
   seed        = 42L,
   fixed = list(
-    loss_fn    = "smooth_l1",   # Huber loss — robust to outlier SOC values
-    batch_size = 512L           # fixed by GPU memory; change if OOM errors occur
+    loss_fn      = "smooth_l1",                 # robust to outlier SOC values
+    batch_size   = 512L,                        # fixed by GPU memory
+    window_sizes = list(c(7L), c(5L, 7L)),      # 7×7 single, or 5×7 dual
+    conv_channels = list(c(64L, 128L),          # lean
+                         c(64L, 128L, 128L)),   # moderate depth
+    base_lr      = c(1e-4, 3e-4),               # the productive LR region
+    use_residual = TRUE,                        # always on for ≥2 blocks
+    gate_type    = c("vector_featurewise", "no_gate_concat"),
+    embedding_dim = c(256L, 384L),
+    dropout      = c(0.1, 0.2)                  # mild–moderate regularisation
   )
 )
 
@@ -164,9 +178,9 @@ if (nrow(results$comparison) > 0) {
     dplyr::select(
       results$comparison,
       rank, config_id, window_sizes, conv_channels,
-      embedding_dim, gate_type, use_residual, use_se_block,
+      embedding_dim, gate_type, use_se_block, dropout,
       base_lr, best_epoch, runtime_min,
-      test_ccc, test_mae, test_r2, test_nse, test_rmse
+      test_ccc, test_mae, test_r2, test_nse, test_rmse, test_rpd, test_mqi
     ),
     n = 5, width = Inf
   )

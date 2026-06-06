@@ -450,7 +450,7 @@ run_cnn_tuning <- function(
       ),
       dplyr::select(cfg, -config_id, -window_sizes, -conv_channels),
       dplyr::rename_with(test_perf, ~ paste0("test_", .x),
-                         .cols = c(ccc, r2, mae, nse, rmse, rpd, rpiq, mqi))
+                         .cols = c(ccc, r2, mae, nse, rmse, rpd, mqi))
     )
     comparison <- dplyr::bind_rows(comparison, row)
     safe_write_csv2(comparison,

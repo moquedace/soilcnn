@@ -60,9 +60,11 @@
 
   # ── SE bottleneck ratio ───────────────────────────────────────────────────
   # The SE MLP has channels / reduction neurons in its hidden layer.
-  # Smaller reduction = bigger bottleneck = more parameters in SE.
-  # se_reduction = 16 (default) is a good balance.
-  se_reduction = c(8L, 16L, 32L),
+  # Fixed at 16: this is a 2nd-order knob whose effect on accuracy is
+  # negligible relative to window size, depth and learning rate. Varying it
+  # only wastes tuning budget. Override via fixed=list(se_reduction=...) if
+  # you specifically want to study it.
+  se_reduction = c(16L),
 
   # ── Embedding dimension ───────────────────────────────────────────────────
   # Size of the vector produced by each branch after the linear projection.
@@ -80,20 +82,17 @@
   # "no_gate_concat": no gating; branches are concatenated and the head learns fusion.
   gate_type = c("vector_featurewise", "scalar_per_sample", "no_gate_concat"),
 
-  # ── Regularisation: dropout rates ─────────────────────────────────────────
-  # Spatial dropout (2D): drops entire feature map channels during training.
-  # More aggressive than element-wise dropout for structured data.
-  branch_spatial_dropout = c(0.0, 0.02, 0.05),
-
-  # Embedding dropout: applied after the branch linear projection.
-  embed_dropout = c(0.0, 0.05, 0.10),
-
-  # Gate dropout: applied inside the gate network.
-  gate_dropout = c(0.0, 0.05, 0.10, 0.20),
-
-  # Head dropout layers (two independent rates).
-  head_dropout_1 = c(0.10, 0.20, 0.30),
-  head_dropout_2 = c(0.0, 0.05, 0.10),
+  # ── Regularisation: a single dropout knob ─────────────────────────────────
+  # The model has five internal dropout sites (spatial, embedding, gate, two
+  # head layers). Tuning them independently makes the search space huge and
+  # non-identifiable — many combinations are practically equivalent. Instead a
+  # single `dropout` strength controls overall regularisation and is mapped to
+  # the five sites with fixed sensible ratios (see .expand_dropout):
+  #   spatial = 0.25·d   embedding = 0   gate = 0.5·d
+  #   head_1  = 1.0·d    head_2    = 0.5·d
+  # This keeps the knob interpretable: 0 = none, 0.3 = strong. Power users can
+  # still set the five sites explicitly via make_manual_tune_grid().
+  dropout = c(0.0, 0.1, 0.2, 0.3),
 
   # ── Optimiser and learning rate ───────────────────────────────────────────
   # Adam is used throughout (adaptive LR per parameter, moment estimates).
@@ -127,9 +126,25 @@
   # ── LR warmup epochs ─────────────────────────────────────────────────────
   # Number of epochs to linearly ramp LR from warmup_start_lr to base_lr.
   # Prevents gradient explosions at the start when weights are random.
-  # 5 epochs is sufficient for most datasets.
-  warmup_epochs = c(3L, 5L, 10L)
+  # Fixed at 5: an optimisation detail, not a model hyperparameter — 5 epochs
+  # is sufficient across datasets and varying it wastes budget.
+  warmup_epochs = c(5L)
 )
+
+# ── Dropout expansion ─────────────────────────────────────────────────────────
+# Map the single `dropout` strength to the five internal dropout sites used by
+# dual_branch_cnn(). Embedding dropout stays 0 (its effect is marginal right
+# after BatchNorm). Returns a named list.
+
+.expand_dropout <- function(d) {
+  list(
+    spatial_dropout = round(0.25 * d, 4),
+    embed_dropout   = 0.0,
+    gate_dropout    = round(0.50 * d, 4),
+    head_dropout_1  = round(1.00 * d, 4),
+    head_dropout_2  = round(0.50 * d, 4)
+  )
+}
 
 # ── Grid generation ───────────────────────────────────────────────────────────
 
@@ -137,16 +152,34 @@
 #'
 #' @param tune_length  Number of configurations to sample.
 #' @param seed         Random seed for reproducibility.
-#' @param fixed        Named list of parameters to fix (overrides sampling).
-#'   Example: fixed = list(loss_fn = "smooth_l1", batch_size = 512L)
+#' @param fixed        Named list used to FIX or RESTRICT parameters:
+#'   - a length-1 value fixes the parameter        (e.g. loss_fn = "smooth_l1")
+#'   - a length>1 vector restricts the sampling pool (e.g. base_lr = c(1e-4, 3e-4))
+#'   - for the list-valued params window_sizes / conv_channels, pass a list of
+#'     options (e.g. window_sizes = list(c(7L), c(5L, 7L))) or a single vector.
+#'   Example focused search:
+#'     fixed = list(
+#'       loss_fn      = "smooth_l1",
+#'       batch_size   = 512L,
+#'       base_lr      = c(1e-4, 3e-4),
+#'       window_sizes = list(c(7L), c(5L, 7L))
+#'     )
 #'
 #' @return A tibble with one row per configuration.
 #'   window_sizes and conv_channels are stored as list-columns.
 make_tune_grid <- function(tune_length = 20L, seed = NULL, fixed = list()) {
   if (!is.null(seed)) set.seed(seed)
 
-  space <- .cnn_param_space
-  for (nm in names(fixed)) space[[nm]] <- list(fixed[[nm]])
+  space        <- .cnn_param_space
+  list_params  <- c("window_sizes", "conv_channels")
+  for (nm in names(fixed)) {
+    v <- fixed[[nm]]
+    space[[nm]] <- if (nm %in% list_params) {
+      if (is.list(v)) v else list(v)   # single vector → one option
+    } else {
+      v                                 # atomic vector → restricted pool
+    }
+  }
 
   rows <- vector("list", tune_length)
   for (i in seq_len(tune_length)) {
@@ -213,6 +246,12 @@ make_manual_tune_grid <- function(...) {
   window_list <- lapply(rows, `[[`, "window_sizes")
   conv_list   <- lapply(rows, `[[`, "conv_channels")
 
+  # Expand the single dropout knob into the five internal dropout sites that
+  # build_cnn_from_config() reads. Done per-row to honour each config's value.
+  drop_df <- do.call(rbind, lapply(scalar_df$dropout, function(d) {
+    as.data.frame(.expand_dropout(d), stringsAsFactors = FALSE)
+  }))
+
   tibble::tibble(
     config_id       = scalar_df$config_id,
     window_sizes    = window_list,
@@ -222,11 +261,12 @@ make_manual_tune_grid <- function(...) {
     se_reduction    = as.integer(scalar_df$se_reduction),
     embedding_dim   = as.integer(scalar_df$embedding_dim),
     gate_type       = scalar_df$gate_type,
-    spatial_dropout = as.numeric(scalar_df$branch_spatial_dropout),
-    embed_dropout   = as.numeric(scalar_df$embed_dropout),
-    gate_dropout    = as.numeric(scalar_df$gate_dropout),
-    head_dropout_1  = as.numeric(scalar_df$head_dropout_1),
-    head_dropout_2  = as.numeric(scalar_df$head_dropout_2),
+    dropout         = as.numeric(scalar_df$dropout),
+    spatial_dropout = as.numeric(drop_df$spatial_dropout),
+    embed_dropout   = as.numeric(drop_df$embed_dropout),
+    gate_dropout    = as.numeric(drop_df$gate_dropout),
+    head_dropout_1  = as.numeric(drop_df$head_dropout_1),
+    head_dropout_2  = as.numeric(drop_df$head_dropout_2),
     base_lr         = as.numeric(scalar_df$base_lr),
     weight_decay    = as.numeric(scalar_df$weight_decay),
     batch_size      = as.integer(scalar_df$batch_size),
