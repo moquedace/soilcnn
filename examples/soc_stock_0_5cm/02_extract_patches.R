@@ -121,89 +121,85 @@ vals_matrix <- terra::values(rast_stack)
 message("Values loaded: ", format(object.size(vals_matrix), units = "MB"),
         " in ", round(difftime(Sys.time(), t0, units = "secs"), 1), "s")
 
-# ── Helper: vectorised patch extraction ───────────────────────────────────────
+# ── Helper: per-window validity mask ──────────────────────────────────────────
 #
-# Returns an array of shape (n_valid × n_channels × w × w) with scaled values,
-# or NULL if no profiles pass the edge/NA filter.
+# Returns a logical vector (length = length(row_ids)): TRUE if the w×w patch
+# centered on that profile is fully inside the raster AND has no NA in any
+# cell/channel. Used to build a COMMON valid set across all window sizes so
+# every window array and the target vector share identical row order.
 #
-# The spatial layout of the patch (H × W dimensions) follows:
-#   row offset: -half .. 0 .. +half  (top to bottom)
-#   col offset: -half .. 0 .. +half  (left to right)
-# which matches PyTorch's (C, H, W) convention when converted to tensor.
-#
-# All arithmetic is done in RAM using matrix indexing — no R loop per profile.
+# Why a common set: the NA check can remove DIFFERENT profiles per window
+# (e.g., a coastal profile may have a clean 3×3 but a 7×7 that reaches an
+# ocean NA cell). Extracting each window on its own valid set would silently
+# misalign the arrays. Computing the intersection up front prevents that.
 
-extract_patches_vectorised <- function(row_ids, col_ids, vals_mat,
-                                        n_rows_rast, n_cols_rast, w) {
+window_valid_mask <- function(row_ids, col_ids, vals_mat,
+                              n_rows_rast, n_cols_rast, w) {
   half_w <- (w - 1L) / 2L
-  n_ch   <- ncol(vals_mat)
 
-  # Edge filter: profile must be at least half_w cells from every border
-  valid <- !is.na(row_ids) & !is.na(col_ids) &
+  edge_ok <- !is.na(row_ids) & !is.na(col_ids) &
     row_ids - half_w >= 1L & row_ids + half_w <= n_rows_rast &
     col_ids - half_w >= 1L & col_ids + half_w <= n_cols_rast
 
-  n_valid <- sum(valid)
-  if (n_valid == 0L) return(list(patches = NULL, valid_mask = valid))
+  valid <- edge_ok
+  idx   <- which(edge_ok)
+  if (length(idx) == 0L) return(valid)
 
-  v_rows <- row_ids[valid]
-  v_cols <- col_ids[valid]
-
-  # Offsets for all w×w patch positions
-  # expand.grid: dr varies slowest → patch rows top-to-bottom,
-  # dc varies fastest → patch cols left-to-right
+  v_rows  <- row_ids[idx]
+  v_cols  <- col_ids[idx]
   offsets <- expand.grid(dr = (-half_w):half_w, dc = (-half_w):half_w)
-  n_pos   <- nrow(offsets)   # = w * w
+  n_pos   <- nrow(offsets)
 
-  # Cell-index matrix: n_valid × n_pos
-  # cell = (row - 1) * n_cols_rast + col
-  cell_mat <- matrix(0L, nrow = n_valid, ncol = n_pos)
+  cell_mat <- matrix(0L, nrow = length(idx), ncol = n_pos)
   for (j in seq_len(n_pos)) {
     cell_mat[, j] <- (v_rows + offsets$dr[j] - 1L) * n_cols_rast +
                       v_cols + offsets$dc[j]
   }
 
-  # Single large extraction: (n_valid * n_pos) × n_ch
-  # Rows of cell_mat are in profile order, so as.vector(t(cell_mat))
-  # gives: all positions for profile 1, then profile 2, etc.
+  # all_cells ordering: [prof1pos1..prof1posN, prof2pos1..prof2posN, ...]
   all_cells <- as.vector(t(cell_mat))
-  all_vals  <- vals_mat[all_cells, , drop = FALSE]  # (n_valid*n_pos) × n_ch
+  na_mat    <- !is.finite(vals_mat[all_cells, , drop = FALSE])  # (n_idx*n_pos) × n_ch
 
-  # Check for any NA across spatial patch for each profile:
-  # NA in any cell → exclude profile
-  has_na <- apply(
-    matrix(!is.finite(all_vals), nrow = n_pos, ncol = n_valid * n_ch),
-    2L,
-    any
-  )
-  # Reshape has_na: we need per-profile, not per (profile × channel)
-  # Actually let's re-check: all_vals rows: [pos1_prof1, pos2_prof1, ..., pos_n_prof1, pos1_prof2, ...]
-  # Check per profile: any NA in its n_pos * n_ch values
-  na_matrix  <- !is.finite(all_vals)   # (n_valid * n_pos) × n_ch
-  # Group by profile: profile i → rows ((i-1)*n_pos + 1) .. (i*n_pos)
-  na_per_profile <- vapply(seq_len(n_valid), function(i) {
-    rows_i <- ((i - 1L) * n_pos + 1L):(i * n_pos)
-    any(na_matrix[rows_i, , drop = FALSE])
-  }, logical(1L))
+  na_per_pos     <- rowSums(na_mat) > 0L                        # length n_idx*n_pos
+  na_per_profile <- colSums(matrix(na_per_pos, nrow = n_pos)) > 0L  # length n_idx
 
-  # Update valid mask
-  valid_indices       <- which(valid)
-  valid[valid_indices[na_per_profile]] <- FALSE
+  valid[idx[na_per_profile]] <- FALSE
+  valid
+}
 
-  n_clean <- sum(!na_per_profile)
-  if (n_clean == 0L) return(list(patches = NULL, valid_mask = valid))
+# ── Helper: build patch array for an EXACT valid set ──────────────────────────
+#
+# Builds an (n × n_ch × w × w) array for the profiles flagged TRUE in `valid`,
+# which the caller guarantees are inside the raster and NA-free.
+#
+# Spatial layout: patches[prof, ch, r, col] corresponds to row offset
+# dr = r - half - 1 and col offset dc = col - half - 1 (audited against the
+# expand.grid offset order). This matches PyTorch's (C, H, W) convention.
 
-  clean_rows_in_allvals <- rep(!na_per_profile, each = n_pos)
-  clean_vals <- all_vals[clean_rows_in_allvals, , drop = FALSE]  # (n_clean*n_pos) × n_ch
+build_patch_array <- function(row_ids, col_ids, vals_mat, n_cols_rast, w, valid) {
+  half_w <- (w - 1L) / 2L
+  n_ch   <- ncol(vals_mat)
+  idx    <- which(valid)
+  n      <- length(idx)
+  if (n == 0L) return(NULL)
 
-  # Reshape to (n_clean × n_ch × w × w):
-  # array(clean_vals, dim = c(n_pos, n_clean, n_ch))[pos, prof, ch] = clean_vals[(prof-1)*n_pos+pos, ch] ✓
-  # Then aperm to (n_clean, n_ch, n_pos) then reshape to (n_clean, n_ch, w, w)
-  step1   <- array(clean_vals, dim = c(n_pos, n_clean, n_ch))  # [pos, prof, ch]
-  step2   <- aperm(step1, c(2L, 3L, 1L))                       # [prof, ch, pos]
-  patches <- array(step2, dim = c(n_clean, n_ch, w, w))        # [prof, ch, row, col]
+  v_rows  <- row_ids[idx]
+  v_cols  <- col_ids[idx]
+  offsets <- expand.grid(dr = (-half_w):half_w, dc = (-half_w):half_w)
+  n_pos   <- nrow(offsets)
 
-  list(patches = patches, valid_mask = valid)
+  cell_mat <- matrix(0L, nrow = n, ncol = n_pos)
+  for (j in seq_len(n_pos)) {
+    cell_mat[, j] <- (v_rows + offsets$dr[j] - 1L) * n_cols_rast +
+                      v_cols + offsets$dc[j]
+  }
+
+  all_cells <- as.vector(t(cell_mat))
+  vals      <- vals_mat[all_cells, , drop = FALSE]   # (n*n_pos) × n_ch
+
+  step1 <- array(vals,  dim = c(n_pos, n, n_ch))     # [pos, prof, ch]
+  step2 <- aperm(step1, c(2L, 3L, 1L))               # [prof, ch, pos]
+  array(step2, dim = c(n, n_ch, w, w))               # [prof, ch, row, col]
 }
 
 # ── Process one split ─────────────────────────────────────────────────────────
@@ -214,73 +210,46 @@ process_split <- function(scaled_df, role, vals_mat,
   message("\n── Processing split: ", role, " (", nrow(scaled_df), " profiles) ──")
 
   # Convert coordinates to raster row/col
-  coords <- as.matrix(scaled_df[, c("x", "y")])
-  cells  <- terra::cellFromXY(rast_stack, coords)
+  coords  <- as.matrix(scaled_df[, c("x", "y")])
+  cells   <- terra::cellFromXY(rast_stack, coords)
   row_ids <- terra::rowFromCell(rast_stack, cells)
   col_ids <- terra::colFromCell(rast_stack, cells)
 
-  # Determine valid profiles: use the maximum window for the strictest edge filter.
-  # A profile valid for max_w is valid for all smaller windows.
-  max_w    <- max(window_sizes)
-  half_max <- (max_w - 1L) / 2L
-
-  valid_base <- !is.na(row_ids) & !is.na(col_ids) &
-    row_ids - half_max >= 1L & row_ids + half_max <= n_rows_rast &
-    col_ids - half_max >= 1L & col_ids + half_max <= n_cols_rast
-
-  # Extract patches for each window size (only for base-valid profiles)
-  # All windows share the same valid set so arrays are aligned.
-  patch_list  <- list()
-  valid_final <- valid_base
-
+  # One COMMON valid set across all windows: a profile is kept only if EVERY
+  # requested window is inside the raster AND NA-free. Guarantees that all
+  # window arrays and the target vector are row-aligned.
+  valid_common <- rep(TRUE, nrow(scaled_df))
   for (w in window_sizes) {
-    message("  Extracting ", w, "×", w, " patches...")
-    t_w <- Sys.time()
-
-    # Pass only base-valid rows to the extractor
-    res <- extract_patches_vectorised(
-      row_ids     = ifelse(valid_base, row_ids, NA_integer_),
-      col_ids     = ifelse(valid_base, col_ids, NA_integer_),
-      vals_mat    = vals_mat,
-      n_rows_rast = n_rows_rast,
-      n_cols_rast = n_cols_rast,
-      w           = w
-    )
-
-    valid_final <- res$valid_mask   # narrowed by NA check
-    key         <- paste0("x_", w, "x", w, "_array")
-    patch_list[[key]] <- res$patches
-
-    message("    Done in ", round(difftime(Sys.time(), t_w, units = "secs"), 1), "s",
-            " | valid profiles: ", sum(valid_final), " / ", nrow(scaled_df))
+    vw <- window_valid_mask(row_ids, col_ids, vals_mat,
+                            n_rows_rast, n_cols_rast, w)
+    valid_common <- valid_common & vw
+    message("  window ", w, "×", w, " valid: ", sum(vw),
+            "  | running intersection: ", sum(valid_common))
   }
 
-  # All arrays must have the same N — use the final valid mask (strictest intersection)
-  n_valid <- sum(valid_final)
+  n_valid <- sum(valid_common)
   message("  Final valid profiles: ", n_valid, " / ", nrow(scaled_df),
           " (", round(100 * (nrow(scaled_df) - n_valid) / nrow(scaled_df), 1),
           "% removed)")
 
-  # Trim arrays to final valid set (some NA check may have narrowed further)
-  # valid_base profiles that survived NA check are in valid_final
-  valid_in_base <- which(valid_final)[seq_len(n_valid)]  # index into scaled_df
-
-  for (key in names(patch_list)) {
-    arr <- patch_list[[key]]
-    if (!is.null(arr) && dim(arr)[1] != n_valid) {
-      patch_list[[key]] <- arr[seq_len(n_valid), , , , drop = FALSE]
-    }
+  # Build each window array on the SAME valid set → identical N and row order
+  patch_list <- list()
+  for (w in window_sizes) {
+    t_w <- Sys.time()
+    key <- paste0("x_", w, "x", w, "_array")
+    patch_list[[key]] <- build_patch_array(row_ids, col_ids, vals_mat,
+                                           n_cols_rast, w, valid_common)
+    message("  built ", key, " in ",
+            round(difftime(Sys.time(), t_w, units = "secs"), 1), "s")
   }
 
-  # Target and metadata for valid profiles only
-  meta_valid <- scaled_df[valid_final, ] |>
+  # Target and metadata for the common valid set (same order as the arrays)
+  meta_valid <- scaled_df[valid_common, ] |>
     dplyr::select(profile_id, sample_id, dataset_role, x, y,
                   target_native, target_log1p) |>
     dplyr::rename(target_transform = target_log1p)
 
-  y_vec <- meta_valid$target_transform
-
-  c(patch_list, list(y = y_vec, meta = meta_valid))
+  c(patch_list, list(y = meta_valid$target_transform, meta = meta_valid))
 }
 
 # ── Run all splits ────────────────────────────────────────────────────────────
