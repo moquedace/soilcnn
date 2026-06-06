@@ -11,8 +11,7 @@ pkg <- c(
   "tibble",
   "janitor",
   "purrr",
-  "ggplot2",
-  "here"
+  "ggplot2"
 )
 
 install_load_pkg(pkg)
@@ -22,10 +21,10 @@ gc()
 
 options(width = 200)
 
-project_root <- here::here()
+project_root <- "D:/usuario_armazenamento/cassio/R/deep_learning_caret"
 setwd(project_root)
 
-source(here::here("R", "utils.R"))
+source(file.path(project_root, "R", "utils.R"))
 
 set.seed(123)
 
@@ -40,7 +39,8 @@ validation_fraction <- 0.15
 test_fraction       <- 0.15
 split_n_bins        <- 10
 
-soc_gpkg_file <- here::here(
+soc_gpkg_file <- file.path(
+  project_root,
   "data", "processed", "soc_stock_modeling", "full_data",
   "wosis_profile_soc_stock_spline_clean_preSpline.gpkg"
 )
@@ -74,9 +74,9 @@ stopifnot(
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
-output_data_dir     <- here::here("data", "processed", "soc_stock_modeling", target_label)
-output_metadata_dir <- here::here("outputs", "metadata", "soc_stock_modeling", target_label)
-output_figure_dir   <- here::here("outputs", "figures", "soc_stock_modeling", target_label)
+output_data_dir     <- file.path(project_root, "data",    "processed", "soc_stock_modeling", target_label)
+output_metadata_dir <- file.path(project_root, "outputs", "metadata",  "soc_stock_modeling", target_label)
+output_figure_dir   <- file.path(project_root, "outputs", "figures",   "soc_stock_modeling", target_label)
 
 create_output_dirs(c(output_data_dir, output_metadata_dir, output_figure_dir))
 
