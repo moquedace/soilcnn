@@ -1,0 +1,19 @@
+# R artifacts
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+
+# Large data and model outputs (do not commit binaries or processed data)
+data/
+outputs/
+*.rds
+*.pt
+*.tif
+*.gpkg
+*.csv
+
+# OS
+.DS_Store
+Thumbs.db
