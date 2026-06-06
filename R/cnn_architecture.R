@@ -19,8 +19,6 @@
 #   cnn_branch          – full branch: stack of blocks → SE → flatten → embedding
 #   dual_branch_cnn     – two branches + gate + regression head
 
-source(here::here("R", "utils.R"))
-
 # ── conv_block ────────────────────────────────────────────────────────────────
 # A plain convolutional block: Conv2d → BatchNorm → Activation.
 # kernel_size = 3, padding = 1 preserves spatial dimensions.

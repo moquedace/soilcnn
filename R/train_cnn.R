@@ -5,10 +5,6 @@
 # train_one_cnn()  – train a single CNN configuration, return results
 # run_cnn_tuning() – iterate over a tune_grid, rank configs, save everything
 
-source(here::here("R", "utils.R"))
-source(here::here("R", "metrics.R"))
-source(here::here("R", "cnn_architecture.R"))
-
 # ── Prediction helper ─────────────────────────────────────────────────────────
 
 #' Run inference over a DataLoader and return a pred/obs tibble.
