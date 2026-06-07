@@ -48,6 +48,29 @@ predict_loader <- function(model, data_loader, points_valid, dataset_role,
   )
 }
 
+# ── Loss in transform-space (CPU, from collected predictions) ─────────────────
+
+#' Compute the training loss directly from already-collected predictions.
+#'
+#' Reproduces the torch loss functions in transform (e.g. log1p) space so the
+#' per-epoch validation loss can be derived from the single forward pass that
+#' predict_loader() already performs — avoiding a second GPU pass over the
+#' validation set every epoch. Numerically identical to averaging the torch
+#' loss over the loader (mean reduction, SmoothL1 beta = 1.0).
+#'
+#' @param pred_t Predicted values in transform space (model raw output).
+#' @param obs_t  Observed values in transform space.
+#' @param loss_fn_name One of "smooth_l1", "mse", "mae".
+transform_space_loss <- function(pred_t, obs_t, loss_fn_name) {
+  d <- as.numeric(pred_t) - as.numeric(obs_t)
+  switch(loss_fn_name,
+    smooth_l1 = mean(ifelse(abs(d) < 1, 0.5 * d^2, abs(d) - 0.5)),  # beta = 1.0
+    mse       = mean(d^2),
+    mae       = mean(abs(d)),
+    stop("Unknown loss_fn: ", loss_fn_name)
+  )
+}
+
 # ── Gate analysis helper ──────────────────────────────────────────────────────
 
 #' Extract gate values and branch norms for interpretability.
@@ -225,11 +248,15 @@ train_one_cnn <- function(
     })
     tr_loss <- tr_loss_sum / tr_n
 
-    # --- Validation loss + metrics ---
-    val_loss <- compute_loader_loss(model, loaders$validation, loss_fn, device)
+    # --- Validation: one forward pass, then loss + metrics derived from it ---
+    # predict_loader() already iterates the whole validation loader; the loss is
+    # computed in transform space from those predictions, so there is no second
+    # GPU pass (compute_loader_loss is not called per epoch).
     pred_val <- predict_loader(model, loaders$validation,
                                points_valid$validation, "validation",
                                transform, device)
+    val_loss <- transform_space_loss(pred_val$pred_transform,
+                                     pred_val$obs_transform, cfg$loss_fn)
     perf_val <- make_performance_table(
       dplyr::mutate(pred_val, model = model_name, target_version = cfg$loss_fn)
     )
@@ -353,6 +380,9 @@ train_one_cnn <- function(
 #' @param output_dir   Root output directory.
 #' @param device       torch_device.
 #' @param run_id       String label for this tuning run.
+#' @param base_seed    Base RNG seed. Config i is trained after setting the seed
+#'   to base_seed + i (both R and torch), so each config has a reproducible
+#'   weight initialisation independent of the configs run before it.
 #' @param ...          Passed to train_one_cnn() (n_epochs, patience, etc.).
 run_cnn_tuning <- function(
   tune_grid,
@@ -363,6 +393,7 @@ run_cnn_tuning <- function(
   output_dir  = "./outputs/tuning",
   device,
   run_id      = format(Sys.time(), "%Y%m%d_%H%M%S"),
+  base_seed   = 42L,
   ...
 ) {
   run_dir <- file.path(output_dir, run_id)
@@ -380,11 +411,23 @@ run_cnn_tuning <- function(
     file.path(run_dir, "tune_grid.csv")
   )
 
+  # Build the tensor cache once for every window size used anywhere in the grid,
+  # then reuse it across all configs (avoids recreating large tensors per row).
+  windows_needed <- sort(unique(unlist(tune_grid$window_sizes)))
+  message("Building tensor cache for windows: ",
+          paste(windows_needed, collapse = ", "))
+  tensor_cache <- .build_tensor_cache(patches, windows_needed)
+
   comparison <- tibble::tibble()
   n_cfg      <- nrow(tune_grid)
 
   for (i in seq_len(n_cfg)) {
     cfg <- tune_grid[i, ]
+
+    # Per-config reproducible seed (init independent of previously run configs)
+    set.seed(base_seed + i)
+    torch::torch_manual_seed(base_seed + i)
+
     message("\n── Config ", i, "/", n_cfg, ": ", cfg$config_id, " ──")
     message("  window_sizes : ", paste(cfg$window_sizes[[1]], collapse = "x"))
     message("  conv_channels: ", paste(cfg$conv_channels[[1]], collapse = ", "))
@@ -396,8 +439,8 @@ run_cnn_tuning <- function(
             " | batch: ", cfg$batch_size,
             " | loss: ", cfg$loss_fn)
 
-    # Build DataLoaders for this config's window sizes
-    loaders <- .make_loaders(patches, cfg, device)
+    # Build DataLoaders for this config's window sizes from the shared cache
+    loaders <- .make_loaders_from_cache(tensor_cache, cfg)
 
     result <- tryCatch(
       train_one_cnn(
@@ -474,22 +517,50 @@ run_cnn_tuning <- function(
   invisible(list(comparison = comparison, run_dir = run_dir))
 }
 
-# ── DataLoader builder (internal) ─────────────────────────────────────────────
+# ── DataLoader builders (internal) ────────────────────────────────────────────
 
-.make_loaders <- function(patches, cfg, device) {
+#' Build float tensors once per (split, window) and per split target.
+#'
+#' The patch arrays are large (the 7×7 train array is ~1.6 GB). Converting them
+#' to tensors once and reusing across all configs avoids recreating the same
+#' tensors on every grid row. Tensors live on CPU; batches are moved to the
+#' device inside the training/eval loops.
+#'
+#' @param patches      Named list: train, validation, test.
+#' @param window_sizes Integer vector of window sizes to cache (union over grid).
+#' @return Nested list: cache[[split]][["x_WxW_array"]] and cache[[split]]$y.
+.build_tensor_cache <- function(patches, window_sizes) {
+  splits <- c("train", "validation", "test")
+  cache  <- vector("list", length(splits))
+  names(cache) <- splits
+  for (split in splits) {
+    cache[[split]] <- list()
+    for (w in window_sizes) {
+      key <- paste0("x_", w, "x", w, "_array")
+      cache[[split]][[key]] <- torch::torch_tensor(
+        patches[[split]][[key]], dtype = torch::torch_float()
+      )
+    }
+    cache[[split]]$y <- torch::torch_tensor(
+      as.numeric(patches[[split]]$y), dtype = torch::torch_float()
+    )$view(c(-1L, 1L))
+  }
+  cache
+}
+
+#' Build the four DataLoaders for one config from a prebuilt tensor cache.
+#'
+#' tensor_dataset only references the cached tensors (no copy); dataloaders are
+#' cheap to (re)create per config, so only batch_size-dependent objects are
+#' rebuilt here.
+.make_loaders_from_cache <- function(cache, cfg) {
   ws       <- cfg$window_sizes[[1]]
   bs_train <- cfg$batch_size
   bs_eval  <- min(bs_train * 4L, 2048L)
 
   make_ds <- function(split) {
-    arrays <- lapply(ws, function(w) {
-      key <- paste0("x_", w, "x", w, "_array")
-      torch::torch_tensor(patches[[split]][[key]], dtype = torch::torch_float())
-    })
-    y <- torch::torch_tensor(
-      as.numeric(patches[[split]]$y), dtype = torch::torch_float()
-    )$view(c(-1L, 1L))
-    do.call(torch::tensor_dataset, c(arrays, list(y)))
+    arrays <- lapply(ws, function(w) cache[[split]][[paste0("x_", w, "x", w, "_array")]])
+    do.call(torch::tensor_dataset, c(arrays, list(cache[[split]]$y)))
   }
 
   train_ds <- make_ds("train")
@@ -505,4 +576,12 @@ run_cnn_tuning <- function(
     validation = torch::dataloader(val_ds,   batch_size = bs_eval,  shuffle = FALSE),
     test       = torch::dataloader(test_ds,  batch_size = bs_eval,  shuffle = FALSE)
   )
+}
+
+#' Convenience wrapper: build loaders for a single config directly from patches.
+#' Used by the final-model script (single config). Caches only the windows that
+#' config needs. `device` is kept for backward compatibility (tensors are CPU).
+.make_loaders <- function(patches, cfg, device = NULL) {
+  cache <- .build_tensor_cache(patches, cfg$window_sizes[[1]])
+  .make_loaders_from_cache(cache, cfg)
 }

@@ -148,6 +148,9 @@ if (nrow(best_cfg) == 0) {
 
 message("\n── Iniciando treino com ", length(seeds), " seeds ──────────────────")
 
+# Cache de tensores construído UMA vez (reusado por todas as seeds)
+tensor_cache <- .build_tensor_cache(patches, best_cfg$window_sizes[[1]])
+
 seed_results <- vector("list", length(seeds))
 
 for (s_idx in seq_along(seeds)) {
@@ -158,7 +161,7 @@ for (s_idx in seq_along(seeds)) {
   set.seed(seed_val)
   torch::torch_manual_seed(seed_val)
 
-  loaders <- .make_loaders(patches, best_cfg, device)
+  loaders <- .make_loaders_from_cache(tensor_cache, best_cfg)
 
   result <- tryCatch(
     do.call(

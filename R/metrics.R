@@ -101,7 +101,12 @@ make_quantile_performance <- function(pred_obs_data) {
     dplyr::ungroup()
 }
 
-# ── Loader-level loss (used during training) ──────────────────────────────────
+# ── Loader-level loss (standalone utility) ────────────────────────────────────
+# NOTE: the per-epoch validation loss is computed by transform_space_loss() in
+# train_cnn.R, derived from the predictions that predict_loader() already
+# collects (one forward pass). This function remains a standalone helper for
+# ad-hoc loss evaluation over an arbitrary loader; it is NOT in the training
+# hot path.
 
 #' Compute weighted-average loss over all batches of a DataLoader.
 compute_loader_loss <- function(model, data_loader, loss_fn, device) {
