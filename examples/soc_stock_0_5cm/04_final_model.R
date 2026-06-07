@@ -6,6 +6,7 @@ pkg <- c(
   "torch",
   "coro",
   "dplyr",
+  "tidyr",
   "readr",
   "tibble",
   "purrr",
@@ -33,19 +34,26 @@ source(file.path(project_root, "R", "train_cnn.R"))
 target_label <- "soc_stock_0_5cm"
 target_unit  <- "ton_ha"
 
-# Run ID do tuning que gerou o ranking — ajuste para o seu run_id do round 2
-tuning_run_id <- "soc_0_5cm_20260606_174341"   # <- substitua pelo run_id do round 2
+# Run de tuning a usar. "latest" pega automaticamente o run mais recente
+# (ordenado pelo timestamp no nome da pasta). Ou informe um run_id explícito.
+tuning_run_id <- "latest"
 
-# Sementes a usar. Cada seed é um treino independente com o mesmo config.
-# A variância entre seeds estima a instabilidade do treinamento — se for alta,
-# o config é frágil; se for baixa, o resultado é robusto e publicável.
+# Configs a treinar no modelo final. Cada um é treinado com TODAS as seeds.
+# Use NULL para pegar apenas o rank 1 do ranking. Aqui comparamos os dois
+# candidatos do topo (cfg_004 dual 5x7 vs cfg_012 single 7x7).
+# As seeds são as mesmas para todos os configs → comparação pareada por seed.
+selected_config_ids <- c("cfg_004", "cfg_012")
+
+# Sementes. Cada seed é um treino independente do zero. A variância entre seeds
+# estima a estabilidade do treinamento — resultado publicável deve ter baixo
+# desvio (idealmente < ~5% do CCC médio).
 seeds <- c(42L, 123L, 456L, 789L, 2025L)
 
 device <- setup_torch_device(n_threads = 30, use_cuda = TRUE)
 
 # ── Hiperparâmetros de treinamento final ──────────────────────────────────────
-# Mais épocas e mais patience do que no tuning: agora que sabemos o melhor
-# config, deixamos o modelo convergir completamente sem pressa.
+# Mais épocas e mais patience do que no tuning: agora que sabemos os configs,
+# deixamos o modelo convergir completamente sem pressa.
 
 training_args <- list(
   n_epochs             = 700L,
@@ -63,31 +71,37 @@ training_args <- list(
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
-patch_file    <- file.path(project_root, "outputs", "patches",
-                            "soc_stock_modeling", target_label,
-                            "patches_all_splits.rds")
+patch_file        <- file.path(project_root, "outputs", "patches",
+                                "soc_stock_modeling", target_label,
+                                "patches_all_splits.rds")
 
-tuning_dir    <- file.path(project_root, "outputs", "tuning",
-                            "soc_stock_modeling", target_label,
-                            tuning_run_id)
+output_tuning_dir <- file.path(project_root, "outputs", "tuning",
+                                "soc_stock_modeling", target_label)
 
-ranking_file  <- file.path(tuning_dir, "comparison", "comparison_ranked.csv")
+# Resolver "latest" para o run de tuning mais recente
+if (identical(tuning_run_id, "latest")) {
+  run_dirs <- list.dirs(output_tuning_dir, recursive = FALSE, full.names = FALSE)
+  run_dirs <- run_dirs[grepl("^soc_", run_dirs)]
+  if (length(run_dirs) == 0) stop("Nenhum run de tuning encontrado em: ", output_tuning_dir)
+  tuning_run_id <- sort(run_dirs, decreasing = TRUE)[1]
+  message("tuning_run_id resolvido para: ", tuning_run_id)
+}
 
-run_id        <- paste0("final_", format(Sys.time(), "%Y%m%d_%H%M%S"))
+tuning_dir   <- file.path(output_tuning_dir, tuning_run_id)
+ranking_file <- file.path(tuning_dir, "comparison", "comparison_ranked.csv")
+tune_grid_file <- file.path(tuning_dir, "tune_grid.rds")
 
-output_dir    <- file.path(project_root, "outputs", "final_model",
-                            "soc_stock_modeling", target_label, run_id)
+run_id     <- paste0("final_", format(Sys.time(), "%Y%m%d_%H%M%S"))
+output_dir <- file.path(project_root, "outputs", "final_model",
+                        "soc_stock_modeling", target_label, run_id)
 
-output_dirs <- file.path(output_dir,
-                          c("models", "history", "predictions",
-                            "metrics", "gates", "seed_summary"))
-
-create_output_dirs(output_dirs)
+create_output_dirs(c(output_dir, file.path(output_dir, "comparison")))
 
 # ── Validações ────────────────────────────────────────────────────────────────
 
-if (!file.exists(patch_file))   stop("Patches não encontrados: ", patch_file)
-if (!file.exists(ranking_file)) stop("Ranking não encontrado: ",  ranking_file)
+if (!file.exists(patch_file))    stop("Patches não encontrados: ", patch_file)
+if (!file.exists(ranking_file))  stop("Ranking não encontrado: ",  ranking_file)
+if (!file.exists(tune_grid_file)) stop("tune_grid.rds não encontrado: ", tune_grid_file)
 
 # ── Carregar patches ──────────────────────────────────────────────────────────
 
@@ -102,203 +116,190 @@ points_valid <- list(
   test       = patches$test$meta
 )
 
-message("Canais: ", n_channels)
-message("Train: ", nrow(patches$train$meta),
+message("Canais: ", n_channels,
+        " | Train: ", nrow(patches$train$meta),
         " | Val: ", nrow(patches$validation$meta),
         " | Test: ", nrow(patches$test$meta))
 
-# ── Carregar melhor config do ranking ─────────────────────────────────────────
+# ── Selecionar configs ────────────────────────────────────────────────────────
 
-ranking <- readr::read_csv2(ranking_file, show_col_types = FALSE)
-
-best_row <- dplyr::filter(ranking, rank == 1L)
-
-message("\n── Melhor config selecionado ────────────────────────────────────")
-message("  config_id    : ", best_row$config_id)
-message("  window_sizes : ", best_row$window_sizes)
-message("  conv_channels: ", best_row$conv_channels)
-message("  embedding_dim: ", best_row$embedding_dim)
-message("  gate_type    : ", best_row$gate_type)
-message("  use_se_block : ", best_row$use_se_block)
-message("  base_lr      : ", best_row$base_lr)
-message("  dropout      : ", best_row$dropout)
-message("  tuning CCC   : ", round(best_row$test_ccc, 4))
-message("  tuning MAE   : ", round(best_row$test_mae, 3))
-
-# Reconstruir o config como tibble de uma linha (mesmo formato do tune_grid)
-# lendo o tune_grid original salvo pelo run_cnn_tuning
-tune_grid_file <- file.path(tuning_dir, "tune_grid.rds")
-
-if (!file.exists(tune_grid_file)) {
-  stop("tune_grid.rds não encontrado em: ", tuning_dir,
-       "\nEsse arquivo é salvo automaticamente pelo run_cnn_tuning().")
-}
-
+ranking        <- readr::read_csv2(ranking_file, show_col_types = FALSE)
 tune_grid_full <- readRDS(tune_grid_file)
-best_cfg <- dplyr::filter(tune_grid_full, config_id == best_row$config_id)
 
-if (nrow(best_cfg) == 0) {
-  stop("config_id '", best_row$config_id, "' não encontrado no tune_grid.rds.")
+if (is.null(selected_config_ids)) {
+  selected_config_ids <- dplyr::filter(ranking, rank == 1L)$config_id
 }
 
-# ── Treinar com múltiplas seeds ───────────────────────────────────────────────
-# Cada seed é um treino independente do zero com o mesmo config.
-# A variância entre seeds indica estabilidade — resultados publicáveis devem
-# ter baixo desvio padrão entre seeds (< ~5% do CCC médio).
+missing_cfgs <- setdiff(selected_config_ids, tune_grid_full$config_id)
+if (length(missing_cfgs) > 0) {
+  stop("config_ids não encontrados no tune_grid: ", paste(missing_cfgs, collapse = ", "))
+}
 
-message("\n── Iniciando treino com ", length(seeds), " seeds ──────────────────")
+selected_cfgs <- dplyr::filter(tune_grid_full, config_id %in% selected_config_ids)
 
-# Cache de tensores construído UMA vez (reusado por todas as seeds)
-tensor_cache <- .build_tensor_cache(patches, best_cfg$window_sizes[[1]])
+message("\n── Configs selecionados para o modelo final ──────────────────────")
+for (cid in selected_config_ids) {
+  r <- dplyr::filter(ranking, config_id == cid)
+  message("  ", cid,
+          " | janela ", r$window_sizes,
+          " | ", r$conv_channels,
+          " | embed ", r$embedding_dim,
+          " | ", r$gate_type,
+          " | tuning CCC ", round(r$test_ccc, 4))
+}
 
-seed_results <- vector("list", length(seeds))
+# ── Cache de tensores (cobre a união das janelas de todos os configs) ─────────
 
-for (s_idx in seq_along(seeds)) {
+windows_needed <- sort(unique(unlist(selected_cfgs$window_sizes)))
+message("\nConstruindo cache de tensores para janelas: ",
+        paste(windows_needed, collapse = ", "))
+tensor_cache <- .build_tensor_cache(patches, windows_needed)
 
-  seed_val <- seeds[s_idx]
-  message("\n── Seed ", s_idx, "/", length(seeds), ": ", seed_val, " ──")
+# ── Função: treinar um config com todas as seeds ──────────────────────────────
 
-  set.seed(seed_val)
-  torch::torch_manual_seed(seed_val)
+train_config_all_seeds <- function(cfg, config_id) {
 
-  loaders <- .make_loaders_from_cache(tensor_cache, best_cfg)
+  cfg_out_dir <- file.path(output_dir, config_id)
+  create_output_dirs(file.path(cfg_out_dir,
+                               c("models", "history", "predictions",
+                                 "metrics", "gates")))
 
-  result <- tryCatch(
-    do.call(
-      train_one_cnn,
-      c(
-        list(
-          cfg          = best_cfg,
-          n_channels   = n_channels,
-          loaders      = loaders,
-          points_valid = points_valid,
-          transform    = expm1,
-          device       = device,
-          model_name   = paste0("final_seed", seed_val)
-        ),
-        training_args
-      )
-    ),
-    error = function(e) {
-      message("  ERRO na seed ", seed_val, ": ", e$message)
-      NULL
+  seed_rows <- vector("list", length(seeds))
+
+  for (s_idx in seq_along(seeds)) {
+    seed_val <- seeds[s_idx]
+    message("\n── [", config_id, "] seed ", s_idx, "/", length(seeds),
+            ": ", seed_val, " ──")
+
+    set.seed(seed_val)
+    torch::torch_manual_seed(seed_val)
+
+    loaders <- .make_loaders_from_cache(tensor_cache, cfg)
+
+    result <- tryCatch(
+      do.call(
+        train_one_cnn,
+        c(list(cfg = cfg, n_channels = n_channels, loaders = loaders,
+               points_valid = points_valid, transform = expm1, device = device,
+               model_name = paste0(config_id, "_seed", seed_val)),
+          training_args)
+      ),
+      error = function(e) {
+        message("  ERRO [", config_id, "] seed ", seed_val, ": ", e$message)
+        NULL
+      }
+    )
+    if (is.null(result)) next
+
+    sl <- sprintf("seed%04d", seed_val)
+    safe_torch_save(result$best_state,  file.path(cfg_out_dir, "models",      paste0(sl, "_best.pt")))
+    safe_write_csv2(result$history,     file.path(cfg_out_dir, "history",     paste0(sl, "_history.csv")))
+    safe_write_csv2(result$pred_all,    file.path(cfg_out_dir, "predictions", paste0(sl, "_pred_all.csv")))
+    safe_write_csv2(result$perf_all,    file.path(cfg_out_dir, "metrics",     paste0(sl, "_perf.csv")))
+    safe_write_csv2(result$perf_quantile, file.path(cfg_out_dir, "metrics",   paste0(sl, "_perf_quantile.csv")))
+    if (!is.null(result$gate)) {
+      safe_write_csv2(result$gate$summary,    file.path(cfg_out_dir, "gates", paste0(sl, "_gate_summary.csv")))
+      safe_write_csv2(result$gate$by_profile, file.path(cfg_out_dir, "gates", paste0(sl, "_gate_profiles.csv")))
     }
-  )
 
-  if (is.null(result)) next
+    seed_rows[[s_idx]] <- dplyr::filter(result$perf_all, dataset_role == "test") |>
+      dplyr::mutate(config_id = config_id, seed = seed_val,
+                    best_epoch = result$best_epoch,
+                    runtime_min = result$runtime_min)
 
-  seed_label <- sprintf("seed%04d", seed_val)
-
-  # Salvar pesos do melhor epoch
-  safe_torch_save(
-    result$best_state,
-    file.path(output_dir, "models", paste0(seed_label, "_best.pt"))
-  )
-
-  # Salvar histórico
-  safe_write_csv2(
-    result$history,
-    file.path(output_dir, "history", paste0(seed_label, "_history.csv"))
-  )
-
-  # Salvar predições (train + val + test)
-  safe_write_csv2(
-    result$pred_all,
-    file.path(output_dir, "predictions", paste0(seed_label, "_pred_all.csv"))
-  )
-
-  # Salvar métricas
-  safe_write_csv2(
-    result$perf_all,
-    file.path(output_dir, "metrics", paste0(seed_label, "_perf.csv"))
-  )
-
-  safe_write_csv2(
-    result$perf_quantile,
-    file.path(output_dir, "metrics", paste0(seed_label, "_perf_quantile.csv"))
-  )
-
-  # Salvar gate analysis (se disponível)
-  if (!is.null(result$gate)) {
-    safe_write_csv2(
-      result$gate$summary,
-      file.path(output_dir, "gates", paste0(seed_label, "_gate_summary.csv"))
-    )
-    safe_write_csv2(
-      result$gate$by_profile,
-      file.path(output_dir, "gates", paste0(seed_label, "_gate_profiles.csv"))
-    )
+    message("  [", config_id, "] seed ", seed_val,
+            " | best_ep ", result$best_epoch,
+            " | CCC ",  round(seed_rows[[s_idx]]$ccc,  4),
+            " | MAE ",  round(seed_rows[[s_idx]]$mae,  3),
+            " | RMSE ", round(seed_rows[[s_idx]]$rmse, 3))
+    gc()
   }
 
-  # Extrair métricas de teste para resumo entre seeds
-  test_perf <- dplyr::filter(result$perf_all, dataset_role == "test") |>
-    dplyr::mutate(seed = seed_val, best_epoch = result$best_epoch,
-                  runtime_min = result$runtime_min)
-
-  seed_results[[s_idx]] <- test_perf
-
-  message("  seed ", seed_val, " | best_epoch: ", result$best_epoch,
-          " | CCC: ",  round(test_perf$ccc,  4),
-          " | MAE: ",  round(test_perf$mae,  3),
-          " | RMSE: ", round(test_perf$rmse, 3),
-          " | RPD: ",  round(test_perf$rpd,  3))
-
-  gc()
+  dplyr::bind_rows(purrr::compact(seed_rows))
 }
 
-# ── Resumo entre seeds ────────────────────────────────────────────────────────
+# ── Rodar todos os configs ────────────────────────────────────────────────────
 
-seed_table <- dplyr::bind_rows(purrr::compact(seed_results))
+all_seed_results <- tibble::tibble()
+for (i in seq_len(nrow(selected_cfgs))) {
+  cfg <- selected_cfgs[i, ]
+  res <- train_config_all_seeds(cfg, cfg$config_id)
+  all_seed_results <- dplyr::bind_rows(all_seed_results, res)
+}
 
-if (nrow(seed_table) == 0) stop("Nenhuma seed completou com sucesso.")
+if (nrow(all_seed_results) == 0) stop("Nenhuma seed completou com sucesso.")
 
-seed_summary <- seed_table |>
+# ── Resumo por config: média ± desvio entre seeds ─────────────────────────────
+
+config_summary <- all_seed_results |>
+  dplyr::group_by(config_id) |>
   dplyr::summarise(
-    n_seeds       = dplyr::n(),
-    config_id     = best_row$config_id,
-    window_sizes  = best_row$window_sizes,
-    conv_channels = best_row$conv_channels,
-    # métricas: média ± desvio entre seeds
-    ccc_mean  = mean(ccc,  na.rm = TRUE),  ccc_sd  = sd(ccc,  na.rm = TRUE),
-    r2_mean   = mean(r2,   na.rm = TRUE),  r2_sd   = sd(r2,   na.rm = TRUE),
-    mae_mean  = mean(mae,  na.rm = TRUE),  mae_sd  = sd(mae,  na.rm = TRUE),
-    nse_mean  = mean(nse,  na.rm = TRUE),  nse_sd  = sd(nse,  na.rm = TRUE),
-    rmse_mean = mean(rmse, na.rm = TRUE),  rmse_sd = sd(rmse, na.rm = TRUE),
-    rpd_mean  = mean(rpd,  na.rm = TRUE),  rpd_sd  = sd(rpd,  na.rm = TRUE),
-    mqi_mean  = mean(mqi,  na.rm = TRUE),  mqi_sd  = sd(mqi,  na.rm = TRUE),
-    best_epoch_mean = mean(best_epoch, na.rm = TRUE),
-    runtime_min_total = sum(runtime_min, na.rm = TRUE)
-  )
+    n_seeds   = dplyr::n(),
+    ccc_mean  = mean(ccc),  ccc_sd  = sd(ccc),
+    r2_mean   = mean(r2),   r2_sd   = sd(r2),
+    mae_mean  = mean(mae),  mae_sd  = sd(mae),
+    nse_mean  = mean(nse),  nse_sd  = sd(nse),
+    rmse_mean = mean(rmse), rmse_sd = sd(rmse),
+    rpd_mean  = mean(rpd),  rpd_sd  = sd(rpd),
+    mqi_mean  = mean(mqi),  mqi_sd  = sd(mqi),
+    best_epoch_mean   = mean(best_epoch),
+    runtime_min_total = sum(runtime_min),
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(dplyr::desc(ccc_mean))
 
-message("\n── Resumo final (", nrow(seed_table), " seeds) ──────────────────────")
-message(sprintf("  CCC  : %.4f ± %.4f", seed_summary$ccc_mean,  seed_summary$ccc_sd))
-message(sprintf("  MAE  : %.3f ± %.3f", seed_summary$mae_mean,  seed_summary$mae_sd))
-message(sprintf("  RMSE : %.3f ± %.3f", seed_summary$rmse_mean, seed_summary$rmse_sd))
-message(sprintf("  R²   : %.4f ± %.4f", seed_summary$r2_mean,   seed_summary$r2_sd))
-message(sprintf("  NSE  : %.4f ± %.4f", seed_summary$nse_mean,  seed_summary$nse_sd))
-message(sprintf("  RPD  : %.3f ± %.3f", seed_summary$rpd_mean,  seed_summary$rpd_sd))
-message(sprintf("  MQI  : %.4f ± %.4f", seed_summary$mqi_mean,  seed_summary$mqi_sd))
-
-safe_write_csv2(
-  seed_table,
-  file.path(output_dir, "seed_summary", "seed_results_test.csv")
-)
-
-safe_write_csv2(
-  seed_summary,
-  file.path(output_dir, "seed_summary", "seed_summary.csv")
-)
+safe_write_csv2(all_seed_results, file.path(output_dir, "comparison", "all_seed_results_test.csv"))
+safe_write_csv2(config_summary,   file.path(output_dir, "comparison", "config_summary_test.csv"))
 
 safe_save_rds(
-  list(
-    config      = best_cfg,
-    seed_table  = seed_table,
-    seed_summary = seed_summary,
-    run_id      = run_id,
-    tuning_run_id = tuning_run_id
-  ),
-  file.path(output_dir, "seed_summary", "final_run_summary.rds"),
+  list(selected_cfgs = selected_cfgs, seeds = seeds,
+       all_seed_results = all_seed_results, config_summary = config_summary,
+       run_id = run_id, tuning_run_id = tuning_run_id),
+  file.path(output_dir, "comparison", "final_run_summary.rds"),
   compress = FALSE
 )
+
+# ── Comparação pareada por seed (cfg_004 vs cfg_012) ──────────────────────────
+# Mesma seed = mesmo estado de RNG inicial, então a diferença por seed isola o
+# efeito da arquitetura. Reporta a diferença média e se ela é consistente.
+
+if (length(selected_config_ids) == 2) {
+  paired <- all_seed_results |>
+    dplyr::select(config_id, seed, ccc, mae, rmse, mqi) |>
+    tidyr::pivot_wider(names_from = config_id, values_from = c(ccc, mae, rmse, mqi))
+
+  c1 <- selected_config_ids[1]; c2 <- selected_config_ids[2]
+  paired <- paired |>
+    dplyr::mutate(
+      d_ccc  = .data[[paste0("ccc_",  c1)]] - .data[[paste0("ccc_",  c2)]],
+      d_mae  = .data[[paste0("mae_",  c1)]] - .data[[paste0("mae_",  c2)]],
+      d_rmse = .data[[paste0("rmse_", c1)]] - .data[[paste0("rmse_", c2)]],
+      d_mqi  = .data[[paste0("mqi_",  c1)]] - .data[[paste0("mqi_",  c2)]]
+    )
+
+  safe_write_csv2(paired, file.path(output_dir, "comparison", "paired_by_seed.csv"))
+
+  message("\n── Diferença pareada (", c1, " − ", c2, "), média entre seeds ──")
+  message(sprintf("  ΔCCC : %+.4f", mean(paired$d_ccc,  na.rm = TRUE)))
+  message(sprintf("  ΔMAE : %+.3f", mean(paired$d_mae,  na.rm = TRUE)))
+  message(sprintf("  ΔRMSE: %+.3f", mean(paired$d_rmse, na.rm = TRUE)))
+  message(sprintf("  ΔMQI : %+.4f", mean(paired$d_mqi,  na.rm = TRUE)))
+  message("  (ΔCCC > 0 favorece ", c1, "; |ΔCCC| menor que o desvio entre seeds = empate técnico)")
+}
+
+# ── Relatório final ───────────────────────────────────────────────────────────
+
+message("\n── Resumo por config (média ± desvio entre ", length(seeds), " seeds) ──")
+for (i in seq_len(nrow(config_summary))) {
+  s <- config_summary[i, ]
+  message("\n  ", s$config_id, " (n=", s$n_seeds, "):")
+  message(sprintf("    CCC  : %.4f ± %.4f", s$ccc_mean,  s$ccc_sd))
+  message(sprintf("    MAE  : %.3f ± %.3f", s$mae_mean,  s$mae_sd))
+  message(sprintf("    RMSE : %.3f ± %.3f", s$rmse_mean, s$rmse_sd))
+  message(sprintf("    R²   : %.4f ± %.4f", s$r2_mean,   s$r2_sd))
+  message(sprintf("    NSE  : %.4f ± %.4f", s$nse_mean,  s$nse_sd))
+  message(sprintf("    RPD  : %.3f ± %.3f", s$rpd_mean,  s$rpd_sd))
+  message(sprintf("    MQI  : %.4f ± %.4f", s$mqi_mean,  s$mqi_sd))
+}
 
 message("\nResultados salvos em: ", output_dir)
