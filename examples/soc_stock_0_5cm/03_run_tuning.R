@@ -77,8 +77,11 @@ if (!file.exists(patch_file)) {
 message("Loading patches...")
 patches <- readRDS(patch_file)
 
-n_channels <- dim(patches$train$x_3x3_array)[2]
-message("Channels: ", n_channels)
+# Channel count from the first available patch array (robust to window choice —
+# don't assume a 3x3 array exists).
+.first_array_key <- grep("_array$", names(patches$train), value = TRUE)[1]
+n_channels <- dim(patches$train[[.first_array_key]])[2]
+message("Channels: ", n_channels, " (from ", .first_array_key, ")")
 message("Train profiles:      ", nrow(patches$train$meta))
 message("Validation profiles: ", nrow(patches$validation$meta))
 message("Test profiles:       ", nrow(patches$test$meta))

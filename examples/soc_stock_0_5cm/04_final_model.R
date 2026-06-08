@@ -113,7 +113,9 @@ if (!file.exists(tune_grid_file)) stop("tune_grid.rds não encontrado: ", tune_g
 message("Carregando patches...")
 patches <- readRDS(patch_file)
 
-n_channels <- dim(patches$train$x_3x3_array)[2]
+# Channel count from the first available patch array (robust to window choice).
+.first_array_key <- grep("_array$", names(patches$train), value = TRUE)[1]
+n_channels <- dim(patches$train[[.first_array_key]])[2]
 
 points_valid <- list(
   train      = patches$train$meta,

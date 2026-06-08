@@ -309,6 +309,18 @@ if (!is.null(max_strip_ram_gb)) {
   ))
 }
 
+# Guard: a too-large single strip is the std::bad_alloc risk (heap can't find a
+# big enough contiguous block). Warn well before that point so the user can lower
+# output_block_rows / set max_strip_ram_gb.
+strip_gb <- (output_block_rows + 2L * half_w_max) * bytes_per_strip_row / 1e9
+if (strip_gb > 8) {
+  message(sprintf(
+    "  WARNING: each predictor strip is ~%.1f GB. At fine resolution a single ",
+    strip_gb),
+    "contiguous read this large can fail with std::bad_alloc. Lower ",
+    "output_block_rows or set max_strip_ram_gb (e.g. 4).")
+}
+
 # ── Load seed models ──────────────────────────────────────────────────────────
 
 model_files <- file.path(model_dir, sprintf("seed%04d_best.pt", seeds))

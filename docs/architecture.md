@@ -6,7 +6,7 @@
 Input (N profiles)
 │
 ├── Patch 1: N × C × w1 × w1        ├── Patch 2: N × C × w2 × w2
-│   (small window, e.g. 3×3)        │   (large window, e.g. 5×5)
+│   (small window, e.g. 3×3)        │   (large window, e.g. 15×15)
 │                                   │
 ├── conv_block × n_blocks            ├── conv_block × n_blocks
 │   Conv2d → BN → Act               │   Conv2d → BN → Act
@@ -132,17 +132,29 @@ SiLU is smooth, non-monotonic, and empirically outperforms ReLU in most deep lea
 
 ## Parameter count example
 
-Configuration: `conv_channels = c(64, 128, 128)`, `embedding_dim = 384`, dual branch `c(3, 5)`, SE reduction = 16.
+Configuration: `conv_channels = c(64, 128, 128)`, `embedding_dim = 384`, dual branch `c(3, 15)`, SE reduction = 16.
 
 | Component | Parameters (approx.) |
 |---|---|
 | Branch 1 (3×3): 3 conv blocks | ~200 k |
-| Branch 2 (5×5): 3 conv blocks | ~200 k |
+| Branch 2 (15×15): 3 conv blocks | ~200 k |
 | SE blocks (×2) | ~4 k |
-| Linear 3×3 → embed: (128×9) → 384 | ~443 k |
-| Linear 5×5 → embed: (128×25) → 384 | ~1.23 M |
-| Gate network: (4×384) → 384 | ~591 k |
-| Head | ~590 k |
-| **Total** | **~3.3 M** |
+| Linear 3×3 → embed: (128×9) → 384 | ~0.44 M |
+| Linear 15×15 → embed: (128×225) → 384 | ~11.1 M |
+| Gate network: (4×384) → 384 → 384 | ~0.74 M |
+| Head | ~0.35 M |
+| **Total** | **~13 M** |
 
-This is a moderate-sized network for a regression task. With ~25 000 training samples and regularisation (dropout, weight decay, SE), overfitting risk is controlled.
+> **Note — the flatten→embedding linear scales with window².** The conv blocks are
+> window-size independent (kernel × in × out), but each branch flattens
+> `C_final × w × w` and projects it to `embedding_dim`, so that one linear layer
+> grows quadratically with the window: ~0.44 M for 3×3, ~1.2 M for 5×5, **~11 M for
+> 15×15**. Large windows therefore concentrate most parameters in a single layer.
+> If a large-window config overfits, the cheapest levers are a smaller
+> `embedding_dim`, fewer final conv channels, or (a future architectural option)
+> a global-average-pool before the linear to drop the w² factor entirely.
+
+With ~25 000 training samples this is a sizeable network, so the regularisers
+(dropout, weight decay, SE, D4 augmentation, BatchNorm) and early stopping matter —
+especially for the larger windows. The single-branch 3×3 variant, by contrast, is
+tiny (~1 M total).

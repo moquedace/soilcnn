@@ -95,20 +95,26 @@ output_metadata_patch_dir <- file.path(input_metadata_dir, "patches")
 
 create_output_dirs(c(output_patch_dir, output_metadata_patch_dir))
 
-# ── Read scaled datasets and scaling table ────────────────────────────────────
+# ── Read split point tables and scaling table ─────────────────────────────────
+# We read the *_raw.csv split files, not *_scaled.csv: this script only needs
+# each profile's coordinates (x, y) and target, then re-extracts the predictor
+# PATCHES directly from the rasters and scales them itself (.scale_band_vec).
+# The pre-scaled predictor columns in *_scaled.csv would just be ignored, so the
+# raw file is the honest input here. Scaling parameters come from
+# predictor_scaling.csv (training-split statistics from script 01).
 
-message("Reading scaled datasets...")
+message("Reading split point tables...")
 
 read_split <- function(role) {
   readr::read_csv2(
-    file.path(input_data_dir, paste0(role, "_scaled.csv")),
+    file.path(input_data_dir, paste0(role, "_raw.csv")),
     show_col_types = FALSE
   )
 }
 
-train_sdd         <- read_split("train")
-validation_scaled <- read_split("validation")
-test_scaled       <- read_split("test")
+train_pts      <- read_split("train")
+validation_pts <- read_split("validation")
+test_pts       <- read_split("test")
 
 predictor_scaling <- readr::read_csv2(
   file.path(input_metadata_dir, "predictor_scaling.csv"),
@@ -119,9 +125,9 @@ predictor_cols <- predictor_scaling$predictor
 n_channels     <- length(predictor_cols)
 
 message("Predictors: ", n_channels)
-message("Train rows: ", nrow(train_sdd),
-        " | Validation: ", nrow(validation_scaled),
-        " | Test: ", nrow(test_scaled))
+message("Train rows: ", nrow(train_pts),
+        " | Validation: ", nrow(validation_pts),
+        " | Test: ", nrow(test_pts))
 
 # ── Open raster stack (metadata only — values read band-by-band) ──────────────
 
@@ -187,7 +193,7 @@ if (!is.null(max_ram_gb)) {
 # train + validation + test simultaneously and is saved uncompressed. This is
 # the dominant RAM cost — far larger than one band strip — and it scales with
 # the number of windows, NOT with raster resolution.
-patch_array_gb <- (nrow(train_sdd) + nrow(validation_scaled) + nrow(test_scaled)) *
+patch_array_gb <- (nrow(train_pts) + nrow(validation_pts) + nrow(test_pts)) *
   n_channels * sum(window_sizes_to_extract^2) * 8 / 1e9
 
 message(sprintf(
@@ -415,19 +421,19 @@ t_all <- Sys.time()
 
 patches <- list(
   train = process_split(
-    train_sdd, "train",
+    train_pts, "train",
     n_rows_rast, n_cols_rast, n_channels,
     window_sizes_to_extract, chunk_nrows, half_w_max,
     predictor_scaling, temperature_min_valid_celsius
   ),
   validation = process_split(
-    validation_scaled, "validation",
+    validation_pts, "validation",
     n_rows_rast, n_cols_rast, n_channels,
     window_sizes_to_extract, chunk_nrows, half_w_max,
     predictor_scaling, temperature_min_valid_celsius
   ),
   test = process_split(
-    test_scaled, "test",
+    test_pts, "test",
     n_rows_rast, n_cols_rast, n_channels,
     window_sizes_to_extract, chunk_nrows, half_w_max,
     predictor_scaling, temperature_min_valid_celsius
@@ -447,12 +453,12 @@ manifest <- tibble::tibble(
   n_train_valid                 = nrow(patches$train$meta),
   n_validation_valid            = nrow(patches$validation$meta),
   n_test_valid                  = nrow(patches$test$meta),
-  n_train_input                 = nrow(train_sdd),
-  n_validation_input            = nrow(validation_scaled),
-  n_test_input                  = nrow(test_scaled),
-  pct_train_removed             = round(100 * (nrow(train_sdd)         - nrow(patches$train$meta))      / nrow(train_sdd),         1),
-  pct_validation_removed        = round(100 * (nrow(validation_scaled) - nrow(patches$validation$meta)) / nrow(validation_scaled), 1),
-  pct_test_removed              = round(100 * (nrow(test_scaled)       - nrow(patches$test$meta))       / nrow(test_scaled),       1),
+  n_train_input                 = nrow(train_pts),
+  n_validation_input            = nrow(validation_pts),
+  n_test_input                  = nrow(test_pts),
+  pct_train_removed             = round(100 * (nrow(train_pts)         - nrow(patches$train$meta))      / nrow(train_pts),         1),
+  pct_validation_removed        = round(100 * (nrow(validation_pts) - nrow(patches$validation$meta)) / nrow(validation_pts), 1),
+  pct_test_removed              = round(100 * (nrow(test_pts)       - nrow(patches$test$meta))       / nrow(test_pts),       1),
   input_scaling                 = "predictor_scaling.csv",
   temperature_min_valid_celsius = temperature_min_valid_celsius,
   predictor_cols_final          = paste(predictor_cols, collapse = ";"),
