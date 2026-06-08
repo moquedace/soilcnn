@@ -94,7 +94,7 @@ ensemble_center <- "median"   # "median" (recommended) or "mean"
 #
 # The remaining RAM cost is the predictor STRIP (all C bands for the block's
 # window), read once per block:
-#   strip_bytes ≈ (output_block_rows + 2*half_w) * r_ncol * n_channels * 8
+#   strip_bytes ≈ (output_block_rows + 2*half_w_max) * r_ncol * n_channels * 8
 # max_strip_ram_gb auto-sizes output_block_rows to stay within that budget and
 # avoids the std::bad_alloc that a too-large single strip would trigger at fine
 # resolution (the same heap-fragmentation failure fixed in 02_extract_patches).
@@ -192,18 +192,20 @@ if (!config_id %in% final_summary$selected_cfgs$config_id) {
 
 cfg <- dplyr::filter(final_summary$selected_cfgs, config_id == !!config_id)
 
+# Handles BOTH single-branch (1 window) and dual-branch (2 windows) configs.
+# For dual-branch the two windows are read from the SAME predictor strip; a
+# centre pixel is predicted only if ALL channels of BOTH windows are finite
+# (the validity intersection), and the two patch arrays are fed to the two
+# branches in window_sizes order (branch1 = window_sizes[1], branch2 = [2]).
 window_sizes <- cfg$window_sizes[[1]]
-if (length(window_sizes) != 1L) {
-  stop("This prediction script handles single-branch configs only. ",
-       "cfg ", config_id, " has window_sizes = ",
-       paste(window_sizes, collapse = ", "),
-       ". A dual-branch streaming variant is required for >1 window.")
+n_branches   <- length(window_sizes)
+if (!n_branches %in% c(1L, 2L)) {
+  stop("cfg ", config_id, " has ", n_branches, " windows; expected 1 or 2.")
 }
-window_size <- window_sizes[1]
-half_w      <- (window_size - 1L) %/% 2L
+half_w_max   <- (max(window_sizes) - 1L) %/% 2L   # margins sized by the largest window
 
 message("\nConfig ", config_id,
-        " | window ", window_size, "x", window_size,
+        " | window(s) ", paste(window_sizes, collapse = "x"), " (", n_branches, "-branch)",
         " | conv ", paste(cfg$conv_channels[[1]], collapse = "_"),
         " | embed ", cfg$embedding_dim,
         " | gate ", cfg$gate_type)
@@ -283,26 +285,26 @@ n_cell <- terra::ncell(rast_stack)
 message("Raster grid: ", r_nrow, " rows x ", r_ncol, " cols x ", n_channels, " layers")
 
 # ── Resolve output_block_rows from the per-strip RAM budget ───────────────────
-# half_w is known (single-branch window). The predictor strip is the dominant
-# allocation; size it to stay within max_strip_ram_gb.
+# half_w_max (largest window) sets the strip margin. The predictor strip is the
+# dominant allocation; size it to stay within max_strip_ram_gb.
 
 bytes_per_strip_row <- as.numeric(r_ncol) * n_channels * 8   # all bands, one row
 
 if (!is.null(max_strip_ram_gb)) {
   output_block_rows <- max(1L, as.integer(
-    floor(max_strip_ram_gb * 1e9 / bytes_per_strip_row) - 2L * half_w
+    floor(max_strip_ram_gb * 1e9 / bytes_per_strip_row) - 2L * half_w_max
   ))
   message(sprintf(
     "Auto output_block_rows = %d  (strip budget %.1f GB -> %.2f GB/strip, %d blocks)",
     output_block_rows, max_strip_ram_gb,
-    (output_block_rows + 2L * half_w) * bytes_per_strip_row / 1e9,
+    (output_block_rows + 2L * half_w_max) * bytes_per_strip_row / 1e9,
     as.integer(ceiling(r_nrow / output_block_rows))
   ))
 } else {
   message(sprintf(
     "output_block_rows = %d  (%.2f GB/strip, %d blocks)",
     output_block_rows,
-    (output_block_rows + 2L * half_w) * bytes_per_strip_row / 1e9,
+    (output_block_rows + 2L * half_w_max) * bytes_per_strip_row / 1e9,
     as.integer(ceiling(r_nrow / output_block_rows))
   ))
 }
@@ -332,72 +334,90 @@ models <- purrr::map(seq_len(n_seeds), function(i) {
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-#' Build a [n, C, w, w] patch array for the given centre pixels from a strip of
-#' raster values read from rows [read_row_start .. read_row_start+read_nrows-1].
+#' Build one [n, C, w, w] patch array PER window for the given centre pixels,
+#' sharing a single validity mask across all windows (the intersection).
 #'
-#' Layout replicates 02_extract_patches.R EXACTLY:
+#' Works for 1 window (single branch) or 2 windows (dual branch). For dual
+#' branch a centre is kept only if EVERY channel of BOTH windows is finite, so
+#' both branches always receive the exact same set of samples.
+#'
+#' Layout replicates 02_extract_patches.R EXACTLY, per window:
 #'   offsets = expand.grid(dr, dc) with dr (row offset) varying fastest;
 #'   cells indexed row-major within the strip; reshape [n_pos, n, C] -> aperm ->
 #'   [n, C, w, w] so dim3 = row offset, dim4 = col offset (PyTorch N,C,H,W).
 #'
-#' Returns list(arr, valid) where `valid` flags centres whose full window is
-#' finite across all channels (centres with any NA/Inf are dropped from `arr`).
-build_patch_array_block <- function(center_row, center_col,
-                                    strip_values, read_row_start,
-                                    n_cols, n_ch, w) {
-  half <- (w - 1L) %/% 2L
-  n    <- length(center_row)
-
-  offsets <- expand.grid(dr = (-half):half, dc = (-half):half)
-  n_pos   <- nrow(offsets)
-
+#' Returns list(arrays, valid): `arrays` is a list of patch arrays in
+#' window_sizes order (each holding only the common-valid centres); `valid`
+#' flags, over ALL input centres, which were kept.
+build_patches_multi <- function(center_row, center_col, strip_values,
+                                read_row_start, n_cols, n_ch, window_sizes) {
+  n         <- length(center_row)
   row_local <- center_row - read_row_start + 1L   # 1-based row within the strip
 
-  # cell index into strip_values (row-major) for every (centre, offset)
-  cell_mat <- matrix(0L, nrow = n, ncol = n_pos)
-  for (j in seq_len(n_pos)) {
-    cell_mat[, j] <- (row_local + offsets$dr[j] - 1L) * n_cols +
-                     (center_col + offsets$dc[j])
+  # ── Pass 1: per-window cell-index matrix + validity → common (AND) mask ─────
+  # Keep only the cheap integer cell matrices; the (large) extracted values are
+  # transient here and re-extracted for valid centres in pass 2.
+  per_win      <- vector("list", length(window_sizes))
+  valid_common <- rep(TRUE, n)
+
+  for (k in seq_along(window_sizes)) {
+    w    <- window_sizes[k]
+    half <- (w - 1L) %/% 2L
+    offsets <- expand.grid(dr = (-half):half, dc = (-half):half)
+    n_pos   <- nrow(offsets)
+
+    cell_mat <- matrix(0L, nrow = n, ncol = n_pos)
+    for (j in seq_len(n_pos)) {
+      cell_mat[, j] <- (row_local + offsets$dr[j] - 1L) * n_cols +
+                       (center_col + offsets$dc[j])
+    }
+
+    row_finite <- rowSums(!is.finite(
+      strip_values[as.vector(t(cell_mat)), , drop = FALSE])) == 0
+    valid_w      <- colSums(matrix(row_finite, nrow = n_pos, ncol = n)) == n_pos
+    valid_common <- valid_common & valid_w
+
+    per_win[[k]] <- list(w = w, n_pos = n_pos, cell_mat = cell_mat)
   }
 
-  all_cells <- as.vector(t(cell_mat))                  # pos-major within centre
-  vals      <- strip_values[all_cells, , drop = FALSE] # (n*n_pos) x n_ch
+  arrays <- vector("list", length(window_sizes))
 
-  # validity: every position x every channel finite (base rowSums/colSums
-  # accept logical matrices natively; TRUE counts as 1)
-  row_finite  <- rowSums(!is.finite(vals)) == 0
-  valid       <- colSums(matrix(row_finite, nrow = n_pos, ncol = n)) == n_pos
-
-  if (!any(valid)) {
-    return(list(arr = array(0, dim = c(0L, n_ch, w, w)), valid = valid))
+  if (!any(valid_common)) {
+    for (k in seq_along(window_sizes)) {
+      arrays[[k]] <- array(0, dim = c(0L, n_ch, per_win[[k]]$w, per_win[[k]]$w))
+    }
+    return(list(arrays = arrays, valid = valid_common))
   }
 
-  valid_pos  <- which(valid)
-  keep_rows  <- as.vector(vapply(
-    valid_pos,
-    function(p) ((p - 1L) * n_pos + 1L):(p * n_pos),
-    integer(n_pos)
-  ))
-  vals_valid <- vals[keep_rows, , drop = FALSE]        # (n_valid*n_pos) x n_ch
+  # ── Pass 2: extract + reshape only the common-valid centres, per window ─────
+  valid_pos <- which(valid_common)
+  for (k in seq_along(window_sizes)) {
+    w     <- per_win[[k]]$w
+    n_pos <- per_win[[k]]$n_pos
+    sub_cells  <- as.vector(t(per_win[[k]]$cell_mat[valid_pos, , drop = FALSE]))
+    vals_valid <- strip_values[sub_cells, , drop = FALSE]   # (n_valid*n_pos) x C
 
-  step1 <- array(vals_valid, dim = c(n_pos, length(valid_pos), n_ch)) # [pos, n, ch]
-  step2 <- aperm(step1, c(2L, 3L, 1L))                                # [n, ch, pos]
-  arr   <- array(step2, dim = c(length(valid_pos), n_ch, w, w))       # [n, ch, r, c]
+    step1 <- array(vals_valid, dim = c(n_pos, length(valid_pos), n_ch)) # [pos, n, ch]
+    step2 <- aperm(step1, c(2L, 3L, 1L))                                # [n, ch, pos]
+    arrays[[k]] <- array(step2, dim = c(length(valid_pos), n_ch, w, w)) # [n, ch, r, c]
+  }
 
-  list(arr = arr, valid = valid)
+  list(arrays = arrays, valid = valid_common)
 }
 
-#' Predict log1p values for a patch array with one model, batched on the GPU.
-predict_one_model <- function(model, arr, device, batch_size) {
-  n <- dim(arr)[1]
+#' Predict log1p values for a list of patch arrays (one per branch) with one
+#' model, batched on the GPU. Single branch → list of length 1; dual → length 2.
+predict_one_model <- function(model, arr_list, device, batch_size) {
+  n <- dim(arr_list[[1]])[1]
   if (n == 0L) return(numeric(0))
   out <- numeric(n)
   idx_groups <- split(seq_len(n), ceiling(seq_len(n) / batch_size))
   torch::with_no_grad({
     for (idx in idx_groups) {
-      x <- torch::torch_tensor(arr[idx, , , , drop = FALSE],
-                               dtype = torch::torch_float(), device = device)
-      p <- model(x)                       # single-branch forward -> [b, 1], log1p
+      tensors <- lapply(arr_list, function(a)
+        torch::torch_tensor(a[idx, , , , drop = FALSE],
+                            dtype = torch::torch_float(), device = device))
+      p <- do.call(model, tensors)        # 1 or 2 branch inputs -> [b, 1], log1p
       out[idx] <- as.numeric(p$squeeze(2L)$to(device = "cpu"))
     }
   })
@@ -414,7 +434,8 @@ compute_block <- function(b_start) {
   out_nrows   <- min(output_block_rows, r_nrow - b_start + 1L)
   out_row_end <- b_start + out_nrows - 1L
 
-  center_rows <- intersect(b_start:out_row_end, (half_w + 1L):(r_nrow - half_w))
+  center_rows <- intersect(b_start:out_row_end,
+                           (half_w_max + 1L):(r_nrow - half_w_max))
 
   empty <- list(out_nrows = out_nrows, n_req = 0L, n_val = 0L,
                 cells_all = integer(0), valid = logical(0),
@@ -423,8 +444,8 @@ compute_block <- function(b_start) {
                 mad = numeric(0), min = numeric(0), max = numeric(0))
   if (length(center_rows) == 0L) return(empty)
 
-  read_row_start <- min(center_rows) - half_w
-  read_row_end   <- max(center_rows) + half_w
+  read_row_start <- min(center_rows) - half_w_max
+  read_row_end   <- max(center_rows) + half_w_max
   read_nrows     <- read_row_end - read_row_start + 1L
 
   strip_values <- terra::values(rast_stack, row = read_row_start,
@@ -433,7 +454,7 @@ compute_block <- function(b_start) {
                                           scale_method, scale_center, scale_factor,
                                           temperature_min_valid_celsius)
 
-  center_cols <- (half_w + 1L):(r_ncol - half_w)
+  center_cols <- (half_w_max + 1L):(r_ncol - half_w_max)
   grid  <- expand.grid(center_row = center_rows, center_col = center_cols)
   n_req <- nrow(grid)
 
@@ -450,14 +471,14 @@ compute_block <- function(b_start) {
     cr <- grid$center_row[ci]
     cc <- grid$center_col[ci]
 
-    pb <- build_patch_array_block(cr, cc, strip_values, read_row_start,
-                                  r_ncol, n_channels, window_size)
+    pb <- build_patches_multi(cr, cc, strip_values, read_row_start,
+                              r_ncol, n_channels, window_sizes)
     valid_all[ci] <- pb$valid
-    if (dim(pb$arr)[1] == 0L) next
+    if (dim(pb$arrays[[1]])[1] == 0L) next
 
-    preds_native <- matrix(NA_real_, nrow = dim(pb$arr)[1], ncol = n_seeds)
+    preds_native <- matrix(NA_real_, nrow = dim(pb$arrays[[1]])[1], ncol = n_seeds)
     for (s in seq_len(n_seeds)) {
-      preds_native[, s] <- pmax(expm1(predict_one_model(models[[s]], pb$arr,
+      preds_native[, s] <- pmax(expm1(predict_one_model(models[[s]], pb$arrays,
                                                          device, batch_size)), 0)
     }
 
@@ -683,7 +704,8 @@ safe_write_csv2(block_summary, file.path(output_log_dir, "prediction_block_summa
 prediction_config <- tibble::tibble(
   target_label = target_label, target_unit = target_unit,
   config_id = config_id, final_run_id = final_run_id,
-  window_size = window_size, n_channels = n_channels,
+  window_sizes = paste(window_sizes, collapse = "x"), n_branches = n_branches,
+  n_channels = n_channels,
   n_seeds = n_seeds, seeds = paste(seeds, collapse = ";"),
   ensemble_center = ensemble_center,
   input_scaling = "predictor_scaling.csv_zscore_percentage_dummy",
