@@ -38,7 +38,7 @@ torch::torch_manual_seed(42)
 
 # ── Torch device ──────────────────────────────────────────────────────────────
 
-device <- setup_torch_device(n_threads = 16, use_cuda = TRUE)
+device <- setup_torch_device(n_threads = 30, use_cuda = TRUE)
 
 # ── Training hyperparameters ──────────────────────────────────────────────────
 # These are fixed across all configs in the grid.
@@ -185,3 +185,4 @@ if (nrow(results$comparison) > 0) {
     n = 5, width = Inf
   )
 }
+

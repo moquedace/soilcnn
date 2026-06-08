@@ -27,22 +27,30 @@ Rasters (TIF stack)                 Soil profiles (GPKG)
         └────────────┬───────────────────────┘
                      ▼
            01_prepare_dataset.R
-           Extract + QC + scale + stratified split
+           Extract · QC · z-score/percentage scaling · stratified split
                      │
                      ▼
            02_extract_patches.R
-           Spatial patch arrays  N × C × H × W
+           Spatial patch arrays  N × C × H × W  (scaled, channel-aligned)
                      │
                      ▼
            03_run_tuning.R
            make_tune_grid(tune_length = 30)  ←──  like caret's tuneLength
                      │
             ┌────────┴────────┐
-            │  cfg_001 ... cfg_N  │   train → validate → evaluate
+            │  cfg_001 ... cfg_N  │   train → validate → test (read-only)
             └────────┬────────┘
                      ▼
-           comparison_ranked.csv
-           Best architecture selected by CCC + MAE
+           validation_ranking.csv
+           Best architecture selected from validation metrics only
+                     │
+                     ▼
+           04_final_model.R
+           Top configs × N seeds  (paired comparison, same init per seed)
+                     │
+                     ▼
+           05_predict_spatial.R
+           Block-streaming · seed ensemble · median map + uncertainty layers
 ```
 
 ---
@@ -55,6 +63,8 @@ Each soil profile is represented by **two spatial patches** extracted from a sta
 |--------|--------|--------------------|
 | Small  | 3 × 3 cells | Local topography, land cover, proximity effects |
 | Large  | 5 × 5 or 7 × 7 cells | Landscape climate, parent material, watershed position |
+
+Patches are **channel-wise scaled** before reaching the network (z-score for continuous predictors, /100 for proportions, identity for dummies) using statistics computed from the training split. This equalises gradient flow across channels with very different magnitudes — e.g. elevation (thousands) vs. vegetation indices (0–1).
 
 A learned **gate** fuses the two embeddings per sample — letting each location draw from whichever spatial scale is more informative for the target variable.
 
@@ -163,8 +173,21 @@ All splits (train · validation · test) are evaluated with six metrics, also br
 | **RMSE** | Root Mean Squared Error |
 | **MQI** | Model Quality Index = (CCC × NSE) / (MAE / mean(obs)) |
 
-Model selection across configs ranks by **test CCC** (descending), then **test MAE** (ascending).  
+Model selection across configs ranks by a **validation-only composite score** (CCC · MAE · R² · NSE · RMSE · MQI + tail MAE for Q95–Q100). The test set is opened **once**, after the winning architecture is locked in. This avoids the common mistake of tuning toward test performance.
+
 Early stopping uses **validation SmoothL1 loss** — keeping the stopping criterion consistent with the training objective.
+
+### Multi-seed ensemble
+
+After architecture selection, the top config(s) are re-trained with N independent seeds (different weight initialisation + batch shuffling). Sources of run-to-run variance:
+
+| Source | Effect |
+|--------|--------|
+| Weight initialisation | Different local minima after convergence |
+| Batch shuffle order | Different gradient path through the loss landscape |
+| Dropout masks | Different regularisation per forward pass |
+
+Spatial prediction aggregates all seed models per pixel. The **median** is the recommended headline map: it is invariant to the monotone `expm1` back-transform (`median(expm1(z)) = expm1(median(z))`), robust to divergent seeds, and consistent with what SmoothL1 learns (a conditional median). SD and MAD are written as epistemic uncertainty layers.
 
 ---
 
@@ -176,7 +199,8 @@ install.packages(c(
   "terra", "sf",                            # geospatial
   "dplyr", "tidyr", "readr", "tibble",      # data wrangling
   "purrr", "janitor", "ggplot2",            # utilities
-  "DescTools"                               # CCC calculation
+  "DescTools",                              # CCC calculation
+  "matrixStats"                             # rowMedians / rowSds for ensemble aggregation
 ))
 ```
 
@@ -190,9 +214,11 @@ The [`examples/soc_stock_0_5cm/`](examples/soc_stock_0_5cm/) directory contains 
 
 | Script | What it does |
 |--------|-------------|
-| [`01_prepare_dataset.R`](examples/soc_stock_0_5cm/01_prepare_dataset.R) | Read GPKG + rasters · QC · scale · stratified split |
-| [`02_extract_patches.R`](examples/soc_stock_0_5cm/02_extract_patches.R) | Extract 3×3, 5×5, 7×7 patch arrays for all splits |
-| [`03_run_tuning.R`](examples/soc_stock_0_5cm/03_run_tuning.R) | Generate grid · train all configs · rank results |
+| [`01_prepare_dataset.R`](examples/soc_stock_0_5cm/01_prepare_dataset.R) | Read GPKG + rasters · QC · z-score/percentage scaling · stratified split |
+| [`02_extract_patches.R`](examples/soc_stock_0_5cm/02_extract_patches.R) | Extract 3×3, 5×5, 7×7 patch arrays with consistent channel scaling |
+| [`03_run_tuning.R`](examples/soc_stock_0_5cm/03_run_tuning.R) | Generate grid · train all configs · rank by validation metrics |
+| [`04_final_model.R`](examples/soc_stock_0_5cm/04_final_model.R) | Re-train winning config(s) with N seeds · paired-by-seed comparison |
+| [`05_predict_spatial.R`](examples/soc_stock_0_5cm/05_predict_spatial.R) | Block-streaming wall-to-wall prediction · seed ensemble · median + uncertainty rasters |
 
 ---
 

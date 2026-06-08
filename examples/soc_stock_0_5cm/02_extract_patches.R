@@ -121,6 +121,44 @@ vals_matrix <- terra::values(rast_stack)
 message("Values loaded: ", format(object.size(vals_matrix), units = "MB"),
         " in ", round(difftime(Sys.time(), t0, units = "secs"), 1), "s")
 
+# ── Apply predictor scaling to raw raster values ──────────────────────────────
+# Scales vals_matrix in-place (one column = one predictor channel) using the
+# same parameters computed from the training split in script 01.
+# After this step, vals_matrix holds the SAME representation that the CNN will
+# see during training — which is what spatial prediction must replicate too.
+#
+# Temperature QC is applied before z-scoring: values at or below
+# temperature_min_valid_celsius are set to NA (same threshold as script 01).
+# Dummy predictors (scaling_method == "none_dummy_0_1") are left unchanged.
+
+temperature_min_valid_celsius <- -100   # must match script 01
+
+message("\nApplying predictor scaling to raster values matrix (", n_channels, " channels)...")
+t_scale <- Sys.time()
+
+for (i in seq_len(n_channels)) {
+  method    <- predictor_scaling$scaling_method[i]
+  pred_name <- predictor_scaling$predictor[i]
+  x         <- vals_matrix[, i]
+
+  if (grepl("surface_temperature_celsius$", pred_name)) {
+    x[!is.na(x) & is.finite(x) & x <= temperature_min_valid_celsius] <- NA_real_
+  }
+
+  if (method == "zscore_train") {
+    x <- (x - predictor_scaling$train_center[i]) / predictor_scaling$train_scale[i]
+  } else if (method == "percentage_0_100_to_0_1") {
+    x[!is.na(x) & is.finite(x) & (x < 0 | x > 100)] <- NA_real_
+    x <- x / 100
+  }
+  # "none_dummy_0_1": no transformation
+
+  vals_matrix[, i] <- x
+}
+
+message("Scaling applied in ",
+        round(difftime(Sys.time(), t_scale, units = "secs"), 1), "s")
+
 # ── Helper: per-window validity mask ──────────────────────────────────────────
 #
 # Returns a logical vector (length = length(row_ids)): TRUE if the w×w patch
@@ -280,6 +318,8 @@ manifest <- tibble::tibble(
   pct_train_removed       = round(100 * (nrow(train_scaled)      - nrow(patches$train$meta))      / nrow(train_scaled),      1),
   pct_validation_removed  = round(100 * (nrow(validation_scaled) - nrow(patches$validation$meta)) / nrow(validation_scaled), 1),
   pct_test_removed        = round(100 * (nrow(test_scaled)       - nrow(patches$test$meta))       / nrow(test_scaled),       1),
+  input_scaling           = "predictor_scaling.csv",
+  temperature_min_valid_celsius = temperature_min_valid_celsius,
   predictor_cols_final    = paste(predictor_cols, collapse = ";"),
   raster_nrow             = n_rows_rast,
   raster_ncol             = n_cols_rast
