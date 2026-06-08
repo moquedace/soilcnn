@@ -85,7 +85,21 @@ seeds        <- c(42L, 123L, 456L, 789L, 2025L)  # ensemble members (script 04)
 ensemble_center <- "median"   # "median" (recommended) or "mean"
 
 # Streaming / GPU parameters
-output_block_rows <- 40L      # raster rows processed per strip (RAM vs. speed)
+#
+# Output is STREAMED to disk block-by-block (terra writeStart/writeValues/
+# writeStop). The full-grid result is NEVER materialised in RAM — essential at
+# fine resolution: a 250 m global grid has ~1.0e10 cells, so a single full-grid
+# double vector needs ~82 GB and the 7 output layers together would need ~0.5 TB.
+# Streaming bounds OUTPUT RAM to one block (tens of MB).
+#
+# The remaining RAM cost is the predictor STRIP (all C bands for the block's
+# window), read once per block:
+#   strip_bytes ≈ (output_block_rows + 2*half_w) * r_ncol * n_channels * 8
+# max_strip_ram_gb auto-sizes output_block_rows to stay within that budget and
+# avoids the std::bad_alloc that a too-large single strip would trigger at fine
+# resolution (the same heap-fragmentation failure fixed in 02_extract_patches).
+max_strip_ram_gb  <- 4        # per-strip predictor RAM budget in GB (NULL = use fixed rows below)
+output_block_rows <- 64L      # raster rows per strip; used only when max_strip_ram_gb is NULL
 batch_size        <- 4096L    # patches per GPU forward pass
 
 # Plausibility bounds for the post-prediction sanity check (native units).
@@ -268,6 +282,31 @@ n_cell <- terra::ncell(rast_stack)
 
 message("Raster grid: ", r_nrow, " rows x ", r_ncol, " cols x ", n_channels, " layers")
 
+# ── Resolve output_block_rows from the per-strip RAM budget ───────────────────
+# half_w is known (single-branch window). The predictor strip is the dominant
+# allocation; size it to stay within max_strip_ram_gb.
+
+bytes_per_strip_row <- as.numeric(r_ncol) * n_channels * 8   # all bands, one row
+
+if (!is.null(max_strip_ram_gb)) {
+  output_block_rows <- max(1L, as.integer(
+    floor(max_strip_ram_gb * 1e9 / bytes_per_strip_row) - 2L * half_w
+  ))
+  message(sprintf(
+    "Auto output_block_rows = %d  (strip budget %.1f GB -> %.2f GB/strip, %d blocks)",
+    output_block_rows, max_strip_ram_gb,
+    (output_block_rows + 2L * half_w) * bytes_per_strip_row / 1e9,
+    as.integer(ceiling(r_nrow / output_block_rows))
+  ))
+} else {
+  message(sprintf(
+    "output_block_rows = %d  (%.2f GB/strip, %d blocks)",
+    output_block_rows,
+    (output_block_rows + 2L * half_w) * bytes_per_strip_row / 1e9,
+    as.integer(ceiling(r_nrow / output_block_rows))
+  ))
+}
+
 # ── Load seed models ──────────────────────────────────────────────────────────
 
 model_files <- file.path(model_dir, sprintf("seed%04d_best.pt", seeds))
@@ -365,181 +404,276 @@ predict_one_model <- function(model, arr, device, batch_size) {
   out
 }
 
-# ── Output accumulators (single-band, row-major over all cells) ───────────────
+# ── Per-block prediction helper ───────────────────────────────────────────────
+#
+# Predicts every interior centre pixel inside one block of raster rows and
+# returns the ensemble statistics, WITHOUT materialising any full-grid object.
+# Returns global (row-major) cell indices so the caller can map them to the
+# block-local positions it writes to disk.
+compute_block <- function(b_start) {
+  out_nrows   <- min(output_block_rows, r_nrow - b_start + 1L)
+  out_row_end <- b_start + out_nrows - 1L
 
-out_median <- rep(NA_real_, n_cell)
-out_mean   <- rep(NA_real_, n_cell)
-out_sd     <- rep(NA_real_, n_cell)
-out_mad    <- rep(NA_real_, n_cell)
-out_min    <- rep(NA_real_, n_cell)
-out_max    <- rep(NA_real_, n_cell)
-out_mask   <- rep(0L,       n_cell)   # 1 = predicted, 0 = not (border/NA)
+  center_rows <- intersect(b_start:out_row_end, (half_w + 1L):(r_nrow - half_w))
 
-# ── Block-streaming prediction loop ───────────────────────────────────────────
+  empty <- list(out_nrows = out_nrows, n_req = 0L, n_val = 0L,
+                cells_all = integer(0), valid = logical(0),
+                cells_valid = integer(0),
+                median = numeric(0), mean = numeric(0), sd = numeric(0),
+                mad = numeric(0), min = numeric(0), max = numeric(0))
+  if (length(center_rows) == 0L) return(empty)
+
+  read_row_start <- min(center_rows) - half_w
+  read_row_end   <- max(center_rows) + half_w
+  read_nrows     <- read_row_end - read_row_start + 1L
+
+  strip_values <- terra::values(rast_stack, row = read_row_start,
+                                nrows = read_nrows, mat = TRUE)
+  strip_values <- apply_predictor_scaling(strip_values, predictor_cols,
+                                          scale_method, scale_center, scale_factor,
+                                          temperature_min_valid_celsius)
+
+  center_cols <- (half_w + 1L):(r_ncol - half_w)
+  grid  <- expand.grid(center_row = center_rows, center_col = center_cols)
+  n_req <- nrow(grid)
+
+  cells_all <- (grid$center_row - 1L) * r_ncol + grid$center_col
+  valid_all <- logical(n_req)
+
+  # pre-allocate stat buffers to the max possible size; fill by pointer, trim
+  med <- mean_ <- sd_ <- mad_ <- min_ <- max_ <- numeric(n_req)
+  cells_valid <- integer(n_req)
+  ptr <- 0L
+
+  chunk_list <- split(seq_len(n_req), ceiling(seq_len(n_req) / max(batch_size, 1L)))
+  for (ci in chunk_list) {
+    cr <- grid$center_row[ci]
+    cc <- grid$center_col[ci]
+
+    pb <- build_patch_array_block(cr, cc, strip_values, read_row_start,
+                                  r_ncol, n_channels, window_size)
+    valid_all[ci] <- pb$valid
+    if (dim(pb$arr)[1] == 0L) next
+
+    preds_native <- matrix(NA_real_, nrow = dim(pb$arr)[1], ncol = n_seeds)
+    for (s in seq_len(n_seeds)) {
+      preds_native[, s] <- pmax(expm1(predict_one_model(models[[s]], pb$arr,
+                                                         device, batch_size)), 0)
+    }
+
+    cv  <- ((cr - 1L) * r_ncol + cc)[pb$valid]
+    nv  <- length(cv)
+    rng <- (ptr + 1L):(ptr + nv)
+
+    if (n_seeds >= 2L) {
+      med[rng]   <- matrixStats::rowMedians(preds_native)
+      mean_[rng] <- rowMeans(preds_native)
+      sd_[rng]   <- matrixStats::rowSds(preds_native)
+      mad_[rng]  <- matrixStats::rowMads(preds_native)   # constant 1.4826
+      min_[rng]  <- matrixStats::rowMins(preds_native)
+      max_[rng]  <- matrixStats::rowMaxs(preds_native)
+    } else {
+      v <- preds_native[, 1]
+      med[rng] <- v; mean_[rng] <- v; sd_[rng] <- 0
+      mad_[rng] <- 0; min_[rng] <- v; max_[rng] <- v
+    }
+    cells_valid[rng] <- cv
+    ptr <- ptr + nv
+  }
+
+  rm(strip_values); gc()
+  keep <- seq_len(ptr)
+  list(out_nrows = out_nrows, n_req = n_req, n_val = ptr,
+       cells_all = cells_all, valid = valid_all,
+       cells_valid = cells_valid[keep],
+       median = med[keep], mean = mean_[keep], sd = sd_[keep],
+       mad = mad_[keep], min = min_[keep], max = max_[keep])
+}
+
+# ── Open streaming writers (one per output layer) ─────────────────────────────
+# Each layer is written incrementally with writeStart/writeValues/writeStop, so
+# only one block of rows per layer is ever in RAM.
+
+gdal_opts <- function(datatype) {
+  predictor <- if (grepl("^INT|^UINT|^BYTE", datatype)) 2L else 3L
+  c("COMPRESS=DEFLATE", paste0("PREDICTOR=", predictor),
+    "TILED=YES", "BLOCKXSIZE=512", "BLOCKYSIZE=512")
+}
+
+open_writer <- function(band_name, file_suffix, datatype = "FLT4S") {
+  f <- file.path(output_raster_dir,
+                 paste0(target_label, "_", config_id, "_", file_suffix, ".tif"))
+  if (file.exists(f)) file.remove(f)
+  r <- terra::rast(raster_template)
+  names(r) <- band_name
+  terra::writeStart(r, f, overwrite = TRUE, datatype = datatype,
+                    gdal = gdal_opts(datatype))
+  list(rast = r, file = f)
+}
+
+w_median <- open_writer("soc_pred_median_ton_ha", "ensemble_median_ton_ha")
+w_mean   <- open_writer("soc_pred_mean_ton_ha",   "ensemble_mean_ton_ha")
+w_sd     <- open_writer("soc_uncert_sd_ton_ha",   "ensemble_sd_ton_ha")
+w_mad    <- open_writer("soc_uncert_mad_ton_ha",  "ensemble_mad_ton_ha")
+w_min    <- open_writer("soc_pred_min_ton_ha",    "ensemble_min_ton_ha")
+w_max    <- open_writer("soc_pred_max_ton_ha",    "ensemble_max_ton_ha")
+w_mask   <- open_writer("valid_patch_mask",       "valid_mask", datatype = "INT1U")
+writers  <- list(w_median, w_mean, w_sd, w_mad, w_min, w_max, w_mask)
+
+abort_and_cleanup <- function(msg) {
+  for (w in writers) try(terra::writeStop(w$rast), silent = TRUE)
+  files <- vapply(writers, function(w) w$file, character(1))
+  suppressWarnings(file.remove(files[file.exists(files)]))
+  stop(msg, call. = FALSE)
+}
+
+# ── Block-streaming prediction loop (compute → write → discard) ───────────────
 
 block_starts <- seq(1L, r_nrow, by = output_block_rows)
 block_log    <- vector("list", length(block_starts))
 
+# Running stats on the headline (median) map — avoids holding all pixels in RAM.
+run_n         <- 0
+run_sum       <- 0
+run_min       <- Inf
+run_max       <- -Inf
+run_nonfinite <- 0
+probe_done    <- FALSE
+
 t0 <- proc.time()[["elapsed"]]
-terra::readStart(rast_stack)
 
 for (b in seq_along(block_starts)) {
+  bs <- block_starts[b]
+  cb <- compute_block(bs)
 
-  out_row_start <- block_starts[b]
-  out_nrows     <- min(output_block_rows, r_nrow - out_row_start + 1L)
-  out_row_end   <- out_row_start + out_nrows - 1L
+  blk_len    <- cb$out_nrows * r_ncol
+  blk_median <- rep(NA_real_, blk_len)
+  blk_mean   <- rep(NA_real_, blk_len)
+  blk_sd     <- rep(NA_real_, blk_len)
+  blk_mad    <- rep(NA_real_, blk_len)
+  blk_min    <- rep(NA_real_, blk_len)
+  blk_max    <- rep(NA_real_, blk_len)
+  blk_mask   <- rep(0L,       blk_len)
 
-  # centre rows in this block that have a full window inside the raster
-  center_rows <- intersect(out_row_start:out_row_end,
-                           (half_w + 1L):(r_nrow - half_w))
+  if (cb$n_req > 0L) {
+    base <- (bs - 1L) * r_ncol                       # global→block-local offset
+    blk_mask[cb$cells_all - base] <- as.integer(cb$valid)
 
-  n_req <- 0L; n_val <- 0L
+    if (cb$n_val > 0L) {
+      lv <- cb$cells_valid - base
+      blk_median[lv] <- cb$median
+      blk_mean[lv]   <- cb$mean
+      blk_sd[lv]     <- cb$sd
+      blk_mad[lv]    <- cb$mad
+      blk_min[lv]    <- cb$min
+      blk_max[lv]    <- cb$max
 
-  if (length(center_rows) > 0L) {
-    read_row_start <- min(center_rows) - half_w
-    read_row_end   <- max(center_rows) + half_w
-    read_nrows     <- read_row_end - read_row_start + 1L
+      # update running stats on the median map
+      run_n         <- run_n + cb$n_val
+      run_sum       <- run_sum + sum(cb$median[is.finite(cb$median)])
+      run_min       <- min(run_min, min(cb$median, na.rm = TRUE))
+      run_max       <- max(run_max, max(cb$median, na.rm = TRUE))
+      run_nonfinite <- run_nonfinite + sum(!is.finite(cb$median))
 
-    strip_values <- terra::values(rast_stack, row = read_row_start,
-                                  nrows = read_nrows, mat = TRUE)
-    strip_values <- apply_predictor_scaling(strip_values, predictor_cols,
-                                            scale_method, scale_center,
-                                            scale_factor,
-                                            temperature_min_valid_celsius)
-
-    center_cols <- (half_w + 1L):(r_ncol - half_w)
-    grid <- expand.grid(center_row = center_rows, center_col = center_cols)
-    n_req <- nrow(grid)
-
-    # process centres in chunks to bound the patch-array size
-    chunk_id   <- ceiling(seq_len(n_req) / max(batch_size, 1L))
-    chunk_list <- split(seq_len(n_req), chunk_id)
-
-    for (ci in chunk_list) {
-      cr <- grid$center_row[ci]
-      cc <- grid$center_col[ci]
-
-      pb <- build_patch_array_block(cr, cc, strip_values, read_row_start,
-                                    r_ncol, n_channels, window_size)
-
-      # global cell index (row-major) for ALL centres in this chunk
-      cell_global <- (cr - 1L) * r_ncol + cc
-      out_mask[cell_global] <- as.integer(pb$valid)
-
-      if (dim(pb$arr)[1] == 0L) next
-
-      # predict log1p with each seed -> [n_valid, n_seeds] native
-      preds_native <- matrix(NA_real_, nrow = dim(pb$arr)[1], ncol = n_seeds)
-      for (s in seq_len(n_seeds)) {
-        plog <- predict_one_model(models[[s]], pb$arr, device, batch_size)
-        preds_native[, s] <- pmax(expm1(plog), 0)
+      # fail-fast probe on the first block with predictions: catches the gross
+      # "unscaled input" failure (predictions in the thousands) before spending
+      # hours on the full grid.
+      if (!probe_done) {
+        probe_mean <- mean(cb$median[is.finite(cb$median)])
+        if (!is.finite(probe_mean) || probe_mean > plausible_hard_max) {
+          abort_and_cleanup(sprintf(
+            "Fail-fast probe: first-block mean of median map = %.1f %s (> %g). Likely an input-scaling or channel-alignment problem. Partial rasters deleted.",
+            probe_mean, target_unit, plausible_hard_max))
+        }
+        probe_done <- TRUE
       }
-
-      cell_valid <- cell_global[pb$valid]
-
-      if (n_seeds >= 2L) {
-        out_median[cell_valid] <- matrixStats::rowMedians(preds_native)
-        out_mean[cell_valid]   <- rowMeans(preds_native)
-        out_sd[cell_valid]     <- matrixStats::rowSds(preds_native)
-        out_mad[cell_valid]    <- matrixStats::rowMads(preds_native)   # constant 1.4826
-        out_min[cell_valid]    <- matrixStats::rowMins(preds_native)
-        out_max[cell_valid]    <- matrixStats::rowMaxs(preds_native)
-      } else {
-        v <- preds_native[, 1]
-        out_median[cell_valid] <- v
-        out_mean[cell_valid]   <- v
-        out_sd[cell_valid]     <- 0
-        out_mad[cell_valid]    <- 0
-        out_min[cell_valid]    <- v
-        out_max[cell_valid]    <- v
-      }
-      n_val <- n_val + length(cell_valid)
     }
-    rm(strip_values); gc()
   }
 
+  terra::writeValues(w_median$rast, blk_median, bs, cb$out_nrows)
+  terra::writeValues(w_mean$rast,   blk_mean,   bs, cb$out_nrows)
+  terra::writeValues(w_sd$rast,     blk_sd,     bs, cb$out_nrows)
+  terra::writeValues(w_mad$rast,    blk_mad,    bs, cb$out_nrows)
+  terra::writeValues(w_min$rast,    blk_min,    bs, cb$out_nrows)
+  terra::writeValues(w_max$rast,    blk_max,    bs, cb$out_nrows)
+  terra::writeValues(w_mask$rast,   blk_mask,   bs, cb$out_nrows)
+
   block_log[[b]] <- tibble::tibble(
-    block = b, row_start = out_row_start, row_end = out_row_end,
-    n_centers = n_req, n_valid = n_val,
-    n_invalid = n_req - n_val
+    block = b, row_start = bs, row_end = bs + cb$out_nrows - 1L,
+    n_centers = cb$n_req, n_valid = cb$n_val,
+    n_invalid = cb$n_req - cb$n_val
   )
 
-  if (b == 1L || b %% 10L == 0L || b == length(block_starts)) {
+  if (b == 1L || b %% 25L == 0L || b == length(block_starts)) {
     el <- proc.time()[["elapsed"]] - t0
     message(sprintf("Block %d/%d | rows %d-%d | valid %s | %.0fs elapsed",
-                    b, length(block_starts), out_row_start, out_row_end,
-                    format(n_val, big.mark = ","), el))
+                    b, length(block_starts), bs, bs + cb$out_nrows - 1L,
+                    format(cb$n_val, big.mark = ","), el))
   }
 }
 
-terra::readStop(rast_stack)
+for (w in writers) terra::writeStop(w$rast)
 rm(models); gc()
 
-total_time <- proc.time()[["elapsed"]] - t0
-n_valid_total <- sum(out_mask == 1L)
+total_time    <- proc.time()[["elapsed"]] - t0
+n_valid_total <- run_n
 
-# ── Sanity checks (refuse to write nonsense silently) ─────────────────────────
+# ── Sanity checks (delete rasters if the written map is implausible) ───────────
+# Exact global median is not held in RAM; we gate on the running MEAN of the
+# median map (sufficient to catch gross failures) and report an approximate
+# median sampled back from the written raster.
 
-med_vals  <- out_median[out_mask == 1L]
-global_med <- stats::median(med_vals, na.rm = TRUE)
-global_max <- max(med_vals, na.rm = TRUE)
-n_nonfinite <- sum(!is.finite(med_vals))
+global_mean_med <- if (run_n > 0) run_sum / run_n else NA_real_
+global_max      <- run_max
 
 message("\n── Sanity checks ─────────────────────────────────────────────────")
-message(sprintf("  Valid pixels        : %s (%.1f%% of grid)",
+message(sprintf("  Valid pixels         : %s (%.2f%% of grid)",
                 format(n_valid_total, big.mark = ","), 100 * n_valid_total / n_cell))
-message(sprintf("  Global median (map) : %.2f %s", global_med, target_unit))
-message(sprintf("  Global max (map)    : %.2f %s", global_max, target_unit))
+message(sprintf("  Median map mean      : %.2f %s", global_mean_med, target_unit))
+message(sprintf("  Median map range     : %.2f – %.2f %s", run_min, run_max, target_unit))
+
+f_median <- w_median$file
+f_mean   <- w_mean$file
+f_sd     <- w_sd$file
+f_mad    <- w_mad$file
+f_min    <- w_min$file
+f_max    <- w_max$file
+f_mask   <- w_mask$file
+written_files <- c(f_median, f_mean, f_sd, f_mad, f_min, f_max, f_mask)
 
 sanity_ok <- TRUE
 if (n_valid_total == 0L) {
   sanity_ok <- FALSE
   message("  [FAIL] No valid pixels were predicted.")
 }
-if (n_nonfinite > 0L) {
+if (run_nonfinite > 0L) {
   sanity_ok <- FALSE
-  message(sprintf("  [FAIL] %d non-finite predictions among valid pixels.", n_nonfinite))
+  message(sprintf("  [FAIL] %d non-finite values in the median map.", run_nonfinite))
 }
-if (is.finite(global_med) &&
-    (global_med < plausible_median_range[1] || global_med > plausible_median_range[2])) {
+if (is.finite(global_mean_med) &&
+    (global_mean_med < plausible_median_range[1] ||
+     global_mean_med > plausible_median_range[2])) {
   sanity_ok <- FALSE
-  message(sprintf("  [FAIL] Global median %.2f outside plausible range [%g, %g]. ",
-                  global_med, plausible_median_range[1], plausible_median_range[2]),
-          "Likely an input-scaling or alignment problem — NOT writing rasters.")
+  message(sprintf("  [FAIL] Median-map mean %.2f outside plausible range [%g, %g].",
+                  global_mean_med, plausible_median_range[1], plausible_median_range[2]))
 }
 if (is.finite(global_max) && global_max > plausible_hard_max) {
   message(sprintf("  [WARN] Max %.0f exceeds %g %s — inspect the high tail.",
                   global_max, plausible_hard_max, target_unit))
 }
 if (!sanity_ok) {
-  stop("Sanity checks failed. Rasters were NOT written. See messages above.")
+  suppressWarnings(file.remove(written_files[file.exists(written_files)]))
+  stop("Sanity checks failed. Written rasters were DELETED. See messages above.")
 }
 message("  All hard checks passed.")
 
-# ── Write output rasters ──────────────────────────────────────────────────────
-
-write_layer <- function(values_vec, band_name, file_suffix, datatype = "FLT4S") {
-  r <- terra::rast(raster_template)
-  names(r) <- band_name
-  terra::values(r) <- values_vec
-  f <- file.path(output_raster_dir,
-                 paste0(target_label, "_", config_id, "_", file_suffix, ".tif"))
-  if (file.exists(f)) file.remove(f)
-  predictor <- if (grepl("^INT|^UINT|^BYTE", datatype)) 2L else 3L
-  opts <- c("COMPRESS=DEFLATE", paste0("PREDICTOR=", predictor),
-            "TILED=YES", "BLOCKXSIZE=512", "BLOCKYSIZE=512")
-  terra::writeRaster(r, f, overwrite = TRUE, datatype = datatype, gdal = opts)
-  f
-}
-
-message("\nWriting rasters...")
-f_median <- write_layer(out_median, "soc_pred_median_ton_ha", "ensemble_median_ton_ha")
-f_mean   <- write_layer(out_mean,   "soc_pred_mean_ton_ha",   "ensemble_mean_ton_ha")
-f_sd     <- write_layer(out_sd,     "soc_uncert_sd_ton_ha",   "ensemble_sd_ton_ha")
-f_mad    <- write_layer(out_mad,    "soc_uncert_mad_ton_ha",  "ensemble_mad_ton_ha")
-f_min    <- write_layer(out_min,    "soc_pred_min_ton_ha",    "ensemble_min_ton_ha")
-f_max    <- write_layer(out_max,    "soc_pred_max_ton_ha",    "ensemble_max_ton_ha")
-f_mask   <- write_layer(out_mask,   "valid_patch_mask",       "valid_mask", datatype = "INT1U")
+# Approximate global median, sampled from the written raster (cheap, bounded RAM)
+global_med <- tryCatch({
+  samp <- terra::spatSample(terra::rast(f_median), size = 2e5,
+                            method = "regular", na.rm = TRUE, values = TRUE)
+  stats::median(samp[[1]], na.rm = TRUE)
+}, error = function(e) NA_real_)
+message(sprintf("  Global median (sampled, n=2e5): %.2f %s", global_med, target_unit))
 
 # ── Metadata / manifests ──────────────────────────────────────────────────────
 
@@ -594,23 +728,24 @@ message(sprintf("  Config / seeds   : %s / %d", config_id, n_seeds))
 message(sprintf("  Valid pixels     : %s", format(n_valid_total, big.mark = ",")))
 message(sprintf("  Runtime          : %.1f min", total_time / 60))
 message(sprintf("  Headline map     : %s", ensemble_center))
-message("\n  Central tendency (native %s), over valid pixels:", target_unit)
-message(sprintf("    median map -> median %.2f | mean %.2f | max %.2f",
-                stats::median(out_median[out_mask == 1L]),
-                mean(out_median[out_mask == 1L]),
-                max(out_median[out_mask == 1L])))
-message(sprintf("    mean map   -> median %.2f | mean %.2f | max %.2f",
-                stats::median(out_mean[out_mask == 1L]),
-                mean(out_mean[out_mask == 1L]),
-                max(out_mean[out_mask == 1L])))
-message(sprintf("    (mean-map median exceeds median-map by %.2f %s = Jensen gap)",
-                stats::median(out_mean[out_mask == 1L]) -
-                  stats::median(out_median[out_mask == 1L]), target_unit))
-message("\n  Ensemble disagreement (native %s, epistemic only):", target_unit)
-message(sprintf("    SD  : median %.2f | max %.2f",
-                stats::median(out_sd[out_mask == 1L]), max(out_sd[out_mask == 1L])))
-message(sprintf("    MAD : median %.2f | max %.2f",
-                stats::median(out_mad[out_mask == 1L]), max(out_mad[out_mask == 1L])))
+
+# Stats are read back from the written rasters (raster_summary) — nothing is held
+# in RAM. terra::global gives mean/min/max per layer; the median map's median is
+# the sampled estimate computed above.
+rs_get <- function(layer, col) raster_summary[[col]][raster_summary$layer == layer]
+
+message("\n  Central tendency (native ", target_unit, "), over valid pixels:")
+message(sprintf("    median map -> median ~%.2f | mean %.2f | max %.2f",
+                global_med, rs_get("median", "gmean"), rs_get("median", "gmax")))
+message(sprintf("    mean map   ->            mean %.2f | max %.2f",
+                rs_get("mean", "gmean"), rs_get("mean", "gmax")))
+message(sprintf("    (mean-map mean exceeds median-map mean by %.2f %s = Jensen gap)",
+                rs_get("mean", "gmean") - rs_get("median", "gmean"), target_unit))
+message("\n  Ensemble disagreement (native ", target_unit, ", epistemic only):")
+message(sprintf("    SD  : mean %.2f | max %.2f",
+                rs_get("sd",  "gmean"), rs_get("sd",  "gmax")))
+message(sprintf("    MAD : mean %.2f | max %.2f",
+                rs_get("mad", "gmean"), rs_get("mad", "gmax")))
 
 message("\n  Rasters written to: ", output_raster_dir)
 message("  Logs written to:    ", output_log_dir)
