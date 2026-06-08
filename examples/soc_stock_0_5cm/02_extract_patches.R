@@ -53,7 +53,10 @@ window_sizes_to_extract <- c(3L, 5L, 7L)
 #   250 m       160000      ~1.3 GB           ~5.0 GB
 #   1  km        36000      ~0.29 GB          ~1.15 GB
 #
-# Peak RAM at any moment ≈ one band strip + pre-allocated patch arrays (~3 GB).
+# Peak RAM ≈ one band strip + the pre-allocated patch arrays. The patch arrays
+# (not the strip) dominate: n_profiles × n_channels × Σ(w²) × 8 bytes, summed
+# over splits — tens of GB for ~37k profiles at 187 channels and windows 3/5/7.
+# This is reported at runtime below and does NOT depend on raster resolution.
 #
 # chunk_nrows trade-off:
 #   Larger → fewer spatial chunks → fewer band reads → faster total runtime.
@@ -65,7 +68,7 @@ window_sizes_to_extract <- c(3L, 5L, 7L)
 #   chunk_nrows = 100 → ~0.26 GB per band read (maximum safety)
 #
 # Set chunk_nrows = NULL and max_ram_gb to auto-compute from a per-band budget.
-chunk_nrows <- 500L
+chunk_nrows <- 2000
 
 # max_ram_gb: auto-sizes chunk_nrows so each SINGLE-BAND strip stays within
 # this limit. Overrides chunk_nrows when not NULL.
@@ -171,12 +174,30 @@ if (!is.null(max_ram_gb)) {
   ))
 }
 
+# Patch arrays held in RAM: every split keeps one array per window for ALL its
+# profiles, dims [n_profiles, n_channels, w, w]. The final `patches` list holds
+# train + validation + test simultaneously and is saved uncompressed. This is
+# the dominant RAM cost — far larger than one band strip — and it scales with
+# the number of windows, NOT with raster resolution.
+patch_array_gb <- (nrow(train_sdd) + nrow(validation_scaled) + nrow(test_scaled)) *
+  n_channels * sum(window_sizes_to_extract^2) * 8 / 1e9
+
 message(sprintf(
-  "Total spatial chunks: %d  |  Band reads per chunk-with-profiles: %d  |  Peak RAM ≈ %.2f GB (band strip) + ~3 GB (patch arrays)",
-  ceiling(n_rows_rast / chunk_nrows),
-  n_channels,
-  (chunk_nrows + 2L * half_w_max) * bytes_per_band_row / 1e9
+  "Total spatial chunks: %d  |  Band reads per chunk-with-profiles: %d",
+  ceiling(n_rows_rast / chunk_nrows), n_channels
 ))
+message(sprintf(
+  "Peak RAM ~ %.2f GB (one band strip) + ~%.1f GB (patch arrays, all splits, windows %s)",
+  (chunk_nrows + 2L * half_w_max) * bytes_per_band_row / 1e9,
+  patch_array_gb,
+  paste(window_sizes_to_extract, collapse = "/")
+))
+if (patch_array_gb > 25) {
+  message(sprintf(
+    "  NOTE: patch arrays need ~%.0f GB. To reduce, set window_sizes_to_extract to only the window(s) you will train on.",
+    patch_array_gb
+  ))
+}
 
 # ── Helper: scale a single-band vector ────────────────────────────────────────
 #
@@ -236,8 +257,9 @@ message(sprintf(
 #      f. rm + gc() — releases the band strip before reading the next.
 #   3. After all chunks: trim patch arrays to valid profiles only.
 #
-# Peak RAM at any step: one band strip + patch_list (~3 GB).
-# Never holds more than one band's worth of rows in memory.
+# Peak RAM at any step: one band strip + patch_list (the latter dominates, see
+# the runtime estimate printed above). Never holds more than one band's worth of
+# raster rows in memory at a time — that is what fixes the std::bad_alloc.
 
 process_split <- function(scaled_df, role,
                            n_rows_rast, n_cols_rast, n_ch,
