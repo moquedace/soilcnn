@@ -33,7 +33,13 @@ predictor_raster_dir <- "D:/usuario_armazenamento/cassio/R/predictors_resolution
 # Larger window = more spatial context. The maximum window here determines
 # which profiles survive the edge filter — profiles too close to the raster
 # boundary for the largest window are excluded for ALL windows.
-window_sizes_to_extract <- c(3L, 5L, 7L)
+#
+# A window's physical extent is window_size × raster resolution, so re-pick it
+# whenever the resolution changes. At 250 m:
+#   3×3  ≈ 0.75 km  (immediate neighbourhood, land cover, micro-relief)
+#   9×9  ≈ 2.25 km  (hillslope, drainage, soil–landscape position)
+#   15×15 ≈ 3.75 km (local landscape, catchment context, local climate)
+window_sizes_to_extract <- c(3L, 9L, 15L)
 
 # ── Memory / performance settings ─────────────────────────────────────────────
 #
@@ -54,9 +60,11 @@ window_sizes_to_extract <- c(3L, 5L, 7L)
 #   1  km        36000      ~0.29 GB          ~1.15 GB
 #
 # Peak RAM ≈ one band strip + the pre-allocated patch arrays. The patch arrays
-# (not the strip) dominate: n_profiles × n_channels × Σ(w²) × 8 bytes, summed
-# over splits — tens of GB for ~37k profiles at 187 channels and windows 3/5/7.
-# This is reported at runtime below and does NOT depend on raster resolution.
+# (n_profiles × n_channels × Σ(w²) × 8 bytes, summed over splits) usually
+# dominate the strip, but stay modest: ~5 GB for windows 3/5/7 and ~17 GB for
+# 3/9/15 at ~37k profiles and 187 channels. The exact figure is computed and
+# printed at runtime below; it depends only on profile count and the chosen
+# windows, NOT on raster resolution.
 #
 # chunk_nrows trade-off:
 #   Larger → fewer spatial chunks → fewer band reads → faster total runtime.
@@ -370,7 +378,10 @@ process_split <- function(scaled_df, role,
       }
 
       rm(band_vec)
-      invisible(gc(verbose = FALSE))
+      # band_vec is reassigned (in place) every iteration, so only one ever
+      # lives at a time; calling gc() every band just wastes time. Returning
+      # freed memory to the OS every ~10 bands is enough to keep the heap tidy.
+      if (i %% 10L == 0L) invisible(gc(verbose = FALSE))
     }
 
     invisible(gc(verbose = FALSE))

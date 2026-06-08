@@ -19,15 +19,22 @@
   # Which patch size(s) to use.
   # Length-1 vector → single branch. Length-2 → dual branch with gate.
   # Smaller window = local processes. Larger window = landscape processes.
-  # Typical values for 20 km resolution rasters (20 km grid):
-  #   3×3 patch covers 60 km, 5×5 covers 100 km, 7×7 covers 140 km.
+  #
+  # A window's physical extent is window_size × raster resolution — it is NOT a
+  # fixed distance, it scales with resolution. A window set tuned at one
+  # resolution does not transfer to another, so re-pick when you change it.
+  # See docs/tuning_guide.md.
+  # Applied example at 250 m:
+  #   3×3   ≈ 0.75 km  (local neighbourhood)
+  #   9×9   ≈ 2.25 km  (hillslope / soil–landscape position)
+  #   15×15 ≈ 3.75 km  (local landscape / catchment context)
   window_sizes = list(
     c(3L),
-    c(5L),
-    c(7L),
-    c(3L, 5L),
-    c(3L, 7L),
-    c(5L, 7L)
+    c(9L),
+    c(15L),
+    c(3L, 9L),
+    c(3L, 15L),
+    c(9L, 15L)
   ),
 
   # ── Conv channel configurations ───────────────────────────────────────────
@@ -181,16 +188,40 @@ make_tune_grid <- function(tune_length = 20L, seed = NULL, fixed = list()) {
     }
   }
 
-  rows <- vector("list", tune_length)
-  for (i in seq_len(tune_length)) {
+  # Sample with replacement but DE-DUPLICATE: two independent draws can land on
+  # the same configuration, which would waste training budget on a repeat. Keep
+  # drawing until tune_length unique configs are found (or the space is
+  # exhausted, capped by max_tries).
+  rows      <- vector("list", tune_length)
+  seen      <- character(0)
+  n_kept    <- 0L
+  tries     <- 0L
+  max_tries <- tune_length * 100L
+
+  while (n_kept < tune_length && tries < max_tries) {
+    tries <- tries + 1L
     row <- lapply(space, function(choices) {
       if (is.list(choices)) choices[[sample(length(choices), 1L)]]
       else                  choices[sample(length(choices), 1L)]
     })
     # Enforce consistency: single window → gate irrelevant
     if (length(row$window_sizes) == 1L) row$gate_type <- "no_gate_concat"
-    row$config_id <- sprintf("cfg_%03d", i)
-    rows[[i]] <- row
+
+    # Signature over all parameters (config_id not yet assigned)
+    sig <- paste(rapply(row, function(z) paste(z, collapse = "-"), how = "unlist"),
+                 collapse = "|")
+    if (sig %in% seen) next
+
+    seen          <- c(seen, sig)
+    n_kept        <- n_kept + 1L
+    row$config_id <- sprintf("cfg_%03d", n_kept)
+    rows[[n_kept]] <- row
+  }
+
+  if (n_kept < tune_length) {
+    rows <- rows[seq_len(n_kept)]
+    message("make_tune_grid: only ", n_kept, " unique configs available ",
+            "(requested ", tune_length, ") — search space likely exhausted.")
   }
 
   .rows_to_tibble(rows)

@@ -13,20 +13,28 @@ A `window_size = 3` means a 3 × 3 grid of cells is extracted → 9 values per p
 A `window_size = 5` means a 5 × 5 grid → 25 values per predictor layer.
 
 **DSM connection:**  
-Soil properties are driven by processes operating at multiple spatial scales simultaneously.  
-At 20 km resolution (a common global DSM resolution):
+Soil properties are driven by processes operating at multiple spatial scales simultaneously.
 
-| Window | Coverage | Typical processes captured |
-|--------|----------|---------------------------|
-| 3 × 3  | ~60 × 60 km  | Local topography, land cover, proximity to water |
-| 5 × 5  | ~100 × 100 km | Landscape position, regional soil parent material |
-| 7 × 7  | ~140 × 140 km | Macro-climate gradients, biome transitions |
+The physical extent a window covers is **`window_size × raster resolution`** — it is *not* a fixed distance, it scales with the resolution of your predictors. The **same** window therefore means very different things at different resolutions:
 
-**Options:** `c(3)`, `c(5)`, `c(7)` (single branch), or `c(3,5)`, `c(3,7)`, `c(5,7)` (dual branch).
+| Window | at 20 km px | at 1 km px | at 250 m px |
+|--------|-------------|------------|-------------|
+| 3 × 3   | ~60 km  | ~3 km  | ~0.75 km |
+| 9 × 9   | ~180 km | ~9 km  | ~2.25 km |
+| 15 × 15 | ~300 km | ~15 km | ~3.75 km |
+
+So pick windows by the **physical process** you want to capture, then convert to pixels for *your* resolution. The applied example runs at **250 m**, where the three windows span the local pixel neighbourhood up to local-landscape / small-catchment scale:
+
+| Window | Extent at 250 m | Typical processes captured |
+|--------|-----------------|---------------------------|
+| 3 × 3   | ~0.75 × 0.75 km | Immediate neighbourhood, land cover, micro-relief |
+| 9 × 9   | ~2.25 × 2.25 km | Hillslope, drainage, soil–landscape position |
+| 15 × 15 | ~3.75 × 3.75 km | Local landscape, catchment context, local climate |
+
+**Options:** `c(3)`, `c(9)`, `c(15)` (single branch), or `c(3,9)`, `c(3,15)`, `c(9,15)` (dual branch).
 
 **Why this range:**  
-Smaller than 3 gives no spatial context (equivalent to point extraction).  
-Larger than 7 at 20 km resolution covers >200 km, which typically adds noise rather than signal for within-landscape soil variation.
+Smaller than 3 gives no spatial context (equivalent to point extraction). Each window must be **odd** so the profile sits at the exact centre. The upper bound is a compute/coverage trade-off: cost grows with window², and at a finer resolution you need a *larger* pixel window to reach the same physical extent. **Re-pick the windows whenever you change resolution** — a set tuned at one resolution does not transfer to another.
 
 ---
 

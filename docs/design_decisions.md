@@ -213,8 +213,8 @@ or more diverse datasets.
 Two independent CNN branches process patches of different spatial sizes centred on the same
 profile location:
 
-- **Branch 1 (small)**: e.g. 3×3 or 5×5 cells — captures local-scale spatial structure.
-- **Branch 2 (large)**: e.g. 5×5 or 7×7 cells — captures landscape-scale structure.
+- **Branch 1 (small)**: the smaller window (e.g. 3×3) — captures local-scale spatial structure.
+- **Branch 2 (large)**: the larger window (e.g. 9×9 or 15×15) — captures landscape-scale structure.
 
 Each branch has its own conv blocks, SE block (optional), and embedding linear layer. Both
 produce an embedding vector of the same size (`embedding_dim`).
@@ -226,23 +226,31 @@ captures both within the same forward pass and lets the gate (see below) decide,
 how much to draw from each scale.
 
 ### DSM connection
-At 20 km resolution:
+A window's physical extent is **`window_size × raster resolution`** — it scales with the
+resolution of your predictors, it is not a fixed distance. The applied example runs at **250 m**:
 
-| Window | Coverage | Typical processes |
-|--------|----------|-------------------|
-| 3 × 3 | ~60 × 60 km | Local topography, land cover, wetlands |
-| 5 × 5 | ~100 × 100 km | Landscape position, parent material |
-| 7 × 7 | ~140 × 140 km | Climate gradients, biome transitions |
+| Window | Extent at 250 m | Typical processes |
+|--------|-----------------|-------------------|
+| 3 × 3   | ~0.75 km | Immediate neighbourhood, land cover, micro-relief |
+| 9 × 9   | ~2.25 km | Hillslope, drainage, soil–landscape position |
+| 15 × 15 | ~3.75 km | Local landscape, catchment context |
+
+(The same windows at 20 km resolution would span ~60 / ~180 / ~300 km — see `tuning_guide.md`.)
 
 For SOC stock (0–5 cm), local processes (litter input, drainage, land use) interact with
-regional climate (precipitation, temperature seasonality) and parent material. No single scale
-captures this interaction; the dual-branch design captures both.
+landscape position and local climate. No single scale captures this interaction; the dual-branch
+design captures both and lets the gate decide, per sample, how much to draw from each.
 
-### Empirical finding
-Round-1 tuning with 10 random configurations showed a large performance gap: all configs with
-any 7×7 window achieved CCC ~0.57–0.61, while configs limited to 3×3 or 5×5 achieved CCC
-~0.20–0.25. The 7×7 window captures the dominant climate and parent-material gradients driving
-SOC at the global scale. This was the single most important finding from the tuning experiments.
+### Empirical finding (resolution-dependent — read with care)
+In an early prototype **at 20 km resolution**, round-1 tuning with 10 random configurations
+showed a large gap: configs with a 7×7 window (≈140 km of context) reached CCC ~0.57–0.61,
+while 3×3 / 5×5 configs reached ~0.20–0.25. At that resolution the large window captured the
+dominant climate and parent-material gradients driving global SOC.
+
+**This finding is tied to 20 km pixels and does not transfer to 250 m.** At 250 m a 7×7 window
+covers only ~1.75 km, so the climate-scale signal that made it win is no longer inside the patch.
+When the resolution changes the window search must be redone from scratch — which is why the
+example now extracts **3 / 9 / 15 at 250 m** and re-tunes, rather than reusing the 20 km winner.
 
 ---
 

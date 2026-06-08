@@ -62,7 +62,9 @@ Each soil profile is represented by **two spatial patches** extracted from a sta
 | Branch | Window | Processes captured |
 |--------|--------|--------------------|
 | Small  | 3 × 3 cells | Local topography, land cover, proximity effects |
-| Large  | 5 × 5 or 7 × 7 cells | Landscape climate, parent material, watershed position |
+| Large  | 9 × 9 or 15 × 15 cells | Landscape position, parent material, local climate |
+
+A window's physical extent is `window_size × raster resolution`, so pixel sizes are chosen per resolution. At the example's 250 m they span ~0.75 km (3 × 3) to ~3.75 km (15 × 15).
 
 Patches are **channel-wise scaled** before reaching the network (z-score for continuous predictors, /100 for proportions, identity for dummies) using statistics computed from the training split. This equalises gradient flow across channels with very different magnitudes — e.g. elevation (thousands) vs. vegetation indices (0–1).
 
@@ -148,7 +150,7 @@ The table below summarises the search space. See [`docs/tuning_guide.md`](docs/t
 
 | Parameter | Options | Controls |
 |-----------|---------|---------|
-| `window_sizes` | `c(3)` · `c(5)` · `c(7)` · `c(3,5)` · `c(3,7)` · `c(5,7)` | Spatial scale(s) |
+| `window_sizes` | `c(3)` · `c(9)` · `c(15)` · `c(3,9)` · `c(3,15)` · `c(9,15)` | Spatial scale(s) |
 | `conv_channels` | `c(32,64)` to `c(128,256,256)` | Network depth & width |
 | `use_residual` | `TRUE` · `FALSE` | Skip connections (ResNet-style) |
 | `use_se_block` | `TRUE` · `FALSE` | Channel attention |
@@ -217,7 +219,7 @@ The [`examples/soc_stock_0_5cm/`](examples/soc_stock_0_5cm/) directory contains 
 | Script | What it does |
 |--------|-------------|
 | [`01_prepare_dataset.R`](examples/soc_stock_0_5cm/01_prepare_dataset.R) | Read GPKG + rasters · QC · z-score/percentage scaling · stratified split |
-| [`02_extract_patches.R`](examples/soc_stock_0_5cm/02_extract_patches.R) | Extract 3×3, 5×5, 7×7 patch arrays with consistent channel scaling |
+| [`02_extract_patches.R`](examples/soc_stock_0_5cm/02_extract_patches.R) | Extract 3×3, 9×9, 15×15 patch arrays (band-by-band) with consistent channel scaling |
 | [`03_run_tuning.R`](examples/soc_stock_0_5cm/03_run_tuning.R) | Generate grid · train all configs · rank by validation metrics |
 | [`04_final_model.R`](examples/soc_stock_0_5cm/04_final_model.R) | Re-train winning config(s) with N seeds · paired-by-seed comparison |
 | [`05_predict_spatial.R`](examples/soc_stock_0_5cm/05_predict_spatial.R) | Block-streaming wall-to-wall prediction · seed ensemble · median + uncertainty rasters |

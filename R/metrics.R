@@ -83,6 +83,13 @@ make_performance_table <- function(pred_obs_data) {
 #' Compute metrics broken down by quantile bin of the observed values.
 #'
 #' Helps identify where the model struggles (e.g., extreme high SOC values).
+#'
+#' Note on bin edges: the quantile thresholds are computed on the POOLED `obs`
+#' across every (model, target_version, dataset_role) present in the input,
+#' because the mutate() runs before group_by(). This is deliberate — it gives
+#' the SAME bin edges to every split, so a "Q95_Q99" row means the same range of
+#' observed values in train, validation and test and the splits stay comparable.
+#' Call this per model if you instead want split-specific edges.
 make_quantile_performance <- function(pred_obs_data) {
   pred_obs_data %>%
     dplyr::mutate(
