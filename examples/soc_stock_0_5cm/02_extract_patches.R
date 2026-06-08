@@ -57,7 +57,7 @@ read_split <- function(role) {
   )
 }
 
-train_scaled      <- read_split("train")
+train_sdd      <- read_split("train")
 validation_scaled <- read_split("validation")
 test_scaled       <- read_split("test")
 
@@ -70,7 +70,7 @@ predictor_cols <- predictor_scaling$predictor
 n_channels     <- length(predictor_cols)
 
 message("Predictors: ", n_channels)
-message("Train rows: ", nrow(train_scaled),
+message("Train rows: ", nrow(train_sdd),
         " | Validation: ", nrow(validation_scaled),
         " | Test: ", nrow(test_scaled))
 
@@ -146,7 +146,7 @@ for (i in seq_len(n_channels)) {
   }
 
   if (method == "zscore_train") {
-    x <- (x - predictor_scaling$train_center[i]) / predictor_scaling$train_scale[i]
+    x <- (x - predictor_scaling$train_mean[i]) / predictor_scaling$train_sd[i]
   } else if (method == "percentage_0_100_to_0_1") {
     x[!is.na(x) & is.finite(x) & (x < 0 | x > 100)] <- NA_real_
     x <- x / 100
@@ -295,7 +295,7 @@ process_split <- function(scaled_df, role, vals_mat,
 t_all <- Sys.time()
 
 patches <- list(
-  train      = process_split(train_scaled,      "train",      vals_matrix, n_rows_rast, n_cols_rast, window_sizes_to_extract, predictor_cols),
+  train      = process_split(train_sdd,      "train",      vals_matrix, n_rows_rast, n_cols_rast, window_sizes_to_extract, predictor_cols),
   validation = process_split(validation_scaled, "validation", vals_matrix, n_rows_rast, n_cols_rast, window_sizes_to_extract, predictor_cols),
   test       = process_split(test_scaled,       "test",       vals_matrix, n_rows_rast, n_cols_rast, window_sizes_to_extract, predictor_cols)
 )
@@ -312,10 +312,10 @@ manifest <- tibble::tibble(
   n_train_valid           = nrow(patches$train$meta),
   n_validation_valid      = nrow(patches$validation$meta),
   n_test_valid            = nrow(patches$test$meta),
-  n_train_input           = nrow(train_scaled),
+  n_train_input           = nrow(train_sdd),
   n_validation_input      = nrow(validation_scaled),
   n_test_input            = nrow(test_scaled),
-  pct_train_removed       = round(100 * (nrow(train_scaled)      - nrow(patches$train$meta))      / nrow(train_scaled),      1),
+  pct_train_removed       = round(100 * (nrow(train_sdd)      - nrow(patches$train$meta))      / nrow(train_sdd),      1),
   pct_validation_removed  = round(100 * (nrow(validation_scaled) - nrow(patches$validation$meta)) / nrow(validation_scaled), 1),
   pct_test_removed        = round(100 * (nrow(test_scaled)       - nrow(patches$test$meta))       / nrow(test_scaled),       1),
   input_scaling           = "predictor_scaling.csv",

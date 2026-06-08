@@ -369,7 +369,8 @@ train_one_cnn <- function(
 #'   1. Builds and trains the model.
 #'   2. Saves weights, history, predictions, metrics.
 #'   3. Appends a row to the comparison table.
-#'   4. Selects and highlights the best config (by test CCC, then MAE).
+#'   4. Ranks configs by validation CCC (then val MAE). Test metrics are written
+#'      for diagnostic reference but are NOT used for selection.
 #'
 #' @param tune_grid    tibble from make_tune_grid() or make_manual_tune_grid().
 #' @param n_channels   Number of predictor channels.
@@ -480,6 +481,7 @@ run_cnn_tuning <- function(
     }
 
     # Append to comparison table
+    val_perf  <- dplyr::filter(result$perf_all, dataset_role == "validation")
     test_perf <- dplyr::filter(result$perf_all, dataset_role == "test")
     row <- dplyr::bind_cols(
       tibble::tibble(
@@ -492,6 +494,8 @@ run_cnn_tuning <- function(
         status         = "success"
       ),
       dplyr::select(cfg, -config_id, -window_sizes, -conv_channels),
+      dplyr::rename_with(val_perf,  ~ paste0("val_",  .x),
+                         .cols = c(ccc, r2, mae, nse, rmse, rpd, mqi)),
       dplyr::rename_with(test_perf, ~ paste0("test_", .x),
                          .cols = c(ccc, r2, mae, nse, rmse, rpd, mqi))
     )
@@ -502,16 +506,17 @@ run_cnn_tuning <- function(
     gc()
   }
 
-  # Rank and select best
+  # Rank by VALIDATION metrics only — test set is read-only diagnostic
   if (nrow(comparison) > 0) {
     comparison <- comparison |>
-      dplyr::arrange(dplyr::desc(test_ccc), test_mae) |>
+      dplyr::arrange(dplyr::desc(val_ccc), val_mae) |>
       dplyr::mutate(rank = dplyr::row_number())
     safe_write_csv2(comparison,
                     file.path(run_dir, "comparison", "comparison_ranked.csv"))
     message("\n── Best config: ", comparison$config_id[1],
-            " | CCC=", round(comparison$test_ccc[1], 3),
-            " | MAE=", round(comparison$test_mae[1], 3), " ──")
+            " | val_CCC=", round(comparison$val_ccc[1], 3),
+            " | val_MAE=", round(comparison$val_mae[1], 3),
+            " | test_CCC=", round(comparison$test_ccc[1], 3), " (diagnostic only) ──")
   }
 
   invisible(list(comparison = comparison, run_dir = run_dir))

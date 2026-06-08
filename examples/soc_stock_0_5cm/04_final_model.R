@@ -145,7 +145,8 @@ for (cid in selected_config_ids) {
           " | ", r$conv_channels,
           " | embed ", r$embedding_dim,
           " | ", r$gate_type,
-          " | tuning CCC ", round(r$test_ccc, 4))
+          " | val_CCC ", round(r$val_ccc, 4),
+          " | test_CCC ", round(r$test_ccc, 4), " (diag)")
 }
 
 # ── Cache de tensores (cobre a união das janelas de todos os configs) ─────────

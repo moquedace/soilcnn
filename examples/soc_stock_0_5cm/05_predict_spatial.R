@@ -226,8 +226,8 @@ if (!identical(predictor_scaling$predictor, predictor_cols)) {
 }
 
 scale_method <- predictor_scaling$scaling_method
-scale_center <- predictor_scaling$train_center
-scale_factor <- predictor_scaling$train_scale
+scale_center <- predictor_scaling$train_mean
+scale_factor <- predictor_scaling$train_sd
 
 message("Predictor scaling loaded and aligned (", n_channels, " channels).")
 
