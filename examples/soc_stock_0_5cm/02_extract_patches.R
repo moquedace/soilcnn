@@ -33,33 +33,43 @@ predictor_raster_dir <- "D:/usuario_armazenamento/cassio/R/predictors_resolution
 # Larger window = more spatial context. The maximum window here determines
 # which profiles survive the edge filter — profiles too close to the raster
 # boundary for the largest window are excluded for ALL windows.
-# Having all sizes extracted now means you can freely tune window_sizes later
-# without re-running this script.
 window_sizes_to_extract <- c(3L, 5L, 7L)
 
 # ── Memory / performance settings ─────────────────────────────────────────────
 #
-# The raster stack is never loaded entirely into RAM. Instead, horizontal strips
-# of `chunk_nrows` rows are read, scaled, and used for patch extraction, then
-# discarded before the next strip is loaded. This bounds peak RAM to one chunk
-# (plus a buffer of half_w_max rows on each side).
+# Strategy: read ONE BAND AT A TIME per spatial chunk.
+# This eliminates the std::bad_alloc caused by allocating all bands together
+# (n_rows × n_cols × n_channels) which for fine-resolution global rasters can
+# exceed 20+ GB in a single contiguous block — a block that heap fragmentation
+# makes unavailable after many alloc/free cycles, even with plenty of total RAM.
 #
-# RAM per chunk (approximate):
-#   bytes = (chunk_nrows + w_max - 1) × n_cols × n_channels × 8
+# Memory per band read:
+#   bytes = (chunk_nrows + 2 × half_w_max) × n_cols × 8
 #
-# Examples with 187 channels:
-#   Resolution  n_cols   chunk_nrows=100   chunk_nrows=500   chunk_nrows=2000
-#   20 km        1800        ~0.3 GB           ~1.3 GB            ~5.0 GB
-#   5  km        7200        ~1.0 GB           ~5.2 GB           ~20.7 GB
-#   1  km       36000        ~5.2 GB          ~25.9 GB           [too large]
+# Examples (single band, no n_channels factor):
+#   Resolution  n_cols    chunk_nrows=500   chunk_nrows=2000
+#   20 km        1800       ~0.015 GB         ~0.056 GB
+#   5  km        7200       ~0.058 GB         ~0.230 GB
+#   250 m       160000      ~1.3 GB           ~5.0 GB
+#   1  km        36000      ~0.29 GB          ~1.15 GB
 #
-# Rule of thumb: set chunk_nrows so that one chunk uses ≤ 25% of your free RAM.
-# Setting chunk_nrows = NULL auto-computes from max_ram_gb (see below).
-chunk_nrows <- 200L
+# Peak RAM at any moment ≈ one band strip + pre-allocated patch arrays (~3 GB).
+#
+# chunk_nrows trade-off:
+#   Larger → fewer spatial chunks → fewer band reads → faster total runtime.
+#   Smaller → smaller per-band allocation → less heap pressure.
+#
+# For 250 m global rasters (n_cols ≈ 160 000):
+#   chunk_nrows = 500 → ~1.3 GB per band read  (recommended)
+#   chunk_nrows = 200 → ~0.5 GB per band read  (very safe, more I/O calls)
+#   chunk_nrows = 100 → ~0.26 GB per band read (maximum safety)
+#
+# Set chunk_nrows = NULL and max_ram_gb to auto-compute from a per-band budget.
+chunk_nrows <- 500L
 
-# max_ram_gb: if not NULL, chunk_nrows is computed automatically so each chunk
-# stays within this memory budget. Overrides chunk_nrows when set.
-# Example: max_ram_gb = 8 will size chunks to use ≤ 8 GB each.
+# max_ram_gb: auto-sizes chunk_nrows so each SINGLE-BAND strip stays within
+# this limit. Overrides chunk_nrows when not NULL.
+# Note: this is PER BAND (not all bands combined), so values like 1-4 are fine.
 max_ram_gb  <- NULL
 
 # temperature QC threshold — must match script 01
@@ -102,7 +112,7 @@ message("Train rows: ", nrow(train_sdd),
         " | Validation: ", nrow(validation_scaled),
         " | Test: ", nrow(test_scaled))
 
-# ── Load raster stack (metadata only — values are read chunk by chunk) ────────
+# ── Open raster stack (metadata only — values read band-by-band) ──────────────
 
 message("\nOpening raster stack (metadata only)...")
 t0 <- Sys.time()
@@ -118,12 +128,10 @@ raster_names <- janitor::make_clean_names(
   tools::file_path_sans_ext(basename(raster_files))
 )
 
-# Keep only rasters that are in predictor_cols (same set as script 01)
 keep_idx     <- raster_names %in% predictor_cols
 raster_files <- raster_files[keep_idx]
 raster_names <- raster_names[keep_idx]
 
-# Sort to match predictor_cols order (critical for channel alignment)
 order_idx    <- match(predictor_cols, raster_names)
 raster_files <- raster_files[order_idx]
 raster_names <- raster_names[order_idx]
@@ -144,119 +152,92 @@ message("Raster grid: ", n_rows_rast, " rows × ", n_cols_rast, " cols × ",
 
 half_w_max <- (max(window_sizes_to_extract) - 1L) / 2L
 
+bytes_per_band_row <- as.numeric(n_cols_rast) * 8   # single band, double precision
+
 if (!is.null(max_ram_gb)) {
-  bytes_per_row <- as.numeric(n_cols_rast) * n_channels * 8
-  chunk_nrows   <- max(1L, as.integer(
-    floor(max_ram_gb * 1e9 / bytes_per_row) - 2L * half_w_max
+  chunk_nrows <- max(1L, as.integer(
+    floor(max_ram_gb * 1e9 / bytes_per_band_row) - 2L * half_w_max
   ))
   message(sprintf(
-    "Auto chunk_nrows = %d  (budget %.1f GB → %.2f GB/chunk incl. buffer)",
+    "Auto chunk_nrows = %d  (per-band budget %.1f GB → %.2f GB/band-read)",
     chunk_nrows, max_ram_gb,
-    (chunk_nrows + 2L * half_w_max) * bytes_per_row / 1e9
+    (chunk_nrows + 2L * half_w_max) * bytes_per_band_row / 1e9
   ))
 } else {
-  bytes_per_chunk <- as.numeric(chunk_nrows + 2L * half_w_max) *
-                     n_cols_rast * n_channels * 8
   message(sprintf(
-    "chunk_nrows = %d  (%.2f GB per chunk incl. buffer)",
-    chunk_nrows, bytes_per_chunk / 1e9
+    "chunk_nrows = %d  (%.3f GB per single-band read incl. buffer)",
+    chunk_nrows,
+    (chunk_nrows + 2L * half_w_max) * bytes_per_band_row / 1e9
   ))
 }
 
-# ── Helper: apply channel-wise scaling to a raw sub-matrix ───────────────────
+message(sprintf(
+  "Total spatial chunks: %d  |  Band reads per chunk-with-profiles: %d  |  Peak RAM ≈ %.2f GB (band strip) + ~3 GB (patch arrays)",
+  ceiling(n_rows_rast / chunk_nrows),
+  n_channels,
+  (chunk_nrows + 2L * half_w_max) * bytes_per_band_row / 1e9
+))
+
+# ── Helper: scale a single-band vector ────────────────────────────────────────
 #
-# mat: (n_cells × n_channels) — modified in place.
-# Same logic as script 01: z-score for continuous, /100 for percentages,
-# identity for dummies. Temperature QC applied before z-score.
+# Applies the same QC and transform used in script 01 for band i.
+# vec: numeric vector of length read_nrows × n_cols (row-major, single band).
 
-.scale_matrix <- function(mat, pred_scaling, temp_min) {
-  n_ch <- ncol(mat)
-  for (i in seq_len(n_ch)) {
-    method    <- pred_scaling$scaling_method[i]
-    pred_name <- pred_scaling$predictor[i]
-    x         <- mat[, i]
+.scale_band_vec <- function(vec, band_idx, pred_scaling, temp_min) {
+  method    <- pred_scaling$scaling_method[band_idx]
+  pred_name <- pred_scaling$predictor[band_idx]
 
-    if (grepl("surface_temperature_celsius$", pred_name)) {
-      x[!is.na(x) & is.finite(x) & x <= temp_min] <- NA_real_
-    }
-
-    if (method == "zscore_train") {
-      x <- (x - pred_scaling$train_mean[i]) / pred_scaling$train_sd[i]
-    } else if (method == "percentage_0_100_to_0_1") {
-      x[!is.na(x) & is.finite(x) & (x < 0 | x > 100)] <- NA_real_
-      x <- x / 100
-    }
-    # "none_dummy_0_1": no transformation
-
-    mat[, i] <- x
+  if (grepl("surface_temperature_celsius$", pred_name)) {
+    vec[!is.na(vec) & is.finite(vec) & vec <= temp_min] <- NA_real_
   }
-  mat
+
+  if (method == "zscore_train") {
+    vec <- (vec - pred_scaling$train_mean[band_idx]) / pred_scaling$train_sd[band_idx]
+  } else if (method == "percentage_0_100_to_0_1") {
+    vec[!is.na(vec) & is.finite(vec) & (vec < 0 | vec > 100)] <- NA_real_
+    vec <- vec / 100
+  }
+  # "none_dummy_0_1": no transformation
+
+  vec
 }
 
-# ── Helper: NA check within a chunk sub-matrix ────────────────────────────────
+# ── Helper: build cell-index matrix for a window ──────────────────────────────
 #
-# For profiles whose center rows are LOCAL to sub_mat, checks whether any cell
-# of their w×w patch contains a non-finite value across ALL channels.
-# local_rows: row positions within sub_mat (1-indexed).
-# Returns logical vector: TRUE = at least one NA/Inf in patch → invalid.
+# Returns an (n_profiles × n_pos) integer matrix of LINEAR cell indices within
+# a band strip (row-major, local coordinates).
+# local_rows: 1-based row positions within the strip.
+# col_ids:    global (unchanged across strips).
 
-.na_check_chunk <- function(local_rows, col_ids, sub_mat, n_cols_rast, w) {
+.cell_index_mat <- function(local_rows, col_ids, n_cols_rast, w) {
   half_w  <- (w - 1L) / 2L
   n       <- length(local_rows)
   offsets <- expand.grid(dr = (-half_w):half_w, dc = (-half_w):half_w)
   n_pos   <- nrow(offsets)
 
-  cell_mat <- matrix(0L, nrow = n, ncol = n_pos)
+  cm <- matrix(0L, nrow = n, ncol = n_pos)
   for (j in seq_len(n_pos)) {
-    cell_mat[, j] <- (local_rows + offsets$dr[j] - 1L) * n_cols_rast +
-                      col_ids + offsets$dc[j]
+    cm[, j] <- (local_rows + offsets$dr[j] - 1L) * n_cols_rast +
+                col_ids + offsets$dc[j]
   }
-
-  all_cells  <- as.vector(t(cell_mat))
-  na_mat     <- !is.finite(sub_mat[all_cells, , drop = FALSE])  # (n*n_pos) × n_ch
-  na_per_pos <- rowSums(na_mat) > 0L                            # length n*n_pos
-  colSums(matrix(na_per_pos, nrow = n_pos)) > 0L                # TRUE = invalid
+  cm
 }
 
-# ── Helper: extract patch array from a chunk sub-matrix ───────────────────────
+# ── Process one split (band-by-band chunked) ───────────────────────────────────
 #
-# local_rows: row positions within sub_mat. col_ids: global (unchanged).
-# Returns (n × n_ch × w × w) array. Caller guarantees all patches are valid.
-
-.extract_patches_chunk <- function(local_rows, col_ids, sub_mat, n_cols_rast, w) {
-  half_w  <- (w - 1L) / 2L
-  n_ch    <- ncol(sub_mat)
-  n       <- length(local_rows)
-  offsets <- expand.grid(dr = (-half_w):half_w, dc = (-half_w):half_w)
-  n_pos   <- nrow(offsets)
-
-  cell_mat <- matrix(0L, nrow = n, ncol = n_pos)
-  for (j in seq_len(n_pos)) {
-    cell_mat[, j] <- (local_rows + offsets$dr[j] - 1L) * n_cols_rast +
-                      col_ids + offsets$dc[j]
-  }
-
-  all_cells <- as.vector(t(cell_mat))
-  vals      <- sub_mat[all_cells, , drop = FALSE]   # (n*n_pos) × n_ch
-
-  step1 <- array(vals,  dim = c(n_pos, n, n_ch))    # [pos, prof, ch]
-  step2 <- aperm(step1, c(2L, 3L, 1L))              # [prof, ch, pos]
-  array(step2, dim = c(n, n_ch, w, w))              # [prof, ch, row, col]
-}
-
-# ── Process one split (chunked) ───────────────────────────────────────────────
+# For each spatial chunk (rows cs:ce) that contains at least one profile:
+#   1. Pre-compute cell index matrices for each window — once per chunk.
+#   2. Loop over all 187 bands:
+#      a. Read one band strip: (read_nrows × n_cols) values ≈ few hundred MB.
+#      b. Scale the strip.
+#      c. Vectorised: extract patch values for all profiles in the chunk.
+#      d. NA check → update valid_common.
+#      e. Store in patch_list[profiles, band, spatial positions].
+#      f. rm + gc() — releases the band strip before reading the next.
+#   3. After all chunks: trim patch arrays to valid profiles only.
 #
-# Reads the raster in strips of chunk_nrows rows. For each strip:
-#   1. Reads strip + half_w_max-row buffer from disk.
-#   2. Applies channel-wise scaling.
-#   3. NA-checks patches of all window sizes for profiles in this strip.
-#   4. Extracts patches only for profiles that passed all checks.
-#   5. Frees the strip and GC before the next strip.
-#
-# The common valid set (profiles valid across ALL window sizes) is built
-# incrementally: a profile is marked invalid as soon as any window's NA check
-# fails. This is equivalent to the intersection computed in the original
-# single-pass version.
+# Peak RAM at any step: one band strip + patch_list (~3 GB).
+# Never holds more than one band's worth of rows in memory.
 
 process_split <- function(scaled_df, role,
                            n_rows_rast, n_cols_rast, n_ch,
@@ -272,8 +253,7 @@ process_split <- function(scaled_df, role,
   row_ids <- terra::rowFromCell(rast_stack, cells)
   col_ids <- terra::colFromCell(rast_stack, cells)
 
-  # ── Phase 1: edge check (no data reading required) ──────────────────────────
-  # A profile is edge-invalid if its largest window extends outside the raster.
+  # ── Phase 1: edge check (no data reading required) ────────────────────────
   valid_common <- !is.na(row_ids) & !is.na(col_ids)
   for (w in window_sizes) {
     hw <- (w - 1L) / 2L
@@ -281,93 +261,108 @@ process_split <- function(scaled_df, role,
       row_ids - hw >= 1L & row_ids + hw <= n_rows_rast &
       col_ids - hw >= 1L & col_ids + hw <= n_cols_rast
   }
-  message("  After edge check: ", sum(valid_common), " / ", n_profiles,
-          " profiles remain")
+  message("  After edge check: ", sum(valid_common), " / ", n_profiles)
 
-  if (!any(valid_common)) {
-    stop("No valid profiles after edge check for split: ", role)
-  }
+  if (!any(valid_common)) stop("No valid profiles after edge check: ", role)
 
-  # ── Phase 2: pre-allocate patch arrays ────────────────────────────────────
-  # Sized for ALL profiles; trimmed to valid ones at the end.
-  # NA-initialised: any row not filled by a chunk means the profile was invalid.
+  # ── Phase 2: pre-allocate patch arrays ──────────────────────────────────────
+  # NA-initialised; trimmed at the end. Sized for ALL profiles (not just valid)
+  # so that chunk_idx can be used as direct indices without remapping.
   patch_list <- setNames(
-    lapply(window_sizes, function(w) {
-      array(NA_real_, dim = c(n_profiles, n_ch, w, w))
-    }),
+    lapply(window_sizes, function(w) array(NA_real_, dim = c(n_profiles, n_ch, w, w))),
     paste0("x_", window_sizes, "x", window_sizes, "_array")
   )
 
-  # ── Phase 3: chunked read → scale → NA check → extract ──────────────────────
-  chunk_starts <- seq(1L, n_rows_rast, by = chunk_nrows)
-  n_chunks     <- length(chunk_starts)
+  # ── Phase 3: spatial chunk loop → band loop ──────────────────────────────────
+  chunk_starts       <- seq(1L, n_rows_rast, by = chunk_nrows)
+  n_chunks           <- length(chunk_starts)
+  n_chunks_processed <- 0L
 
   for (ci in seq_along(chunk_starts)) {
     cs <- chunk_starts[ci]
     ce <- min(cs + chunk_nrows - 1L, n_rows_rast)
 
-    # Profiles whose center row falls in this chunk and passed edge check
     in_chunk  <- valid_common & row_ids >= cs & row_ids <= ce
     if (!any(in_chunk)) next
 
     n_in      <- sum(in_chunk)
     chunk_idx <- which(in_chunk)
+    n_chunks_processed <- n_chunks_processed + 1L
 
-    # Buffered read: extra half_w_max rows above and below the chunk
     read_start <- max(1L,          cs - half_w_max)
     read_end   <- min(n_rows_rast, ce + half_w_max)
     read_nrows <- read_end - read_start + 1L
 
     message(sprintf(
-      "  [%d/%d] chunk rows %d-%d  |  reading %d rows (buffer ±%d)  |  %d profiles",
-      ci, n_chunks, cs, ce, read_nrows, half_w_max, n_in
+      "  [chunk %d/%d] rows %d-%d  |  %d profiles  |  reading %d rows × %d bands",
+      ci, n_chunks, cs, ce, n_in, read_nrows, n_ch
     ))
 
-    # Read and scale this strip
-    sub_mat <- terra::values(rast_stack, row = read_start, nrows = read_nrows,
-                             mat = TRUE)
-    sub_mat <- .scale_matrix(sub_mat, predictor_scaling,
-                             temperature_min_valid_celsius)
+    local_rows <- row_ids[chunk_idx] - read_start + 1L
+    chunk_cols <- col_ids[chunk_idx]
 
-    # Local row coordinates within sub_mat
-    local_rows  <- row_ids[chunk_idx] - read_start + 1L
-    chunk_cols  <- col_ids[chunk_idx]
+    # Pre-compute cell index matrices once per spatial chunk (reused for every band)
+    cell_mats <- lapply(window_sizes, .cell_index_mat,
+                        local_rows = local_rows,
+                        col_ids    = chunk_cols,
+                        n_cols_rast = n_cols_rast)
+    names(cell_mats) <- paste0("x_", window_sizes, "x", window_sizes, "_array")
 
-    # NA check for every window → update valid_common incrementally
-    for (w in window_sizes) {
-      has_na <- .na_check_chunk(local_rows, chunk_cols, sub_mat, n_cols_rast, w)
-      valid_common[chunk_idx[has_na]] <- FALSE
-    }
+    # ── Band loop: read one band at a time ────────────────────────────────────
+    for (i in seq_len(n_ch)) {
 
-    # Extract patches only for profiles still valid after the NA check
-    still_valid  <- valid_common[chunk_idx]
-    valid_idx    <- chunk_idx[still_valid]
-    valid_lrows  <- local_rows[still_valid]
-    valid_cols   <- chunk_cols[still_valid]
+      # Single-band read: (read_nrows × 1) matrix → flatten to vector
+      # Memory: read_nrows × n_cols × 8 bytes (no n_channels factor)
+      band_vec <- as.vector(
+        terra::values(rast_stack[[i]], row = read_start, nrows = read_nrows)
+      )
 
-    if (any(still_valid)) {
-      for (w in window_sizes) {
-        key <- paste0("x_", w, "x", w, "_array")
-        patch_list[[key]][valid_idx, , , ] <-
-          .extract_patches_chunk(valid_lrows, valid_cols, sub_mat, n_cols_rast, w)
+      band_vec <- .scale_band_vec(band_vec, i, predictor_scaling,
+                                   temperature_min_valid_celsius)
+
+      # For each window: vectorised NA check + patch storage
+      for (wi in seq_along(window_sizes)) {
+        w    <- window_sizes[wi]
+        key  <- paste0("x_", w, "x", w, "_array")
+        cm   <- cell_mats[[key]]      # n_in × n_pos
+        n_pos <- w * w
+
+        all_idx  <- as.vector(t(cm))          # n_in × n_pos → flat
+        vals_vec <- band_vec[all_idx]         # extract all patch cells at once
+
+        # NA check: mark profiles with any non-finite cell as invalid
+        if (anyNA(vals_vec) || !all(is.finite(vals_vec))) {
+          bad <- colSums(!is.finite(
+            matrix(vals_vec, nrow = n_pos, ncol = n_in)
+          )) > 0L
+          valid_common[chunk_idx[bad]] <- FALSE
+        }
+
+        # Store band i for all profiles in chunk.
+        # Profiles later found invalid will be trimmed in Phase 4.
+        # Reshape: flat n_in*n_pos → [w, w, n_in] → permute → [n_in, w, w]
+        patch_list[[key]][chunk_idx, i, , ] <- aperm(
+          array(vals_vec, dim = c(w, w, n_in)),
+          c(3L, 1L, 2L)
+        )
       }
+
+      rm(band_vec)
+      invisible(gc(verbose = FALSE))
     }
 
-    rm(sub_mat)
     invisible(gc(verbose = FALSE))
   }
 
-  # ── Phase 4: trim arrays to valid profiles only ────────────────────────────
+  message(sprintf("  Spatial chunks processed: %d / %d  (rest had no profiles)",
+                  n_chunks_processed, n_chunks))
+
+  # ── Phase 4: trim patch arrays to valid profiles only ─────────────────────
   n_valid   <- sum(valid_common)
   valid_idx <- which(valid_common)
 
   message("  Final valid profiles: ", n_valid, " / ", n_profiles,
-          " (", round(100 * (n_profiles - n_valid) / n_profiles, 1),
-          "% removed)")
-  message("  Window NA check results:")
-  for (w in window_sizes) {
-    message("    ", w, "×", w, " valid after trim: ", n_valid)
-  }
+          " (", round(100 * (n_profiles - n_valid) / n_profiles, 1), "% removed)")
 
   for (key in names(patch_list)) {
     patch_list[[key]] <- patch_list[[key]][valid_idx, , , , drop = FALSE]
