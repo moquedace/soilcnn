@@ -153,6 +153,7 @@ The table below summarises the search space. See [`docs/tuning_guide.md`](docs/t
 | `use_se_block` | `TRUE` · `FALSE` | Channel attention |
 | `gate_type` | `vector_featurewise` · `scalar_per_sample` · `no_gate_concat` | Branch fusion strategy |
 | `embedding_dim` | 128 · 256 · 384 · 512 | Representation size |
+| `dropout` | 0.0 · 0.1 · 0.2 · 0.3 | Overall regularisation (maps to 5 internal sites) |
 | `base_lr` | 1e-4 → 3e-3 | Peak learning rate (Adam + warmup) |
 | `loss_fn` | `smooth_l1` · `mse` · `mae` | Training objective |
 | `weight_decay` | 0 → 1e-3 | L2 regularisation |

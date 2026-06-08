@@ -102,9 +102,9 @@ For example, in humid tropical areas, vegetation indices may dominate SOC predic
 | 16 | 8  | ~2 k |
 | 32 | 4  | ~1 k |
 
-**Range:** `8`, `16` (default), `32`
+**Fixed at:** `16`
 
-Higher reduction = fewer parameters in the SE block = less overfitting risk from SE itself.
+This is a 2nd-order knob whose effect on accuracy is negligible relative to window size, depth, and learning rate. Varying it wastes tuning budget. Override via `fixed = list(se_reduction = 8L)` if you specifically want to study it.
 
 ---
 
@@ -155,44 +155,25 @@ No gating. Both embeddings are concatenated: `[f1, f2]`. The head learns to fuse
 
 ## 5. Regularisation
 
-### `branch_spatial_dropout`
+### `dropout` (single knob)
 
-**What it is:** 2D spatial dropout applied to the feature maps before flattening.  
-Unlike element-wise dropout (which zeros individual values), spatial dropout zeros entire feature map channels (one whole predictor-derived feature across all spatial positions).
+**What it is:** A single scalar that controls overall dropout strength across the model.  
+The model has five internal dropout sites. Tuning them independently makes the search space huge and non-identifiable — many combinations are practically equivalent. Instead, one `dropout` value is expanded to all five sites with fixed sensible ratios:
 
-**Range:** `0.0`, `0.02`, `0.05`
+| Site | Formula | Interpretation |
+|------|---------|----------------|
+| `spatial_dropout` | 0.25 × dropout | 2D channel dropout before flatten (mild) |
+| `embed_dropout` | 0.0 | Disabled — marginal effect right after BatchNorm |
+| `gate_dropout` | 0.50 × dropout | Inside the gate MLP, before sigmoid |
+| `head_dropout_1` | 1.00 × dropout | First head layer (`2 × embed_dim` → `embed_dim`) |
+| `head_dropout_2` | 0.50 × dropout | Second head layer (128 units) |
 
-This is a mild regulariser. High values (> 0.1) tend to hurt convergence.
+**Range:** `0.0`, `0.1`, `0.2`, `0.3`
 
----
+`0.0` = no dropout anywhere; `0.3` = strong regularisation.  
+For datasets with ~25 000 samples and a moderately-sized network, `0.1` or `0.2` is a good starting point.
 
-### `embed_dropout`
-
-**What it is:** Standard dropout applied after the embedding linear layer and activation.
-
-**Range:** `0.0`, `0.05`, `0.10`
-
----
-
-### `gate_dropout`
-
-**What it is:** Dropout inside the gate MLP (before the sigmoid).
-
-**Range:** `0.0`, `0.05`, `0.10`, `0.20`
-
-The gate should not be over-regularised, or it will not learn meaningful per-scale weights.
-
----
-
-### `head_dropout_1`, `head_dropout_2`
-
-**What it is:** Dropout in the two deeper layers of the regression head.
-
-**Range:**  
-- `head_dropout_1`: `0.10`, `0.20`, `0.30`  
-- `head_dropout_2`: `0.0`, `0.05`, `0.10`
-
-The first head layer operates on `2 × embedding_dim` features and benefits from more regularisation. The second is already small (128 units) and needs less.
+**Power users:** `make_manual_tune_grid()` accepts the five individual parameters directly if you need fine-grained control.
 
 ---
 
@@ -229,10 +210,9 @@ The framework uses two LR management strategies on top of `base_lr`:
 
 **What it is:** Number of epochs for the linear LR warm-up.
 
-**Range:** `3`, `5` (default), `10`
+**Fixed at:** `5`
 
-For batch sizes ≥ 256 and large networks, 5 epochs is sufficient.  
-For small batch sizes (128), 10 epochs may be beneficial.
+An optimisation detail, not a model hyperparameter — 5 epochs is sufficient across datasets and varying it wastes tuning budget. Override via `fixed = list(warmup_epochs = 10L)` if you train with small batches (128) on a noisy loss surface.
 
 ---
 
@@ -276,7 +256,7 @@ Pure L1 loss. Equally robust to outliers, but the gradient is constant (not smoo
 
 **Early stopping monitor:** validation SmoothL1 loss (or the configured `loss_fn`).  
 **Patience:** number of epochs without improvement before stopping.  
-**Model selection across configs:** ranked by test CCC (descending), then test MAE (ascending).
+**Model selection across configs:** ranked by **validation CCC** (descending), then validation MAE (ascending). Test metrics are written to the comparison CSV for diagnostic reference only — they are never used to choose between configurations. The test set is opened once, after the winning architecture is locked in.
 
 The separation between early stopping metric (loss) and selection metric (CCC/MAE) is deliberate:  
 - Loss guides training stability (smooth, differentiable, robust to outliers).  
