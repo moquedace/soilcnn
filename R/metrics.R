@@ -74,9 +74,9 @@ calc_metrics <- function(obs, pred) {
 #' @param pred_obs_data A tibble with columns: model, target_version,
 #'   dataset_role, obs, pred.
 make_performance_table <- function(pred_obs_data) {
-  pred_obs_data |>
-    dplyr::group_by(model, target_version, dataset_role) |>
-    dplyr::group_modify(~ calc_metrics(obs = .x$obs, pred = .x$pred)) |>
+  pred_obs_data %>%
+    dplyr::group_by(model, target_version, dataset_role) %>%
+    dplyr::group_modify(~ calc_metrics(obs = .x$obs, pred = .x$pred)) %>%
     dplyr::ungroup()
 }
 
@@ -84,7 +84,7 @@ make_performance_table <- function(pred_obs_data) {
 #'
 #' Helps identify where the model struggles (e.g., extreme high SOC values).
 make_quantile_performance <- function(pred_obs_data) {
-  pred_obs_data |>
+  pred_obs_data %>%
     dplyr::mutate(
       obs_q_group = dplyr::case_when(
         obs <= stats::quantile(obs, 0.25, na.rm = TRUE) ~ "Q00_Q25",
@@ -95,9 +95,9 @@ make_quantile_performance <- function(pred_obs_data) {
         obs <= stats::quantile(obs, 0.99, na.rm = TRUE) ~ "Q95_Q99",
         TRUE                                             ~ "Q99_Q100"
       )
-    ) |>
-    dplyr::group_by(model, target_version, dataset_role, obs_q_group) |>
-    dplyr::group_modify(~ calc_metrics(obs = .x$obs, pred = .x$pred)) |>
+    ) %>%
+    dplyr::group_by(model, target_version, dataset_role, obs_q_group) %>%
+    dplyr::group_modify(~ calc_metrics(obs = .x$obs, pred = .x$pred)) %>%
     dplyr::ungroup()
 }
 

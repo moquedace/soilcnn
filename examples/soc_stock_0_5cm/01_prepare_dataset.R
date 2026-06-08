@@ -45,7 +45,7 @@ soc_gpkg_file <- file.path(
   "wosis_profile_soc_stock_spline_clean_preSpline.gpkg"
 )
 
-predictor_raster_dir <- "D:/usuario_armazenamento/cassio/R/predictors_resolution_20000m"
+predictor_raster_dir <- "D:/usuario_armazenamento/cassio/R/predictors_resolution_250m"
 
 # Predictors to drop manually (leave empty to use all)
 manual_predictor_drop <- character(0)
@@ -92,8 +92,8 @@ if (!dir.exists(predictor_raster_dir)) {
 
 # ── Read target GPKG ──────────────────────────────────────────────────────────
 
-soc_sf <- sf::st_read(soc_gpkg_file, quiet = TRUE) |>
-  janitor::clean_names() |>
+soc_sf <- sf::st_read(soc_gpkg_file, quiet = TRUE) %>%
+  janitor::clean_names() %>%
   dplyr::mutate(profile_id = as.character(profile_id))
 
 if (!target_col %in% names(soc_sf)) {
@@ -122,7 +122,7 @@ raster_table_all <- tibble::tibble(
   predictor       = janitor::make_clean_names(raster_name_raw)
 )
 
-dup_predictors <- dplyr::count(raster_table_all, predictor) |>
+dup_predictors <- dplyr::count(raster_table_all, predictor) %>%
   dplyr::filter(n > 1)
 
 if (nrow(dup_predictors) > 0) {
@@ -141,8 +141,8 @@ if (length(drop_missing) > 0) {
   message("Manual drop entries not matched in rasters: ", paste(drop_missing, collapse = ", "))
 }
 
-raster_table_use <- raster_table_all |>
-  dplyr::filter(!predictor %in% drop_present) |>
+raster_table_use <- raster_table_all %>%
+  dplyr::filter(!predictor %in% drop_present) %>%
   dplyr::arrange(predictor)
 
 predictor_cols_final <- raster_table_use$predictor
@@ -167,24 +167,24 @@ soc_projected <- sf::st_transform(
 
 coords <- sf::st_coordinates(soc_projected)
 
-soc_points <- soc_projected |>
+soc_points <- soc_projected %>%
   dplyr::mutate(
     x = as.numeric(coords[, 1]),
     y = as.numeric(coords[, 2])
-  ) |>
+  ) %>%
   dplyr::select(profile_id, x, y, dplyr::all_of(target_col))
 
 predictor_values <- terra::extract(
   predictor_rasters,
   terra::vect(soc_points),
   ID = FALSE
-) |>
-  tibble::as_tibble() |>
+) %>%
+  tibble::as_tibble() %>%
   dplyr::mutate(dplyr::across(dplyr::everything(), as.numeric))
 
-dataset_extracted <- soc_points |>
-  sf::st_drop_geometry() |>
-  dplyr::bind_cols(predictor_values) |>
+dataset_extracted <- soc_points %>%
+  sf::st_drop_geometry() %>%
+  dplyr::bind_cols(predictor_values) %>%
   dplyr::mutate(
     profile_id     = as.character(profile_id),
     target_native  = as.numeric(.data[[target_col]]),
@@ -208,7 +208,7 @@ temperature_cols <- grep(
 dataset_qc <- dataset_extracted
 
 if (length(temperature_cols) > 0) {
-  dataset_qc <- dataset_qc |>
+  dataset_qc <- dataset_qc %>%
     dplyr::mutate(dplyr::across(
       dplyr::all_of(temperature_cols),
       ~ dplyr::if_else(!is.na(.x) & is.finite(.x) & .x <= temperature_min_valid_celsius,
@@ -218,7 +218,7 @@ if (length(temperature_cols) > 0) {
 
 # Percentage predictors: clip out-of-range values → NA
 if (length(percentage_predictor_cols) > 0) {
-  dataset_qc <- dataset_qc |>
+  dataset_qc <- dataset_qc %>%
     dplyr::mutate(dplyr::across(
       dplyr::all_of(percentage_predictor_cols),
       ~ dplyr::if_else(!is.na(.x) & is.finite(.x) & (.x < 0 | .x > 100),
@@ -227,7 +227,7 @@ if (length(percentage_predictor_cols) > 0) {
 }
 
 # Flag rows with any problem in target or predictors
-qc_flags <- dataset_qc |>
+qc_flags <- dataset_qc %>%
   dplyr::mutate(
     problem_target = is.na(profile_id) | is.na(x) | is.na(y) |
       !is.finite(x) | !is.finite(y) |
@@ -239,7 +239,7 @@ qc_flags <- dataset_qc |>
     )
   )
 
-qc_summary <- qc_flags |>
+qc_summary <- qc_flags %>%
   dplyr::summarise(
     n_rows_extracted   = dplyr::n(),
     n_target_problem   = sum(problem_target,   na.rm = TRUE),
@@ -252,14 +252,14 @@ qc_summary <- qc_flags |>
 message("\n── QC summary ──────────────────────────────")
 print(qc_summary)
 
-dataset_model_raw <- qc_flags |>
-  dplyr::filter(!problem_target, !problem_predictor) |>
-  dplyr::select(-problem_target, -problem_predictor) |>
+dataset_model_raw <- qc_flags %>%
+  dplyr::filter(!problem_target, !problem_predictor) %>%
+  dplyr::select(-problem_target, -problem_predictor) %>%
   dplyr::select(
     profile_id, x, y,
     dplyr::all_of(target_col), target_native, target_log1p,
     dplyr::all_of(predictor_cols_final)
-  ) |>
+  ) %>%
   dplyr::distinct(profile_id, .keep_all = TRUE)
 
 if (nrow(dataset_model_raw) == 0) {
@@ -290,7 +290,7 @@ predictor_type_table <- purrr::map_dfr(predictor_cols_final, function(nm) {
 # Override: some predictors look like dummies by value range but should
 # be treated as percentages (e.g., rare PNV classes with mostly 0/1 but
 # the variable represents a continuous probability)
-predictor_type_table <- predictor_type_table |>
+predictor_type_table <- predictor_type_table %>%
   dplyr::mutate(
     is_dummy = dplyr::if_else(predictor %in% force_as_percentage, FALSE, is_dummy),
     is_percentage = dplyr::if_else(predictor %in% force_as_percentage, TRUE, is_percentage)
@@ -311,12 +311,12 @@ message(
 # to splits in the requested proportions. This ensures that the distribution
 # of the target variable is similar across splits (important for skewed SOC).
 
-dataset_model_split <- dataset_model_raw |>
+dataset_model_split <- dataset_model_raw %>%
   dplyr::mutate(
     sample_id = dplyr::row_number(),
     split_bin = dplyr::ntile(target_native, split_n_bins)
-  ) |>
-  dplyr::group_by(split_bin) |>
+  ) %>%
+  dplyr::group_by(split_bin) %>%
   dplyr::mutate(
     split_order        = sample(dplyr::n()),
     n_bin              = dplyr::n(),
@@ -327,8 +327,8 @@ dataset_model_split <- dataset_model_raw |>
       split_order <= n_train_bin + n_validation_bin      ~ "validation",
       TRUE                                               ~ "test"
     )
-  ) |>
-  dplyr::ungroup() |>
+  ) %>%
+  dplyr::ungroup() %>%
   dplyr::select(-split_order, -n_bin, -n_train_bin, -n_validation_bin)
 
 train_raw      <- dplyr::filter(dataset_model_split, dataset_role == "train")
@@ -339,7 +339,7 @@ test_raw       <- dplyr::filter(dataset_model_split, dataset_role == "test")
 # All scaling parameters are derived from the TRAIN set only and applied
 # identically to validation and test to prevent data leakage.
 
-predictor_scaling <- predictor_type_table |>
+predictor_scaling <- predictor_type_table %>%
   dplyr::mutate(
     scaling_method = dplyr::case_when(
       predictor %in% predictor_cols_dummy      ~ "none_dummy_0_1",
@@ -392,7 +392,7 @@ test_scaled       <- apply_scaling(test_raw,       predictor_scaling, predictor_
 
 # ── Checks ────────────────────────────────────────────────────────────────────
 
-dataset_check <- dataset_model_split |>
+dataset_check <- dataset_model_split %>%
   dplyr::summarise(
     target_col              = target_col,
     n_rows                  = dplyr::n(),
@@ -410,8 +410,8 @@ dataset_check <- dataset_model_split |>
     n_continuous_predictors = length(predictor_cols_continuous)
   )
 
-split_check <- dataset_model_split |>
-  dplyr::group_by(dataset_role) |>
+split_check <- dataset_model_split %>%
+  dplyr::group_by(dataset_role) %>%
   dplyr::summarise(
     n             = dplyr::n(),
     n_profiles    = dplyr::n_distinct(profile_id),
@@ -420,11 +420,11 @@ split_check <- dataset_model_split |>
     mean_target   = mean(target_native, na.rm = TRUE),
     max_target    = max(target_native, na.rm = TRUE),
     .groups = "drop"
-  ) |>
+  ) %>%
   dplyr::arrange(factor(dataset_role, levels = c("train", "validation", "test")))
 
-split_bin_check <- dataset_model_split |>
-  dplyr::count(split_bin, dataset_role) |>
+split_bin_check <- dataset_model_split %>%
+  dplyr::count(split_bin, dataset_role) %>%
   tidyr::pivot_wider(names_from = dataset_role, values_from = n, values_fill = 0L)
 
 scaled_extreme_check <- purrr::map_dfr(predictor_cols_final, function(nm) {
@@ -437,7 +437,7 @@ scaled_extreme_check <- purrr::map_dfr(predictor_cols_final, function(nm) {
     train_mean_raw     = mean(train_raw[[nm]], na.rm = TRUE),
     train_sd_raw       = sd(train_raw[[nm]], na.rm = TRUE)
   )
-}) |>
+}) %>%
   dplyr::arrange(dplyr::desc(max_abs_train))
 
 message("\n── Dataset summary ──────────────────────────")
@@ -491,7 +491,7 @@ safe_write_csv2(split_bin_check,       file.path(output_metadata_dir, "split_bin
 safe_write_csv2(scaled_extreme_check,  file.path(output_metadata_dir, "scaled_extreme_check.csv"))
 
 safe_write_csv2(
-  dataset_model_split |>
+  dataset_model_split %>%
     dplyr::select(profile_id, sample_id, dataset_role, split_bin, x, y,
                   target_native, target_log1p),
   file.path(output_metadata_dir, "split_metadata.csv")
@@ -557,9 +557,9 @@ p_boxplot <- ggplot2::ggplot(
                 title = paste(target_label, "– boxplot by split")) +
   ggplot2::theme_bw()
 
-p_scaled_extreme <- scaled_extreme_check |>
-  dplyr::slice_head(n = 30) |>
-  dplyr::mutate(predictor = factor(predictor, levels = rev(predictor))) |>
+p_scaled_extreme <- scaled_extreme_check %>%
+  dplyr::slice_head(n = 30) %>%
+  dplyr::mutate(predictor = factor(predictor, levels = rev(predictor))) %>%
   ggplot2::ggplot(ggplot2::aes(x = max_abs_train, y = predictor)) +
   ggplot2::geom_col() +
   ggplot2::labs(x = "Max |scaled value| in train", y = NULL,

@@ -203,7 +203,7 @@ train_config_all_seeds <- function(cfg, config_id) {
       safe_write_csv2(result$gate$by_profile, file.path(cfg_out_dir, "gates", paste0(sl, "_gate_profiles.csv")))
     }
 
-    seed_rows[[s_idx]] <- dplyr::filter(result$perf_all, dataset_role == "test") |>
+    seed_rows[[s_idx]] <- dplyr::filter(result$perf_all, dataset_role == "test") %>%
       dplyr::mutate(config_id = config_id, seed = seed_val,
                     best_epoch = result$best_epoch,
                     runtime_min = result$runtime_min)
@@ -232,8 +232,8 @@ if (nrow(all_seed_results) == 0) stop("Nenhuma seed completou com sucesso.")
 
 # ── Resumo por config: média ± desvio entre seeds ─────────────────────────────
 
-config_summary <- all_seed_results |>
-  dplyr::group_by(config_id) |>
+config_summary <- all_seed_results %>%
+  dplyr::group_by(config_id) %>%
   dplyr::summarise(
     n_seeds   = dplyr::n(),
     ccc_mean  = mean(ccc),  ccc_sd  = sd(ccc),
@@ -246,7 +246,7 @@ config_summary <- all_seed_results |>
     best_epoch_mean   = mean(best_epoch),
     runtime_min_total = sum(runtime_min),
     .groups = "drop"
-  ) |>
+  ) %>%
   dplyr::arrange(dplyr::desc(ccc_mean))
 
 safe_write_csv2(all_seed_results, file.path(output_dir, "comparison", "all_seed_results_test.csv"))
@@ -265,12 +265,12 @@ safe_save_rds(
 # efeito da arquitetura. Reporta a diferença média e se ela é consistente.
 
 if (length(selected_config_ids) == 2) {
-  paired <- all_seed_results |>
-    dplyr::select(config_id, seed, ccc, mae, rmse, mqi) |>
+  paired <- all_seed_results %>%
+    dplyr::select(config_id, seed, ccc, mae, rmse, mqi) %>%
     tidyr::pivot_wider(names_from = config_id, values_from = c(ccc, mae, rmse, mqi))
 
   c1 <- selected_config_ids[1]; c2 <- selected_config_ids[2]
-  paired <- paired |>
+  paired <- paired %>%
     dplyr::mutate(
       d_ccc  = .data[[paste0("ccc_",  c1)]] - .data[[paste0("ccc_",  c2)]],
       d_mae  = .data[[paste0("mae_",  c1)]] - .data[[paste0("mae_",  c2)]],

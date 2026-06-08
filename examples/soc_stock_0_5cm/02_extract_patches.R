@@ -282,9 +282,9 @@ process_split <- function(scaled_df, role, vals_mat,
   }
 
   # Target and metadata for the common valid set (same order as the arrays)
-  meta_valid <- scaled_df[valid_common, ] |>
+  meta_valid <- scaled_df[valid_common, ] %>%
     dplyr::select(profile_id, sample_id, dataset_role, x, y,
-                  target_native, target_log1p) |>
+                  target_native, target_log1p) %>%
     dplyr::rename(target_transform = target_log1p)
 
   c(patch_list, list(y = meta_valid$target_transform, meta = meta_valid))

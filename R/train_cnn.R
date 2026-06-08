@@ -107,8 +107,8 @@ extract_gate_analysis <- function(model, data_loader, points_valid,
     })
   })
 
-  gate_by_profile <- points_valid |>
-    dplyr::select(profile_id, sample_id, target_native) |>
+  gate_by_profile <- points_valid %>%
+    dplyr::select(profile_id, sample_id, target_native) %>%
     dplyr::mutate(
       dataset_role      = dataset_role,
       mean_gate         = mean_gate,
@@ -508,8 +508,8 @@ run_cnn_tuning <- function(
 
   # Rank by VALIDATION metrics only — test set is read-only diagnostic
   if (nrow(comparison) > 0) {
-    comparison <- comparison |>
-      dplyr::arrange(dplyr::desc(val_ccc), val_mae) |>
+    comparison <- comparison %>%
+      dplyr::arrange(dplyr::desc(val_ccc), val_mae) %>%
       dplyr::mutate(rank = dplyr::row_number())
     safe_write_csv2(comparison,
                     file.path(run_dir, "comparison", "comparison_ranked.csv"))

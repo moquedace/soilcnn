@@ -216,8 +216,8 @@ if (length(missing_rasters) > 0) {
 
 # Align predictor_scaling to the EXACT channel order of raster_table / predictor_cols.
 # Misalignment here = wrong scale applied to wrong channel = corrupted predictions.
-predictor_scaling <- predictor_scaling |>
-  dplyr::filter(predictor %in% predictor_cols) |>
+predictor_scaling <- predictor_scaling %>%
+  dplyr::filter(predictor %in% predictor_cols) %>%
   dplyr::arrange(match(predictor, predictor_cols))
 
 if (!identical(predictor_scaling$predictor, predictor_cols)) {
@@ -256,7 +256,7 @@ geom_ok <- purrr::map_lgl(
   ~ terra::compareGeom(rast_stack[[1]], rast_stack[[.x]], stopOnError = FALSE)
 )
 if (!all(geom_ok)) {
-  print(tibble::tibble(predictor = predictor_cols, geometry_ok = geom_ok) |>
+  print(tibble::tibble(predictor = predictor_cols, geometry_ok = geom_ok) %>%
           dplyr::filter(!geometry_ok))
   stop("Some predictor rasters do not share the same geometry.")
 }
