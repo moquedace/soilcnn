@@ -94,33 +94,42 @@ points_valid <- list(
 # ── Tuning grid ───────────────────────────────────────────────────────────────
 # See R/tune_grid.R and docs/tuning_guide.md for full parameter descriptions.
 #
-# FOCUSED grid, informed by the exploratory run (10 random configs):
-#   • 7×7 window dominated (CCC ~0.61) — 3×3 / 5×5 alone plateaued at ~0.20.
-#   • Low learning rate (1e-4) converged cleanly; high LR (1e-3–3e-3) was cut
-#     early and underperformed.
-#   • Lean architectures matched/beat large ones (64_128 ≈ 128_256_256).
-# So we restrict the search to the productive region and let the remaining
-# knobs (depth, SE, dropout, embedding, single-vs-dual 7×7) vary. Augmentation
-# is now on, so a little more capacity/regularisation is worth re-testing.
+# RESOLUTION RESET. The earlier exploratory run (where 7×7 dominated, CCC ~0.61)
+# was at 20 km, where 7×7 covers ~140 km of context. THIS run is at 250 m, where
+# the same window spans only ~1.75 km — so that finding does NOT transfer. We
+# therefore make WINDOW and LEARNING RATE the two primary search axes and let the
+# data tell us which spatial scale matters at 250 m, instead of pre-committing:
+#   • window_sizes: all six 3 / 9 / 15 options (single + dual) → ~0.75–3.75 km.
+#   • base_lr: a spread (1e-4 … 1e-3); don't assume 20 km's 1e-4 still wins.
+# Secondary knobs (depth, SE, gate, embedding, dropout, weight_decay) vary lightly
+# around a lean baseline. D4 augmentation is on.
 #
-# `fixed` both fixes single values and restricts multi-value pools (see
-# R/tune_grid.R). make_manual_tune_grid() is the alternative for a full
-# factorial over a few parameters.
+# `fixed` fixes single values AND restricts multi-value pools (see R/tune_grid.R);
+# duplicate draws are dropped automatically. tune_length = 24 gives every window a
+# few LR/architecture samples — raise it for denser coverage, lower for a quick
+# first pass. make_manual_tune_grid() is the alternative for a full factorial.
 
 tune_grid <- make_tune_grid(
-  tune_length = 12L,
+  tune_length = 24L,
   seed        = 42L,
   fixed = list(
-    loss_fn      = "smooth_l1",                 # robust to outlier SOC values
-    batch_size   = 512L,                        # fixed by GPU memory
-    window_sizes = list(c(7L), c(5L, 7L)),      # 7×7 single, or 5×7 dual
-    conv_channels = list(c(64L, 128L),          # lean
-                         c(64L, 128L, 128L)),   # moderate depth
-    base_lr      = c(1e-4, 3e-4),               # the productive LR region
-    use_residual = TRUE,                        # always on for ≥2 blocks
-    gate_type    = c("vector_featurewise", "no_gate_concat"),
+    loss_fn       = "smooth_l1",                # robust to outlier SOC values
+    batch_size    = 256L,                       # 15×15 patches are larger than 7×7;
+                                                # 256 is safe — raise to 512 if GPU allows
+    # PRIMARY axis #1 — spatial scale at 250 m (single branch and dual branch)
+    window_sizes  = list(c(3L), c(9L), c(15L),
+                         c(3L, 9L), c(3L, 15L), c(9L, 15L)),
+    # PRIMARY axis #2 — learning rate
+    base_lr       = c(1e-4, 3e-4, 1e-3),
+    # Secondary knobs — lean baseline
+    conv_channels = list(c(64L, 128L),
+                         c(64L, 128L, 128L)),
+    use_residual  = TRUE,                        # always on for ≥2 blocks
+    use_se_block  = c(TRUE, FALSE),
+    gate_type     = c("vector_featurewise", "no_gate_concat"),
     embedding_dim = c(256L, 384L),
-    dropout      = c(0.1, 0.2)                  # mild–moderate regularisation
+    dropout       = c(0.1, 0.2),                 # mild–moderate regularisation
+    weight_decay  = c(0.0, 1e-4)
   )
 )
 
@@ -141,7 +150,8 @@ print(
 #   2. Trains with early stopping on validation SmoothL1 loss
 #   3. Evaluates on train / validation / test (all metrics)
 #   4. Saves weights, history, predictions, metrics, gate analysis
-#   5. Appends to comparison table (ranked by test CCC then MAE)
+#   5. Appends to comparison table (ranked by VALIDATION CCC then validation MAE;
+#      test metrics are recorded for diagnostics only, never used for selection)
 #
 # transform = expm1: back-transform from log1p space to native ton/ha.
 #   Applied to predictions before computing CCC, MAE, etc.
@@ -173,14 +183,16 @@ message("Run ID: ", run_id)
 message("Results saved to: ", file.path(output_tuning_dir, run_id))
 
 if (nrow(results$comparison) > 0) {
-  message("\nTop 5 configs by test CCC:")
+  message("\nTop 5 configs by VALIDATION CCC (the selection metric; ",
+          "test_* shown for diagnostics only):")
   print(
     dplyr::select(
       results$comparison,
       rank, config_id, window_sizes, conv_channels,
-      embedding_dim, gate_type, use_se_block, dropout,
-      base_lr, best_epoch, runtime_min,
-      test_ccc, test_mae, test_r2, test_nse, test_rmse, test_rpd, test_mqi
+      embedding_dim, gate_type, use_se_block, dropout, base_lr,
+      best_epoch, runtime_min,
+      val_ccc, val_mae, val_rmse, val_mqi,
+      test_ccc, test_mae
     ),
     n = 5, width = Inf
   )
