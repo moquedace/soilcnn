@@ -92,6 +92,7 @@ Input patches
 ```
 
 See [`docs/architecture.md`](docs/architecture.md) for full detail.
+For the reasoning behind every architectural and training choice see [`docs/design_decisions.md`](docs/design_decisions.md).
 </details>
 
 ---
