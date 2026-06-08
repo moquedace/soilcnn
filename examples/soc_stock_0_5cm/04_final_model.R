@@ -39,10 +39,15 @@ target_unit  <- "ton_ha"
 tuning_run_id <- "latest"
 
 # Configs a treinar no modelo final. Cada um é treinado com TODAS as seeds.
-# Use NULL para pegar apenas o rank 1 do ranking. Aqui comparamos os dois
-# candidatos do topo (cfg_004 dual 5x7 vs cfg_012 single 7x7).
+# NULL = usa automaticamente o rank 1 do ranking de validação — recomendado para
+# a primeira corrida a 250 m (ainda não sabemos quem vence).
+# Para comparar o top-N pareado por seed: rode o 03, abra
+#   outputs/.../tuning/<run>/comparison/comparison_ranked.csv
+# e liste aqui os config_ids vencedores, ex.: c("cfg_007", "cfg_013").
+# ATENÇÃO: NÃO reutilize IDs de runs antigos — o mesmo "cfg_004" é uma
+# arquitetura DIFERENTE em cada run de tuning (a numeração é por run).
 # As seeds são as mesmas para todos os configs → comparação pareada por seed.
-selected_config_ids <- c("cfg_004", "cfg_012")
+selected_config_ids <- NULL
 
 # Sementes. Cada seed é um treino independente do zero. A variância entre seeds
 # estima a estabilidade do treinamento — resultado publicável deve ter baixo
