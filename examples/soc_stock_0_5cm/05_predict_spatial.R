@@ -321,6 +321,22 @@ if (strip_gb > 8) {
     "output_block_rows or set max_strip_ram_gb (e.g. 4).")
 }
 
+# Guard (opposite end): when the largest window is big relative to the RAM budget,
+# output_block_rows collapses to a handful of rows while the strip still spans
+# output_block_rows + 2*half_w_max rows. Each block then RE-READS its margin rows,
+# so the strip/useful-rows ratio is the disk over-read factor. At fine resolution
+# (250 m, 187 bands) a window-15 config with max_strip_ram_gb = 4 yields ~2 useful
+# rows per ~16-row strip → ~8x more raster I/O than necessary. Correct, just slow.
+overread_factor <- (output_block_rows + 2L * half_w_max) / output_block_rows
+if (output_block_rows < 8L && half_w_max >= 2L) {
+  message(sprintf(
+    "  NOTE: only %d useful row(s) per block but the strip spans %d rows (margin %d each side) -> ~%.1fx disk over-read.",
+    output_block_rows, output_block_rows + 2L * half_w_max, half_w_max, overread_factor))
+  message(sprintf(
+    "        This is correct but I/O-heavy for window %d at this resolution. If you have the RAM, raise max_strip_ram_gb (e.g. 16-32) to enlarge the block and cut re-reads.",
+    max(window_sizes)))
+}
+
 # ── Load seed models ──────────────────────────────────────────────────────────
 
 model_files <- file.path(model_dir, sprintf("seed%04d_best.pt", seeds))
