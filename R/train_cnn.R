@@ -230,9 +230,12 @@ train_one_cnn <- function(
     model$train()
     tr_loss_sum <- 0; tr_n <- 0L
     coro::loop(for (batch in loaders$train) {
-      inputs <- lapply(batch[-length(batch)], function(t) t$to(device = device))
-      y      <- batch[[length(batch)]]$to(device = device)
+      # augment_d4_batch usa indexacao R-style (out[idx,,,] <-) que nao e
+      # suportada em tensores CUDA — aplica no CPU antes de mover ao device
+      inputs <- lapply(batch[-length(batch)], function(t) t)
       if (augment) inputs <- augment_d4_batch(inputs)
+      inputs <- lapply(inputs, function(t) t$to(device = device))
+      y      <- batch[[length(batch)]]$to(device = device)
       optimizer$zero_grad()
       pred   <- do.call(model, inputs)
       loss   <- loss_fn(pred, y)
