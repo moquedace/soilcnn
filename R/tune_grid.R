@@ -80,6 +80,18 @@
   # For 200+ channels: 128–512 is a reasonable range.
   embedding_dim = c(128L, 256L, 384L, 512L),
 
+  # ── Pre-embedding spatial reduction ───────────────────────────────────────
+  # How each branch reduces its C×w×w feature map before the linear projection:
+  #   "flatten" — keep every cell (input C·w·w). Full spatial detail, but the
+  #     linear layer grows with window² — a 15×15 branch concentrates ~11 M
+  #     params here. Best for small windows or when spatial detail matters.
+  #   "gap"     — global average pool to C (input C, window-independent). Removes
+  #     the window² blow-up, so large windows stay light and overfit less.
+  # Default first value "flatten" preserves the original architecture; include
+  # "gap" in the search when large windows risk overfitting (esp. fine
+  # resolution). Both branches of a dual model share the choice.
+  embed_pool = c("flatten", "gap"),
+
   # ── Fusion gate type (dual-branch only) ──────────────────────────────────
   # Controls how the two branch embeddings are combined.
   # "vector_featurewise": one gate weight per embedding dimension (most expressive).
@@ -291,6 +303,7 @@ make_manual_tune_grid <- function(...) {
     use_se_block    = as.logical(scalar_df$use_se_block),
     se_reduction    = as.integer(scalar_df$se_reduction),
     embedding_dim   = as.integer(scalar_df$embedding_dim),
+    embed_pool      = as.character(scalar_df$embed_pool),
     gate_type       = scalar_df$gate_type,
     dropout         = as.numeric(scalar_df$dropout),
     spatial_dropout = as.numeric(drop_df$spatial_dropout),

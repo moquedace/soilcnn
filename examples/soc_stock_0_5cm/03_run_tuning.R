@@ -131,6 +131,10 @@ tune_grid <- make_tune_grid(
     use_se_block  = c(TRUE, FALSE),
     gate_type     = c("vector_featurewise", "no_gate_concat"),
     embedding_dim = c(256L, 384L),
+    # flatten keeps full spatial detail (params grow with window²); gap pools to
+    # C and keeps large windows light. Let tuning decide which wins at 250 m —
+    # especially relevant for the 15×15 branch (~11 M params under flatten).
+    embed_pool    = c("flatten", "gap"),
     dropout       = c(0.1, 0.2),                 # mild–moderate regularisation
     weight_decay  = c(0.0, 1e-4)
   )

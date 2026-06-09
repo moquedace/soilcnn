@@ -107,7 +107,8 @@ cnn_branch <- torch::nn_module(
                         se_reduction    = 16L,
                         embedding_dim   = 256L,
                         spatial_dropout = 0.03,
-                        embed_dropout   = 0.0) {
+                        embed_dropout   = 0.0,
+                        embed_pool      = "flatten") {
 
     n_blocks   <- length(conv_channels)
     block_fn   <- if (use_residual) residual_conv_block else conv_block
@@ -127,10 +128,25 @@ cnn_branch <- torch::nn_module(
       self$se <- se_block(channels = conv_channels[n_blocks], reduction = se_reduction)
     }
 
-    flatten_size <- conv_channels[n_blocks] * window_size * window_size
+    # embed_pool controls how the C×w×w feature map is reduced before the linear
+    # projection to embedding_dim:
+    #   "flatten" — keep every cell: input size = C · w · w. Preserves the full
+    #     spatial detail of the patch, but the linear layer grows with w², so a
+    #     large window concentrates most of the model's parameters here.
+    #   "gap"     — global average pool to C: input size = C, independent of w.
+    #     Drops the w² blow-up entirely, making large windows light and far less
+    #     prone to overfitting (at the cost of within-patch spatial resolution).
+    # Both branches of a dual model use the same choice. Default "flatten" keeps
+    # the original behaviour; tuning can compare the two.
+    self$embed_pool <- embed_pool
+    embed_in_size <- if (identical(embed_pool, "gap")) {
+      conv_channels[n_blocks]                              # GAP → C
+    } else {
+      conv_channels[n_blocks] * window_size * window_size  # flatten → C·w·w
+    }
 
     self$flatten <- torch::nn_flatten()
-    self$linear  <- torch::nn_linear(flatten_size, embedding_dim)
+    self$linear  <- torch::nn_linear(embed_in_size, embedding_dim)
     self$bn_emb  <- torch::nn_batch_norm1d(embedding_dim)
     self$act_emb <- make_activation()
     self$drop_emb <- torch::nn_dropout(p = embed_dropout)
@@ -142,7 +158,12 @@ cnn_branch <- torch::nn_module(
     }
     if (self$use_se_block) x <- self$se(x)
     x <- self$spatial_dropout(x)
-    x <- self$flatten(x)
+    if (identical(self$embed_pool, "gap")) {
+      x <- torch::nnf_adaptive_avg_pool2d(x, output_size = c(1L, 1L))
+      x <- x$view(c(x$size(1L), x$size(2L)))   # N×C
+    } else {
+      x <- self$flatten(x)                      # N×(C·w·w)
+    }
     x <- self$drop_emb(self$act_emb(self$bn_emb(self$linear(x))))
     x
   }
@@ -192,7 +213,8 @@ dual_branch_cnn <- torch::nn_module(
     embed_dropout   = 0.0,
     gate_dropout    = 0.10,
     head_dropout_1  = 0.20,
-    head_dropout_2  = 0.10
+    head_dropout_2  = 0.10,
+    embed_pool      = "flatten"  # "flatten" (C·w·w) or "gap" (C). See cnn_branch.
   ) {
 
     n_branches <- length(window_sizes)
@@ -209,7 +231,8 @@ dual_branch_cnn <- torch::nn_module(
       se_reduction  = se_reduction,
       embedding_dim = embedding_dim,
       spatial_dropout = spatial_dropout,
-      embed_dropout = embed_dropout
+      embed_dropout = embed_dropout,
+      embed_pool    = embed_pool
     )
 
     self$branch1 <- do.call(cnn_branch, c(branch_args, list(window_size = window_sizes[1])))
@@ -318,6 +341,13 @@ dual_branch_cnn <- torch::nn_module(
 # make_tune_grid), making it easy to loop over grid rows.
 
 build_cnn_from_config <- function(cfg, n_channels) {
+  # embed_pool is a newer field; tolerate older grids/configs that lack it
+  # (a model trained before this option existed used "flatten").
+  embed_pool <- if (is.null(cfg$embed_pool) || is.na(cfg$embed_pool[1])) {
+    "flatten"
+  } else {
+    as.character(cfg$embed_pool[1])
+  }
   dual_branch_cnn(
     n_channels      = n_channels,
     window_sizes    = cfg$window_sizes[[1]],   # stored as a list-column
@@ -331,6 +361,7 @@ build_cnn_from_config <- function(cfg, n_channels) {
     embed_dropout   = cfg$embed_dropout,
     gate_dropout    = cfg$gate_dropout,
     head_dropout_1  = cfg$head_dropout_1,
-    head_dropout_2  = cfg$head_dropout_2
+    head_dropout_2  = cfg$head_dropout_2,
+    embed_pool      = embed_pool
   )
 }

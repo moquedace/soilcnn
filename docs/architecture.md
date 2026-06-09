@@ -146,15 +146,33 @@ Configuration: `conv_channels = c(64, 128, 128)`, `embedding_dim = 384`, dual br
 | **Total** | **~13 M** |
 
 > **Note — the flatten→embedding linear scales with window².** The conv blocks are
-> window-size independent (kernel × in × out), but each branch flattens
-> `C_final × w × w` and projects it to `embedding_dim`, so that one linear layer
-> grows quadratically with the window: ~0.44 M for 3×3, ~1.2 M for 5×5, **~11 M for
-> 15×15**. Large windows therefore concentrate most parameters in a single layer.
-> If a large-window config overfits, the cheapest levers are a smaller
-> `embedding_dim`, fewer final conv channels, or (a future architectural option)
-> a global-average-pool before the linear to drop the w² factor entirely.
+> window-size independent (kernel × in × out), but with `embed_pool = "flatten"`
+> each branch flattens `C_final × w × w` and projects it to `embedding_dim`, so that
+> one linear layer grows quadratically with the window: ~0.44 M for 3×3, ~1.2 M for
+> 5×5, **~11 M for 15×15**. Large windows therefore concentrate most parameters in a
+> single layer. If a large-window config overfits, the levers are a smaller
+> `embedding_dim`, fewer final conv channels, or — most directly — `embed_pool`.
 
-With ~25 000 training samples this is a sizeable network, so the regularisers
-(dropout, weight decay, SE, D4 augmentation, BatchNorm) and early stopping matter —
-especially for the larger windows. The single-branch 3×3 variant, by contrast, is
-tiny (~1 M total).
+### `embed_pool`: flatten vs. global average pool
+
+Each branch reduces its `C_final × w × w` feature map before the linear projection
+in one of two ways, selectable per model (and searchable in the tuning grid):
+
+| `embed_pool` | Linear input size | 15×15 branch linear | Keeps within-patch detail? |
+|---|---|---|---|
+| `"flatten"` (default) | `C_final × w × w` | ~11 M params | Yes (every cell) |
+| `"gap"` | `C_final` | ~0.05 M params | No (spatial mean only) |
+
+With `"gap"` (global average pool), the linear size no longer depends on the window,
+so a single-branch 15×15 model drops from ~11.5 M to ~0.46 M parameters (~25×
+lighter), and dual `c(3, 15)` from ~12.3 M to ~0.86 M (~14× lighter). This makes
+large windows tractable at any resolution and far less prone to overfitting, at the
+cost of discarding the fine spatial arrangement inside the patch. `"flatten"`
+preserves that detail and is the right default for small windows; let tuning compare
+the two when large windows are in play. Both branches of a dual model share the
+choice. Verified by `tests/test_architecture.R`.
+
+With ~25 000 training samples the `"flatten"` variant is a sizeable network, so the
+regularisers (dropout, weight decay, SE, D4 augmentation, BatchNorm) and early
+stopping matter — especially for the larger windows. The single-branch 3×3 variant,
+or any `"gap"` variant, is by contrast tiny (~0.5–1 M total).
