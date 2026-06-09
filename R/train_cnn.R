@@ -216,7 +216,7 @@ train_one_cnn <- function(
     current_lr = double(), no_improve = integer()
   )
 
-  t0 <- Sys.time()
+  t0 <- proc.time()[["elapsed"]]
 
   for (epoch in seq_len(n_epochs)) {
     # --- LR warmup ---
@@ -322,7 +322,7 @@ train_one_cnn <- function(
     gc()
   }
 
-  runtime <- difftime(Sys.time(), t0, units = "mins")
+  runtime <- (proc.time()[["elapsed"]] - t0) / 60
   if (is.null(best_state)) stop("No best_state saved — training may have failed.")
   model$load_state_dict(best_state)
 

@@ -904,8 +904,8 @@ train_one_config <- function(config, tensor_bundle, device) {
   plateau_bad_epochs <- 0L
   
   training_history <- list()
-  time_start <- Sys.time()
-  
+  time_start <- proc.time()[["elapsed"]]
+
   for (epoch in seq_len(config$n_epochs)) {
     model$train()
     
@@ -1065,7 +1065,7 @@ train_one_config <- function(config, tensor_bundle, device) {
     device = device
   )
   
-  runtime <- paste(round(Sys.time() - time_start, 2), units(Sys.time() - time_start))
+  runtime <- paste(round((proc.time()[["elapsed"]] - time_start) / 60, 2), "min")
   stopped_epoch <- max(training_history$epoch, na.rm = TRUE)
   
   run_summary <- list(
