@@ -76,7 +76,7 @@ window_sizes_to_extract <- c(3L, 9L, 15L)
 #   chunk_nrows = 100 → ~0.26 GB per band read (maximum safety)
 #
 # Set chunk_nrows = NULL and max_ram_gb to auto-compute from a per-band budget.
-chunk_nrows <- 2000
+chunk_nrows <- 200
 
 # max_ram_gb: auto-sizes chunk_nrows so each SINGLE-BAND strip stays within
 # this limit. Overrides chunk_nrows when not NULL.

@@ -76,7 +76,8 @@ source(file.path(project_root, "R", "train_cnn.R"))
 target_label <- "soc_stock_0_5cm"
 target_unit  <- "ton_ha"
 
-config_id    <- "cfg_012"     # winning config from 04_final_model.R
+config_id    <- "auto"        # "auto" -> rank-1 config from the final-run summary;
+                              #           or set to an explicit id, e.g. "cfg_007"
 final_run_id <- "latest"      # "latest" -> most recent final_* run, or an explicit id
 seeds        <- c(42L, 123L, 456L, 789L, 2025L)  # ensemble members (script 04)
 
@@ -98,7 +99,11 @@ ensemble_center <- "median"   # "median" (recommended) or "mean"
 # max_strip_ram_gb auto-sizes output_block_rows to stay within that budget and
 # avoids the std::bad_alloc that a too-large single strip would trigger at fine
 # resolution (the same heap-fragmentation failure fixed in 02_extract_patches).
-max_strip_ram_gb  <- 4        # per-strip predictor RAM budget in GB (NULL = use fixed rows below)
+max_strip_ram_gb  <- 16       # per-strip predictor RAM budget in GB (NULL = use fixed rows below)
+                              # At 250 m (187 bands, 160 k cols): one strip row ≈ 0.24 GB.
+                              # 16 GB → ~52 useful rows/block (window 15: half_w=7, ~59 strip rows, ~3x over-read)
+                              #  4 GB → ~2  useful rows/block (window 15: ~8x over-read, very I/O-heavy)
+                              # Raise this if you have more free RAM; 16–32 is ideal for windows 9 or 15.
 output_block_rows <- 64L      # raster rows per strip; used only when max_strip_ram_gb is NULL
 batch_size        <- 4096L    # patches per GPU forward pass
 
@@ -184,6 +189,24 @@ apply_predictor_scaling <- function(mat, pred_names, scale_method,
 # ── Load model config from the final-run summary ──────────────────────────────
 
 final_summary <- readRDS(summary_file)
+
+# Resolve "auto" config_id: pick the rank-1 config by mean test CCC across seeds.
+# When 04 trains multiple configs, all_seed_results has one row per (config, seed);
+# we rank by mean CCC descending and take the top config.
+if (identical(config_id, "auto")) {
+  if (nrow(final_summary$all_seed_results) > 0) {
+    auto_rank <- final_summary$all_seed_results %>%
+      dplyr::group_by(config_id) %>%
+      dplyr::summarise(mean_ccc = mean(ccc, na.rm = TRUE), .groups = "drop") %>%
+      dplyr::arrange(dplyr::desc(mean_ccc))
+    config_id <- auto_rank$config_id[1]
+    message("config_id resolved to: ", config_id,
+            sprintf(" (mean test CCC %.4f across %d seeds)",
+                    auto_rank$mean_ccc[1], sum(final_summary$all_seed_results$config_id == config_id)))
+  } else {
+    stop("config_id = 'auto' but final_run_summary$all_seed_results is empty.")
+  }
+}
 
 if (!config_id %in% final_summary$selected_cfgs$config_id) {
   stop("config_id '", config_id, "' not in final run summary. Available: ",
