@@ -483,6 +483,12 @@ run_cnn_tuning <- function(
     # Append to comparison table
     val_perf  <- dplyr::filter(result$perf_all, dataset_role == "validation")
     test_perf <- dplyr::filter(result$perf_all, dataset_role == "test")
+    val_metrics <- val_perf %>%
+      dplyr::select(n, ccc, r2, mae, nse, rmse, rpd, mqi) %>%
+      dplyr::rename_with(~ paste0("val_", .x))
+    test_metrics <- test_perf %>%
+      dplyr::select(n, ccc, r2, mae, nse, rmse, rpd, mqi) %>%
+      dplyr::rename_with(~ paste0("test_", .x))
     row <- dplyr::bind_cols(
       tibble::tibble(
         config_id      = cid,
@@ -494,10 +500,8 @@ run_cnn_tuning <- function(
         status         = "success"
       ),
       dplyr::select(cfg, -config_id, -window_sizes, -conv_channels),
-      dplyr::rename_with(val_perf,  ~ paste0("val_",  .x),
-                         .cols = c(ccc, r2, mae, nse, rmse, rpd, mqi)),
-      dplyr::rename_with(test_perf, ~ paste0("test_", .x),
-                         .cols = c(ccc, r2, mae, nse, rmse, rpd, mqi))
+      val_metrics,
+      test_metrics
     )
     comparison <- dplyr::bind_rows(comparison, row)
     safe_write_csv2(comparison,
