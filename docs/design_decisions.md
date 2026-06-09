@@ -330,9 +330,14 @@ Raster patches have no preferred orientation — North, South, East, West are ar
 conventions with no physical meaning for the CNN. The D4 symmetry group has 8 elements:
 4 rotations (0°, 90°, 180°, 270°) × 2 reflections (identity, horizontal flip).
 
-During training, each patch is randomly transformed by one of the 8 D4 operations per
-mini-batch iteration. This multiplies the effective training set size by 8 without collecting
-new data.
+During training, **each sample draws its own random D4 operation** (per-sample, not one
+per mini-batch), so a single gradient step already mixes all 8 orientations. This
+multiplies the effective training set size by 8 without collecting new data, and gives
+smoother gradients and more representative BatchNorm statistics than rotating the whole
+batch the same way. In a dual-branch model the two windows of a given sample receive the
+*same* symmetry, keeping their spatial scales geometrically consistent. Every D4 element
+fixes the centre cell of an odd-sized patch, so the centre-point label is preserved
+(verified by `tests/test_augmentation.R`).
 
 ### Why
 - **Invariance**: the spatial pattern within a 3×3 or 7×7 patch should predict the same SOC

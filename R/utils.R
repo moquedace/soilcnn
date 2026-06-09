@@ -160,16 +160,36 @@ apply_d4 <- function(x, k) {
   )
 }
 
-#' Apply the SAME random D4 transform to every tensor in a list.
+#' Apply an INDEPENDENT random D4 transform to EACH sample in the batch.
 #'
-#' Both branch inputs (e.g. 3×3 and 5×5 patches of the same samples) receive the
-#' same symmetry, keeping the two spatial scales geometrically consistent.
-#' Applied per training step (batch-level): all samples in a step share one
-#' orientation, but shuffling pairs each sample with many orientations across
-#' epochs. Call only during training — never on validation/test loaders.
+#' Per-sample (not per-batch) augmentation: every sample draws its own symmetry,
+#' so a single gradient step already mixes all 8 orientations. This gives smoother
+#' gradients and more representative BatchNorm statistics than rotating the whole
+#' batch the same way — the difference matters most for the large windows, which
+#' carry the most parameters and overfit first.
 #'
-#' @param tensor_list List of 4D torch tensors (one per branch).
+#' Each branch tensor receives the SAME per-sample symmetry vector, keeping the
+#' two spatial scales of a given sample geometrically consistent. Every D4 element
+#' fixes the centre cell of an odd-sized square patch, so the centre-point label
+#' is preserved. Call only during training — never on validation/test loaders.
+#'
+#' Implementation: sample one symmetry index per sample, group the sample indices
+#' by symmetry, and apply each of the (at most 8) transforms once to its group.
+#' This is 8 flip/transpose ops per batch at most — cheaper than transforming the
+#' whole batch 8 times and selecting.
+#'
+#' @param tensor_list List of 4D torch tensors (one per branch), dims (N, C, H, W).
 augment_d4_batch <- function(tensor_list) {
-  k <- sample.int(8L, 1L)
-  lapply(tensor_list, apply_d4, k = k)
+  n      <- tensor_list[[1]]$shape[[1]]
+  ks     <- sample.int(8L, n, replace = TRUE)   # one symmetry per sample
+  groups <- split(seq_len(n), ks)               # sample indices per symmetry
+
+  lapply(tensor_list, function(x) {
+    out <- x$clone()
+    for (kk in names(groups)) {
+      idx <- groups[[kk]]
+      out[idx, , , ] <- apply_d4(x[idx, , , , drop = FALSE], as.integer(kk))
+    }
+    out
+  })
 }
