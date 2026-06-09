@@ -612,7 +612,7 @@ run_max       <- -Inf
 run_nonfinite <- 0
 probe_done    <- FALSE
 
-t0 <- proc.time()[["elapsed"]]
+t0 <- Sys.time()
 
 for (b in seq_along(block_starts)) {
   bs <- block_starts[b]
@@ -677,17 +677,17 @@ for (b in seq_along(block_starts)) {
   )
 
   if (b == 1L || b %% 25L == 0L || b == length(block_starts)) {
-    el <- proc.time()[["elapsed"]] - t0
-    message(sprintf("Block %d/%d | rows %d-%d | valid %s | %.0fs elapsed",
+    el <- Sys.time() - t0
+    message(sprintf("Block %d/%d | rows %d-%d | valid %s | elapsed: %.2f %s",
                     b, length(block_starts), bs, bs + cb$out_nrows - 1L,
-                    format(cb$n_val, big.mark = ","), el))
+                    format(cb$n_val, big.mark = ","), el, units(el)))
   }
 }
 
 for (w in writers) terra::writeStop(w$rast)
 rm(models); gc()
 
-total_time    <- proc.time()[["elapsed"]] - t0
+total_time    <- Sys.time() - t0
 n_valid_total <- run_n
 
 # ── Sanity checks (delete rasters if the written map is implausible) ───────────
@@ -766,7 +766,7 @@ prediction_config <- tibble::tibble(
   r_nrow = r_nrow, r_ncol = r_ncol, n_cell = n_cell,
   n_valid = n_valid_total, valid_fraction = n_valid_total / n_cell,
   global_median_ton_ha = global_med, global_max_ton_ha = global_max,
-  runtime_min = total_time / 60,
+  runtime_min = as.numeric(total_time, units = "mins"),
   device = device$type, predicted_at = as.character(Sys.time())
 )
 safe_write_csv2(prediction_config, file.path(output_log_dir, "prediction_config.csv"))
@@ -799,7 +799,7 @@ safe_write_csv2(
 message("\n── Spatial prediction complete ───────────────────────────────────")
 message(sprintf("  Config / seeds   : %s / %d", config_id, n_seeds))
 message(sprintf("  Valid pixels     : %s", format(n_valid_total, big.mark = ",")))
-message(sprintf("  Runtime          : %.1f min", total_time / 60))
+message(sprintf("  Runtime          : %.2f %s", total_time, units(total_time)))
 message(sprintf("  Headline map     : %s", ensemble_center))
 
 # Stats are read back from the written rasters (raster_summary) — nothing is held

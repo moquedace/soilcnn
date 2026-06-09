@@ -645,7 +645,7 @@ extract_dataset_patches <- function(
   message(dataset_name, " | chunks: ", length(chunk_list))
   message(dataset_name, " | workers: ", n_workers_patch)
   
-  time_start <- proc.time()[["elapsed"]]
+  time_start <- Sys.time()
   old_plan <- future::plan()
   
   future::plan(
@@ -681,7 +681,7 @@ extract_dataset_patches <- function(
   
   future::plan(future::sequential)
   
-  time_end <- proc.time()[["elapsed"]]
+  time_end <- Sys.time()
   
   message(dataset_name, " | binding arrays")
   
@@ -824,8 +824,7 @@ message("Dummy predictors: ", sum(selected_predictors$predictor_type == "dummy")
 message("Percentage predictors: ", sum(selected_predictors$predictor_type == "percentage"))
 message("Continuous predictors: ", sum(selected_predictors$predictor_type == "continuous"))
 
-time_start_all     <- proc.time()[["elapsed"]]
-time_start_all_str <- as.character(Sys.time())   # timestamp legível para o log
+time_start_all <- Sys.time()
 
 train_extraction <- extract_dataset_patches(
   point_data = train_data,
@@ -884,13 +883,10 @@ test_extraction <- extract_dataset_patches(
 
 gc()
 
-time_end_all     <- proc.time()[["elapsed"]]
-time_end_all_str <- as.character(Sys.time())   # timestamp legível para o log
+time_end_all <- Sys.time()
 
-patch_runtime <- paste(
-  round((time_end_all - time_start_all) / 60, 2),
-  "min"
-)
+patch_runtime <- sprintf("%.2f %s", time_end_all - time_start_all,
+                         units(time_end_all - time_start_all))
 
 patch_check <- dplyr::bind_rows(
   train_extraction$check,
@@ -905,8 +901,8 @@ patch_chunk_check <- dplyr::bind_rows(
 )
 
 patch_runtime_check <- tibble::tibble(
-  time_start = time_start_all_str,
-  time_end   = time_end_all_str,
+  time_start = as.character(time_start_all),
+  time_end   = as.character(time_end_all),
   runtime = patch_runtime,
   n_workers_patch = n_workers_patch,
   chunk_size_points = chunk_size_points,

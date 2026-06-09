@@ -132,7 +132,7 @@ message("Train rows: ", nrow(train_pts),
 # ── Open raster stack (metadata only — values read band-by-band) ──────────────
 
 message("\nOpening raster stack (metadata only)...")
-t0 <- proc.time()[["elapsed"]]
+t0 <- Sys.time()
 
 raster_files <- list.files(
   predictor_raster_dir,
@@ -163,7 +163,7 @@ n_cols_rast <- terra::ncol(rast_stack)
 
 message("Raster grid: ", n_rows_rast, " rows × ", n_cols_rast, " cols × ",
         terra::nlyr(rast_stack), " layers  (opened in ",
-        round(proc.time()[["elapsed"]] - t0, 1), "s)")
+        sprintf("%.2f %s", Sys.time() - t0, units(Sys.time() - t0)), ")")
 
 # ── Resolve chunk_nrows ───────────────────────────────────────────────────────
 
@@ -417,7 +417,7 @@ process_split <- function(scaled_df, role,
 
 # ── Run all splits ────────────────────────────────────────────────────────────
 
-t_all <- proc.time()[["elapsed"]]
+t_all <- Sys.time()
 
 patches <- list(
   train = process_split(
@@ -440,8 +440,8 @@ patches <- list(
   )
 )
 
-message("\nTotal extraction time: ",
-        round((proc.time()[["elapsed"]] - t_all) / 60, 1), " min")
+message(sprintf("\nTotal extraction time: %.2f %s",
+                Sys.time() - t_all, units(Sys.time() - t_all)))
 
 # ── Manifest ──────────────────────────────────────────────────────────────────
 

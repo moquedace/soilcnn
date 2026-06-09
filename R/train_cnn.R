@@ -216,7 +216,7 @@ train_one_cnn <- function(
     current_lr = double(), no_improve = integer()
   )
 
-  t0 <- proc.time()[["elapsed"]]
+  t0 <- Sys.time()
 
   for (epoch in seq_len(n_epochs)) {
     # --- LR warmup ---
@@ -322,7 +322,7 @@ train_one_cnn <- function(
     gc()
   }
 
-  runtime <- (proc.time()[["elapsed"]] - t0) / 60
+  runtime <- Sys.time() - t0
   if (is.null(best_state)) stop("No best_state saved — training may have failed.")
   model$load_state_dict(best_state)
 
@@ -355,7 +355,7 @@ train_one_cnn <- function(
     gate          = gate,
     best_epoch    = best_epoch,
     best_val_loss = best_val_loss,
-    runtime_min   = as.numeric(runtime),
+    runtime_min   = as.numeric(runtime, units = "mins"),
     config        = cfg
   )
 }
