@@ -137,6 +137,17 @@ if (identical(final_run_id, "latest")) {
 }
 
 final_run_dir <- file.path(final_model_base, final_run_id)
+
+# Resolve "auto" config_id → rank-1 do final_run_summary.rds
+if (identical(config_id, "auto")) {
+  tmp_summary_path <- file.path(final_run_dir, "comparison", "final_run_summary.rds")
+  if (!file.exists(tmp_summary_path))
+    stop("Nao foi possivel resolver config_id='auto': arquivo nao encontrado: ",
+         tmp_summary_path)
+  config_id <- readRDS(tmp_summary_path)$selected_cfgs$config_id[1]
+  message("config_id resolved to: ", config_id)
+}
+
 model_dir     <- file.path(final_run_dir, config_id, "models")
 summary_file  <- file.path(final_run_dir, "comparison", "final_run_summary.rds")
 
