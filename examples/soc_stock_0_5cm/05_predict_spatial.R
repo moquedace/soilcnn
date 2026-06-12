@@ -99,14 +99,15 @@ ensemble_center <- "median"   # "median" (recommended) or "mean"
 # max_strip_ram_gb auto-sizes output_block_rows to stay within that budget and
 # avoids the std::bad_alloc that a too-large single strip would trigger at fine
 # resolution (the same heap-fragmentation failure fixed in 02_extract_patches).
-max_strip_ram_gb  <- 6        # per-strip predictor RAM budget in GB (NULL = use fixed rows below)
-                              # IMPORTANT: pico de RAM real = 2 × strip, porque apply_predictor_scaling
-                              # aciona copy-on-modify do R na primeira atribuicao mat[,i]<- dentro da funcao.
-                              # Defina este valor <= RAM_livre / 2 para evitar OOM.
-                              # Referencia para 187 bandas, ~149 k cols (1 row ≈ 223 MB):
-                              #   6 GB → ~10 useful rows/block (strip 24 rows, pico ~12 GB) ← recomendado
-                              #   8 GB → ~21 useful rows/block (strip 35 rows, pico ~16 GB)
-                              #  16 GB → ~57 useful rows/block (strip 71 rows, pico ~32 GB) ← falha em 32 GB
+max_strip_ram_gb  <- 12       # per-strip predictor RAM budget in GB (NULL = use fixed rows below)
+                              # IMPORTANT: pico de RAM real >> strip sozinho:
+                              #   • apply_predictor_scaling aciona copy-on-modify do R (~+1x strip)
+                              #   • terra aloca buffers internos ao ler 187 arquivos (~+1x strip)
+                              #   Pico estimado ≈ 3–4 × max_strip_ram_gb.
+                              # Para 64 GB RAM (SO+R ≈ 10 GB livre ≈ 54 GB):
+                              #  12 GB → ~39 useful rows/block, pico estimado ~36-48 GB ← recomendado 64 GB
+                              #   8 GB → ~21 useful rows/block, pico estimado ~24-32 GB (mais conservador)
+                              #  16 GB → falhou na pratica (fragmentacao apos sessao longa)
 output_block_rows <- 64L      # raster rows per strip; used only when max_strip_ram_gb is NULL
 batch_size        <- 4096L    # patches per GPU forward pass
 
