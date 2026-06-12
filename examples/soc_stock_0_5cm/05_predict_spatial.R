@@ -99,11 +99,14 @@ ensemble_center <- "median"   # "median" (recommended) or "mean"
 # max_strip_ram_gb auto-sizes output_block_rows to stay within that budget and
 # avoids the std::bad_alloc that a too-large single strip would trigger at fine
 # resolution (the same heap-fragmentation failure fixed in 02_extract_patches).
-max_strip_ram_gb  <- 16       # per-strip predictor RAM budget in GB (NULL = use fixed rows below)
-                              # At 250 m (187 bands, 160 k cols): one strip row ≈ 0.24 GB.
-                              # 16 GB → ~52 useful rows/block (window 15: half_w=7, ~59 strip rows, ~3x over-read)
-                              #  4 GB → ~2  useful rows/block (window 15: ~8x over-read, very I/O-heavy)
-                              # Raise this if you have more free RAM; 16–32 is ideal for windows 9 or 15.
+max_strip_ram_gb  <- 6        # per-strip predictor RAM budget in GB (NULL = use fixed rows below)
+                              # IMPORTANT: pico de RAM real = 2 × strip, porque apply_predictor_scaling
+                              # aciona copy-on-modify do R na primeira atribuicao mat[,i]<- dentro da funcao.
+                              # Defina este valor <= RAM_livre / 2 para evitar OOM.
+                              # Referencia para 187 bandas, ~149 k cols (1 row ≈ 223 MB):
+                              #   6 GB → ~10 useful rows/block (strip 24 rows, pico ~12 GB) ← recomendado
+                              #   8 GB → ~21 useful rows/block (strip 35 rows, pico ~16 GB)
+                              #  16 GB → ~57 useful rows/block (strip 71 rows, pico ~32 GB) ← falha em 32 GB
 output_block_rows <- 64L      # raster rows per strip; used only when max_strip_ram_gb is NULL
 batch_size        <- 4096L    # patches per GPU forward pass
 
