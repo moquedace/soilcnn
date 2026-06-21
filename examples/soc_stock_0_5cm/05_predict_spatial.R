@@ -1,5 +1,5 @@
 source(
-  "https://raw.githubusercontent.com/moquedace/funcs/refs/heads/main/install_load_pkg.R"
+  "https://raw.githubusercontent.com/moquedace/funcs/refs/heads/main/utils/install_load_pkg.R"
 )
 
 pkg <- c(
@@ -10,7 +10,8 @@ pkg <- c(
   "tibble",
   "purrr",
   "stringr",
-  "matrixStats"
+  "matrixStats",
+  "ps"
 )
 
 install_load_pkg(pkg)
@@ -507,19 +508,26 @@ compute_block <- function(b_start) {
                 cells_all = integer(0), valid = logical(0),
                 cells_valid = integer(0),
                 median = numeric(0), mean = numeric(0), sd = numeric(0),
-                mad = numeric(0), min = numeric(0), max = numeric(0))
+                mad = numeric(0), min = numeric(0), max = numeric(0),
+                t_read = 0, t_scale = 0, t_predict = 0)
   if (length(center_rows) == 0L) return(empty)
 
   read_row_start <- min(center_rows) - half_w_max
   read_row_end   <- max(center_rows) + half_w_max
   read_nrows     <- read_row_end - read_row_start + 1L
 
+  .t_read_start <- Sys.time()
   strip_values <- terra::values(rast_stack, row = read_row_start,
                                 nrows = read_nrows, mat = TRUE)
+  t_read <- as.numeric(Sys.time() - .t_read_start, units = "secs")
+
+  .t_scale_start <- Sys.time()
   strip_values <- apply_predictor_scaling(strip_values, predictor_cols,
                                           scale_method, scale_center, scale_factor,
                                           temperature_min_valid_celsius)
+  t_scale <- as.numeric(Sys.time() - .t_scale_start, units = "secs")
 
+  .t_predict_start <- Sys.time()
   center_cols <- (half_w_max + 1L):(r_ncol - half_w_max)
   grid  <- expand.grid(center_row = center_rows, center_col = center_cols)
   n_req <- nrow(grid)
@@ -568,13 +576,16 @@ compute_block <- function(b_start) {
     ptr <- ptr + nv
   }
 
+  t_predict <- as.numeric(Sys.time() - .t_predict_start, units = "secs")
+
   rm(strip_values); gc()
   keep <- seq_len(ptr)
   list(out_nrows = out_nrows, n_req = n_req, n_val = ptr,
        cells_all = cells_all, valid = valid_all,
        cells_valid = cells_valid[keep],
        median = med[keep], mean = mean_[keep], sd = sd_[keep],
-       mad = mad_[keep], min = min_[keep], max = max_[keep])
+       mad = mad_[keep], min = min_[keep], max = max_[keep],
+       t_read = t_read, t_scale = t_scale, t_predict = t_predict)
 }
 
 # ── Open streaming writers (one per output layer) ─────────────────────────────
@@ -615,6 +626,14 @@ abort_and_cleanup <- function(msg) {
 }
 
 # ── Block-streaming prediction loop (compute → write → discard) ───────────────
+
+# Diagnostic mode: log timing breakdown (read/scale/predict) and process RSS
+# memory every `diag_log_every` blocks, to track down the per-block slowdown
+# observed in production (time/block grew ~3x over the first 125 blocks
+# without a matching growth in valid-pixel count, suggesting an accumulating
+# leak rather than legitimate extra work).
+diag_log_every <- 1L
+.proc_handle   <- ps::ps_handle()
 
 block_starts <- seq(1L, r_nrow, by = output_block_rows)
 block_log    <- vector("list", length(block_starts))
@@ -685,17 +704,30 @@ for (b in seq_along(block_starts)) {
   terra::writeValues(w_max$rast,    blk_max,    bs, cb$out_nrows)
   terra::writeValues(w_mask$rast,   blk_mask,   bs, cb$out_nrows)
 
+  rss_mb <- .proc_handle$memory_info()[["rss"]] / 1e6
+
   block_log[[b]] <- tibble::tibble(
     block = b, row_start = bs, row_end = bs + cb$out_nrows - 1L,
     n_centers = cb$n_req, n_valid = cb$n_val,
-    n_invalid = cb$n_req - cb$n_val
+    n_invalid = cb$n_req - cb$n_val,
+    t_read = cb$t_read, t_scale = cb$t_scale, t_predict = cb$t_predict,
+    rss_mb = rss_mb
   )
+
+  if (b %% diag_log_every == 0L || b == 1L || b == length(block_starts)) {
+    message(sprintf(
+      "Block %d/%d | rows %d-%d | valid %s | read %.1fs scale %.1fs predict %.1fs | RSS %.0f MB",
+      b, length(block_starts), bs, bs + cb$out_nrows - 1L,
+      format(cb$n_val, big.mark = ","), cb$t_read, cb$t_scale, cb$t_predict, rss_mb))
+  }
 
   if (b == 1L || b %% 25L == 0L || b == length(block_starts)) {
     el <- Sys.time() - t0
-    message(sprintf("Block %d/%d | rows %d-%d | valid %s | elapsed: %.2f %s",
-                    b, length(block_starts), bs, bs + cb$out_nrows - 1L,
-                    format(cb$n_val, big.mark = ","), el, units(el)))
+    message(sprintf("  └─ cumulative elapsed: %.2f %s", el, units(el)))
+    # Diagnostic checkpoint: persist the timing/RSS log so far so it survives
+    # an early interrupt (e.g. a deliberate stop for this investigation).
+    safe_write_csv2(dplyr::bind_rows(block_log[seq_len(b)]),
+                    file.path(output_log_dir, "prediction_block_summary_partial.csv"))
   }
 }
 
