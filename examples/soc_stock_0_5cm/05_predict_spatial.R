@@ -122,25 +122,28 @@ ensemble_center <- "median"   # "median" (recommended) or "mean"
 # max_strip_ram_gb auto-sizes output_block_rows to stay within that budget and
 # avoids the std::bad_alloc that a too-large single strip would trigger at fine
 # resolution (the same heap-fragmentation failure fixed in 02_extract_patches).
-max_strip_ram_gb  <- 5        # per-strip predictor RAM budget in GB, PER WORKER (NULL = use fixed rows below)
+max_strip_ram_gb  <- 4        # per-strip predictor RAM budget in GB, PER CONCURRENT SHARD (NULL = use fixed rows below)
                               # IMPORTANT: pico de RAM real >> strip sozinho:
                               #   • apply_predictor_scaling aciona copy-on-modify do R (~+1x strip)
                               #   • terra aloca buffers internos ao ler 187 arquivos (~+1x strip)
-                              # CRITICO em modo multi-worker (05a_run_parallel.R): este e um raster
-                              # GLOBAL (160k+ colunas) -- cada worker paga o custo da largura TOTAL
+                              # CRITICO em modo paralelo (05a_run_parallel.R): este e um raster
+                              # GLOBAL (160k+ colunas) -- cada shard paga o custo da largura TOTAL
                               # por linha (~240 MB/linha a 187 canais), nao so da sua fatia de linhas.
-                              # Isso cria um PISO de ~7-8 GB de pico por worker que nao some mesmo
+                              # Isso cria um PISO de ~7-8 GB de pico por shard que nao some mesmo
                               # com max_strip_ram_gb bem baixo (a margem da janela sozinha exige
-                              # ~15 linhas = ~3.6 GB cru). Por isso o numero de workers (n_workers em
-                              # 05a_run_parallel.R) e o controle dominante de RAM total, nao so este
-                              # valor.
-                              # MEDIDO em produção (64 GB RAM, n_workers=4, max_strip_ram_gb=5):
-                              # ~62.7/63.1 GB de pico (99%!) -- ~15.7 GB/worker real, mais alto que a
-                              # estimativa teorica de 2.5-3.5x. CPU so ~20% utilizada (32 threads
-                              # logicos) -- RAM, nao CPU, era o limitante. Reduzido para n_workers=3
-                              # (mesmo max_strip_ram_gb=5, mesma eficiencia de I/O) -> ~3x15.7=~47 GB
-                              # estimado, ~16 GB de margem. Se mudar n_workers em 05a_run_parallel.R,
-                              # reavalie este valor usando o multiplicador empirico (~15.7/5≈3.1x).
+                              # ~15 linhas = ~3.6 GB cru). Por isso max_concurrent (05a_run_parallel.R)
+                              # e o controle dominante de RAM total, nao so este valor.
+                              # HISTORICO DE TENTATIVAS (64 GB RAM):
+                              #   n_workers=4, g=5 (long-lived) -> ~62.7/63.1 GB (99%)
+                              #   n_workers=3, g=5 (long-lived) -> 63.1/63.1 GB (100%) apos ~9.5h
+                              #     (fragmentacao de R/Windows ao longo do tempo de vida do processo)
+                              #   max_concurrent=3, g=5 (shards curtos) -> OOM em ~20 blocos
+                              #     ("cannot allocate vector of size 4.5 Gb") -- picos individuais
+                              #     (~14 GB visto num shard so) somados passam de 63 GB mesmo so 3 de
+                              #     vida curta. NAO era so fragmentacao, o pico por processo e mais
+                              #     alto que o modelo teorico previa.
+                              # ATUAL: max_concurrent=2, g=4 -> ~2x13=~26 GB estimado, bem mais
+                              # margem. Se mudar max_concurrent em 05a_run_parallel.R, reavalie aqui.
 output_block_rows <- 64L      # raster rows per strip; used only when max_strip_ram_gb is NULL
 batch_size        <- 4096L    # patches per GPU forward pass
 

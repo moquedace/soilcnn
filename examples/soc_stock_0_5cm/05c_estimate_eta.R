@@ -15,7 +15,7 @@ project_root <- "D:/usuario_armazenamento/cassio/R/deep_learning_caret"
 # match whatever you used in 05a_run_parallel.R.
 # ══════════════════════════════════════════════════════════════════════════════
 
-max_concurrent <- 3   # <<< keep this in sync with 05a_run_parallel.R
+max_concurrent <- 2   # <<< keep this in sync with 05a_run_parallel.R
 
 log_root <- file.path(project_root, "outputs", "spatial_prediction", "_worker_logs")
 run_dirs <- list.dirs(log_root, recursive = FALSE, full.names = FALSE)

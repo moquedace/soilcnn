@@ -49,7 +49,15 @@ n_shards <- 30
 # owns). Keep this at the value already tuned against max_strip_ram_gb in
 # 05_predict_spatial.R (currently max_strip_ram_gb=5, tuned for 3 concurrent
 # processes on 64 GB RAM).
-max_concurrent <- 3
+# REVISED: 3 concurrent shards at max_strip_ram_gb=5 OOM'd ("cannot allocate
+# vector of size 4.5 Gb") after only 20 blocks (minutes, not hours) -- so this
+# was NOT primarily long-run fragmentation, individual per-process peaks
+# (observed up to ~14 GB on a single shard) simply add up past 64 GB when 3
+# happen to spike together. Dropped to 2 concurrent + max_strip_ram_gb=4 in
+# 05_predict_spatial.R for more headroom (~2 x 13 GB ≈ 26 GB estimated, vs the
+# ~63 GB ceiling) at the cost of less parallelism (CPU was never the
+# bottleneck here, so this mainly costs wall-clock time, not correctness).
+max_concurrent <- 2
 
 poll_interval_s <- 30
 
