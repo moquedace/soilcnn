@@ -18,7 +18,15 @@ project_root <- "D:/usuario_armazenamento/cassio/R/deep_learning_caret"
 
 # ── Settings ────────────────────────────────────────────────────────────────────
 
-n_workers <- 24L   # <<< EDIT THIS — match it to your available CPU cores
+# IMPORTANT: this is a GLOBAL raster (160k+ columns), so RAM — not CPU cores —
+# is the binding constraint. Each worker pays for the FULL row width regardless
+# of how few rows it owns (~240 MB/row at 187 channels), creating a per-worker
+# RAM floor around ~7-8 GB peak that persists even at a tiny max_strip_ram_gb.
+# n_workers and max_strip_ram_gb (in 05_predict_spatial.R) must be tuned
+# TOGETHER against total RAM. For 64 GB: n_workers=4 with max_strip_ram_gb=5
+# in 05_predict_spatial.R -> ~54 GB peak total, ~10 GB headroom. If you change
+# this, update max_strip_ram_gb to match (see the comment there for the math).
+n_workers <- 4   # <<< EDIT THIS together with max_strip_ram_gb in 05_predict_spatial.R
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
