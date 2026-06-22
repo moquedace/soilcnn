@@ -599,7 +599,27 @@ compute_block <- function(b_start) {
   n_quick_ok <- 0L   # diagnostic: how many centres survived the cheap pre-filter
 
   chunk_list <- split(seq_len(n_req), ceiling(seq_len(n_req) / max(batch_size, 1L)))
-  for (ci in chunk_list) {
+  n_chunks <- length(chunk_list)
+  # Heartbeat: a single block can in principle contain tens of thousands of
+  # chunks (n_req / batch_size) and the only progress line printed by the
+  # caller fires once the WHOLE block finishes -- if one block is pathologically
+  # slow (e.g. a chunk-heavy region), the worker looks identical to a true hang
+  # from outside (a stalled worker was observed in production with no way to
+  # tell the two apart). Print a cheap periodic progress line so that's visible.
+  .heartbeat_last   <- Sys.time()
+  heartbeat_every_s <- 120
+  for (chunk_idx in seq_along(chunk_list)) {
+    ci <- chunk_list[[chunk_idx]]
+
+    if (as.numeric(Sys.time() - .heartbeat_last, units = "secs") >= heartbeat_every_s) {
+      message(sprintf(
+        "    [heartbeat] chunk %s/%s | quick_ok so far %s | valid so far %s | %.1f min into this block",
+        format(chunk_idx, big.mark = ","), format(n_chunks, big.mark = ","),
+        format(n_quick_ok, big.mark = ","), format(ptr, big.mark = ","),
+        as.numeric(Sys.time() - .t_predict_start, units = "mins")))
+      .heartbeat_last <- Sys.time()
+    }
+
     cr <- grid$center_row[ci]
     cc <- grid$center_col[ci]
 
