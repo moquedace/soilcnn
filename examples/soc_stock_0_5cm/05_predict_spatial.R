@@ -668,7 +668,12 @@ gdal_opts <- function(datatype) {
 # written into raster/parts/. Run 05b_merge_spatial_parts.R once after every
 # worker finishes to mosaic the tiles into the final full-extent rasters.
 worker_template <- if (n_workers > 1L) {
-  terra::crop(raster_template, terra::ext(raster_template, my_row_start, my_row_end, 1L, r_ncol))
+  full_ext  <- as.vector(terra::ext(raster_template))   # named: xmin, xmax, ymin, ymax
+  yres_full <- terra::yres(raster_template)
+  worker_ymax <- full_ext[["ymax"]] - (my_row_start - 1L) * yres_full
+  worker_ymin <- full_ext[["ymax"]] - my_row_end * yres_full
+  worker_ext  <- terra::ext(full_ext[["xmin"]], full_ext[["xmax"]], worker_ymin, worker_ymax)
+  terra::crop(raster_template, worker_ext, snap = "near")
 } else {
   raster_template
 }
