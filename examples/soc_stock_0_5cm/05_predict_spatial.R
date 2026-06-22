@@ -509,7 +509,7 @@ compute_block <- function(b_start) {
                 cells_valid = integer(0),
                 median = numeric(0), mean = numeric(0), sd = numeric(0),
                 mad = numeric(0), min = numeric(0), max = numeric(0),
-                t_read = 0, t_scale = 0, t_predict = 0)
+                t_read = 0, t_scale = 0, t_predict = 0, n_quick_ok = 0L)
   if (length(center_rows) == 0L) return(empty)
 
   read_row_start <- min(center_rows) - half_w_max
@@ -539,15 +539,32 @@ compute_block <- function(b_start) {
   med <- mean_ <- sd_ <- mad_ <- min_ <- max_ <- numeric(n_req)
   cells_valid <- integer(n_req)
   ptr <- 0L
+  n_quick_ok <- 0L   # diagnostic: how many centres survived the cheap pre-filter
 
   chunk_list <- split(seq_len(n_req), ceiling(seq_len(n_req) / max(batch_size, 1L)))
   for (ci in chunk_list) {
     cr <- grid$center_row[ci]
     cc <- grid$center_col[ci]
 
-    pb <- build_patches_multi(cr, cc, strip_values, read_row_start,
+    # Fast pre-filter: check only the CENTRE pixel (no window expansion) across
+    # all channels first. On a planetary-extent grid the vast majority of
+    # candidate centres are ocean/no-data; build_patches_multi's full check
+    # expands every centre to its window positions (up to ~225 per window)
+    # before testing finiteness across all channels, which is wasted work for
+    # cells that can never be valid. Discarding them here on a cheap
+    # single-row-per-centre check avoids that expansion entirely.
+    row_local_c <- cr - read_row_start + 1L
+    center_idx  <- (row_local_c - 1L) * r_ncol + cc
+    quick_ok    <- rowSums(!is.finite(strip_values[center_idx, , drop = FALSE])) == 0
+    n_quick_ok  <- n_quick_ok + sum(quick_ok)
+
+    if (!any(quick_ok)) next   # valid_all[ci] stays FALSE (default)
+
+    pb <- build_patches_multi(cr[quick_ok], cc[quick_ok], strip_values, read_row_start,
                               r_ncol, n_channels, window_sizes)
-    valid_all[ci] <- pb$valid
+    valid_sub     <- logical(length(ci))
+    valid_sub[quick_ok] <- pb$valid
+    valid_all[ci] <- valid_sub
     if (dim(pb$arrays[[1]])[1] == 0L) next
 
     preds_native <- matrix(NA_real_, nrow = dim(pb$arrays[[1]])[1], ncol = n_seeds)
@@ -556,7 +573,7 @@ compute_block <- function(b_start) {
                                                          device, batch_size)), 0)
     }
 
-    cv  <- ((cr - 1L) * r_ncol + cc)[pb$valid]
+    cv  <- ((cr[quick_ok] - 1L) * r_ncol + cc[quick_ok])[pb$valid]
     nv  <- length(cv)
     rng <- (ptr + 1L):(ptr + nv)
 
@@ -585,7 +602,8 @@ compute_block <- function(b_start) {
        cells_valid = cells_valid[keep],
        median = med[keep], mean = mean_[keep], sd = sd_[keep],
        mad = mad_[keep], min = min_[keep], max = max_[keep],
-       t_read = t_read, t_scale = t_scale, t_predict = t_predict)
+       t_read = t_read, t_scale = t_scale, t_predict = t_predict,
+       n_quick_ok = n_quick_ok)
 }
 
 # ── Open streaming writers (one per output layer) ─────────────────────────────
@@ -708,7 +726,7 @@ for (b in seq_along(block_starts)) {
 
   block_log[[b]] <- tibble::tibble(
     block = b, row_start = bs, row_end = bs + cb$out_nrows - 1L,
-    n_centers = cb$n_req, n_valid = cb$n_val,
+    n_centers = cb$n_req, n_quick_ok = cb$n_quick_ok, n_valid = cb$n_val,
     n_invalid = cb$n_req - cb$n_val,
     t_read = cb$t_read, t_scale = cb$t_scale, t_predict = cb$t_predict,
     rss_mb = rss_mb
@@ -716,8 +734,9 @@ for (b in seq_along(block_starts)) {
 
   if (b %% diag_log_every == 0L || b == 1L || b == length(block_starts)) {
     message(sprintf(
-      "Block %d/%d | rows %d-%d | valid %s | read %.1fs scale %.1fs predict %.1fs | RSS %.0f MB",
+      "Block %d/%d | rows %d-%d | centers %s quick_ok %s valid %s | read %.1fs scale %.1fs predict %.1fs | RSS %.0f MB",
       b, length(block_starts), bs, bs + cb$out_nrows - 1L,
+      format(cb$n_req, big.mark = ","), format(cb$n_quick_ok, big.mark = ","),
       format(cb$n_val, big.mark = ","), cb$t_read, cb$t_scale, cb$t_predict, rss_mb))
   }
 
