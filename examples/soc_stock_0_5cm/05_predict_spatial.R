@@ -77,6 +77,28 @@ source(file.path(project_root, "R", "train_cnn.R"))
 target_label <- "soc_stock_0_5cm"
 target_unit  <- "ton_ha"
 
+# ── Parallel workers (CPU-only scaling) ────────────────────────────────────────
+# The CNN inference cost per valid pixel is the real bottleneck at planetary
+# scale (~180 valid px/s single-process measured -> ~150 days for ~2.4e9 land
+# pixels). Blocks are embarrassingly parallel (read-only predictor access), so
+# launch N independent Rscript processes, each predicting a disjoint
+# contiguous row range and writing its OWN raster tile under
+# outputs/.../raster/parts/. After ALL workers finish, run
+# 05b_merge_spatial_parts.R once to mosaic the tiles into the final rasters.
+#
+# Defaults below (1 of 1) reproduce the original single-process behaviour.
+# To run N workers, override via command line:
+#   Rscript 05_predict_spatial.R <worker_id> <n_workers>
+#   e.g. Rscript 05_predict_spatial.R 1 8   (... up to 8 8)
+worker_id <- 1L
+n_workers <- 1L
+.cli_args <- commandArgs(trailingOnly = TRUE)
+if (length(.cli_args) >= 2) {
+  worker_id <- as.integer(.cli_args[1])
+  n_workers <- as.integer(.cli_args[2])
+}
+stopifnot(n_workers >= 1L, worker_id >= 1L, worker_id <= n_workers)
+
 config_id    <- "auto"        # "auto" -> rank-1 config from the final-run summary;
                               #           or set to an explicit id, e.g. "cfg_007"
 final_run_id <- "latest"      # "latest" -> most recent final_* run, or an explicit id
@@ -117,7 +139,12 @@ batch_size        <- 4096L    # patches per GPU forward pass
 plausible_median_range <- c(1, 200)   # global median of the map should fall here
 plausible_hard_max     <- 1000        # warn if any pixel exceeds this
 
-device <- setup_torch_device(n_threads = 30, use_cuda = TRUE)
+# Split available CPU threads across concurrent worker processes — requesting
+# the full thread count per worker would oversubscribe the CPU when n_workers > 1
+# (e.g. 8 workers x 30 threads on a 24-core machine fights itself via context
+# switching instead of speeding anything up).
+threads_per_worker <- max(1L, parallel::detectCores() %/% n_workers)
+device <- setup_torch_device(n_threads = threads_per_worker, use_cuda = TRUE)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -323,6 +350,24 @@ n_cell <- terra::ncell(rast_stack)
 
 message("Raster grid: ", r_nrow, " rows x ", r_ncol, " cols x ", n_channels, " layers")
 
+# ── Partition rows across parallel workers ─────────────────────────────────────
+# Each worker owns a disjoint contiguous row range of the FULL grid. compute_block()
+# still reads from the complete predictor stack (read-only — concurrent reads from
+# multiple processes are safe), so a worker's margin rows can dip into a
+# neighbour's territory without conflict. Only OUTPUT is partitioned: each worker
+# writes a tile sized to exactly its own row range (no NA padding, no overlap).
+worker_row_bounds <- floor(seq(1, r_nrow + 1, length.out = n_workers + 1L))
+my_row_start <- worker_row_bounds[worker_id]
+my_row_end   <- worker_row_bounds[worker_id + 1L] - 1L
+part_suffix  <- if (n_workers > 1L) sprintf("_part%02dof%02d", worker_id, n_workers) else ""
+
+if (n_workers > 1L) {
+  message(sprintf("Worker %d/%d: rows %d-%d (%s of %s total rows)",
+                  worker_id, n_workers, my_row_start, my_row_end,
+                  format(my_row_end - my_row_start + 1L, big.mark = ","),
+                  format(r_nrow, big.mark = ",")))
+}
+
 # ── Resolve output_block_rows from the per-strip RAM budget ───────────────────
 # half_w_max (largest window) sets the strip margin. The predictor strip is the
 # dominant allocation; size it to stay within max_strip_ram_gb.
@@ -498,7 +543,9 @@ predict_one_model <- function(model, arr_list, device, batch_size) {
 # Returns global (row-major) cell indices so the caller can map them to the
 # block-local positions it writes to disk.
 compute_block <- function(b_start) {
-  out_nrows   <- min(output_block_rows, r_nrow - b_start + 1L)
+  # Capped at my_row_end (not r_nrow) so a block never spills past this
+  # worker's own row range into a neighbour's output tile.
+  out_nrows   <- min(output_block_rows, my_row_end - b_start + 1L)
   out_row_end <- b_start + out_nrows - 1L
 
   center_rows <- intersect(b_start:out_row_end,
@@ -616,11 +663,23 @@ gdal_opts <- function(datatype) {
     "TILED=YES", "BLOCKXSIZE=512", "BLOCKYSIZE=512")
 }
 
+# When running with multiple workers, output is a per-worker tile cropped to
+# exactly this worker's row range — sized to its real data, no NA padding —
+# written into raster/parts/. Run 05b_merge_spatial_parts.R once after every
+# worker finishes to mosaic the tiles into the final full-extent rasters.
+worker_template <- if (n_workers > 1L) {
+  terra::crop(raster_template, terra::ext(raster_template, my_row_start, my_row_end, 1L, r_ncol))
+} else {
+  raster_template
+}
+output_raster_dir_w <- if (n_workers > 1L) file.path(output_raster_dir, "parts") else output_raster_dir
+create_output_dirs(output_raster_dir_w)
+
 open_writer <- function(band_name, file_suffix, datatype = "FLT4S") {
-  f <- file.path(output_raster_dir,
-                 paste0(target_label, "_", config_id, "_", file_suffix, ".tif"))
+  f <- file.path(output_raster_dir_w,
+                 paste0(target_label, "_", config_id, "_", file_suffix, part_suffix, ".tif"))
   if (file.exists(f)) file.remove(f)
-  r <- terra::rast(raster_template)
+  r <- terra::rast(worker_template)
   names(r) <- band_name
   terra::writeStart(r, f, overwrite = TRUE, datatype = datatype,
                     gdal = gdal_opts(datatype))
@@ -653,7 +712,7 @@ abort_and_cleanup <- function(msg) {
 diag_log_every <- 1L
 .proc_handle   <- ps::ps_handle()
 
-block_starts <- seq(1L, r_nrow, by = output_block_rows)
+block_starts <- seq(my_row_start, my_row_end, by = output_block_rows)
 block_log    <- vector("list", length(block_starts))
 
 # Running stats on the headline (median) map — avoids holding all pixels in RAM.
@@ -714,13 +773,17 @@ for (b in seq_along(block_starts)) {
     }
   }
 
-  terra::writeValues(w_median$rast, blk_median, bs, cb$out_nrows)
-  terra::writeValues(w_mean$rast,   blk_mean,   bs, cb$out_nrows)
-  terra::writeValues(w_sd$rast,     blk_sd,     bs, cb$out_nrows)
-  terra::writeValues(w_mad$rast,    blk_mad,    bs, cb$out_nrows)
-  terra::writeValues(w_min$rast,    blk_min,    bs, cb$out_nrows)
-  terra::writeValues(w_max$rast,    blk_max,    bs, cb$out_nrows)
-  terra::writeValues(w_mask$rast,   blk_mask,   bs, cb$out_nrows)
+  # Tile-local row offset: the worker's own writers address rows 1..N of its
+  # OWN cropped tile, not the global raster row bs.
+  bs_local <- bs - my_row_start + 1L
+
+  terra::writeValues(w_median$rast, blk_median, bs_local, cb$out_nrows)
+  terra::writeValues(w_mean$rast,   blk_mean,   bs_local, cb$out_nrows)
+  terra::writeValues(w_sd$rast,     blk_sd,     bs_local, cb$out_nrows)
+  terra::writeValues(w_mad$rast,    blk_mad,    bs_local, cb$out_nrows)
+  terra::writeValues(w_min$rast,    blk_min,    bs_local, cb$out_nrows)
+  terra::writeValues(w_max$rast,    blk_max,    bs_local, cb$out_nrows)
+  terra::writeValues(w_mask$rast,   blk_mask,   bs_local, cb$out_nrows)
 
   rss_mb <- ps::ps_memory_info(.proc_handle)[["rss"]] / 1e6
 
@@ -746,7 +809,8 @@ for (b in seq_along(block_starts)) {
     # Diagnostic checkpoint: persist the timing/RSS log so far so it survives
     # an early interrupt (e.g. a deliberate stop for this investigation).
     safe_write_csv2(dplyr::bind_rows(block_log[seq_len(b)]),
-                    file.path(output_log_dir, "prediction_block_summary_partial.csv"))
+                    file.path(output_log_dir,
+                              paste0("prediction_block_summary_partial", part_suffix, ".csv")))
   }
 }
 
@@ -779,8 +843,15 @@ f_max    <- w_max$file
 f_mask   <- w_mask$file
 written_files <- c(f_median, f_mean, f_sd, f_mad, f_min, f_max, f_mask)
 
+# With n_workers > 1 each process only ever sees ITS OWN row strip. A strip
+# that lands entirely over ocean/no-data (e.g. a polar band) legitimately has
+# n_valid_total == 0 and an undefined mean — that is NOT a failure, so the
+# global-plausibility / zero-valid checks below are skipped per-worker and
+# deferred to 05b_merge_spatial_parts.R, which runs them once on the
+# mosaicked full-extent map where they are meaningful again. Per-worker we
+# only still fail fast on actually corrupt math (non-finite values).
 sanity_ok <- TRUE
-if (n_valid_total == 0L) {
+if (n_workers == 1L && n_valid_total == 0L) {
   sanity_ok <- FALSE
   message("  [FAIL] No valid pixels were predicted.")
 }
@@ -788,7 +859,7 @@ if (run_nonfinite > 0L) {
   sanity_ok <- FALSE
   message(sprintf("  [FAIL] %d non-finite values in the median map.", run_nonfinite))
 }
-if (is.finite(global_mean_med) &&
+if (n_workers == 1L && is.finite(global_mean_med) &&
     (global_mean_med < plausible_median_range[1] ||
      global_mean_med > plausible_median_range[2])) {
   sanity_ok <- FALSE
@@ -798,6 +869,9 @@ if (is.finite(global_mean_med) &&
 if (is.finite(global_max) && global_max > plausible_hard_max) {
   message(sprintf("  [WARN] Max %.0f exceeds %g %s — inspect the high tail.",
                   global_max, plausible_hard_max, target_unit))
+}
+if (n_workers > 1L && n_valid_total == 0L) {
+  message("  [INFO] This worker's row range has no valid pixels (likely ocean/no-data only) — expected for some strips, not an error.")
 }
 if (!sanity_ok) {
   suppressWarnings(file.remove(written_files[file.exists(written_files)]))
@@ -816,7 +890,8 @@ message(sprintf("  Global median (sampled, n=2e5): %.2f %s", global_med, target_
 # ── Metadata / manifests ──────────────────────────────────────────────────────
 
 block_summary <- dplyr::bind_rows(block_log)
-safe_write_csv2(block_summary, file.path(output_log_dir, "prediction_block_summary.csv"))
+safe_write_csv2(block_summary,
+                file.path(output_log_dir, paste0("prediction_block_summary", part_suffix, ".csv")))
 
 prediction_config <- tibble::tibble(
   target_label = target_label, target_unit = target_unit,
@@ -835,7 +910,8 @@ prediction_config <- tibble::tibble(
   runtime_min = as.numeric(total_time, units = "mins"),
   device = device$type, predicted_at = as.character(Sys.time())
 )
-safe_write_csv2(prediction_config, file.path(output_log_dir, "prediction_config.csv"))
+safe_write_csv2(prediction_config,
+                file.path(output_log_dir, paste0("prediction_config", part_suffix, ".csv")))
 
 # per-layer global stats (read back to confirm what was actually written)
 raster_summary <- purrr::map_dfr(
@@ -853,12 +929,15 @@ raster_summary <- purrr::map_dfr(
   },
   .id = "layer"
 )
-safe_write_csv2(raster_summary, file.path(output_log_dir, "prediction_raster_summary.csv"))
+safe_write_csv2(raster_summary,
+                file.path(output_log_dir, paste0("prediction_raster_summary", part_suffix, ".csv")))
 
-safe_write_csv2(
-  tibble::tibble(order = seq_len(n_channels), predictor = predictor_cols),
-  file.path(output_log_dir, "predictor_order_used.csv")
-)
+if (worker_id == 1L) {   # identical across workers — only worker 1 writes it, to avoid concurrent writes
+  safe_write_csv2(
+    tibble::tibble(order = seq_len(n_channels), predictor = predictor_cols),
+    file.path(output_log_dir, "predictor_order_used.csv")
+  )
+}
 
 # ── Report ────────────────────────────────────────────────────────────────────
 
