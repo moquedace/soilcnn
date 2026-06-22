@@ -126,7 +126,6 @@ max_strip_ram_gb  <- 5        # per-strip predictor RAM budget in GB, PER WORKER
                               # IMPORTANT: pico de RAM real >> strip sozinho:
                               #   • apply_predictor_scaling aciona copy-on-modify do R (~+1x strip)
                               #   • terra aloca buffers internos ao ler 187 arquivos (~+1x strip)
-                              #   Pico estimado ≈ 2.5-3.5 x max_strip_ram_gb POR WORKER.
                               # CRITICO em modo multi-worker (05a_run_parallel.R): este e um raster
                               # GLOBAL (160k+ colunas) -- cada worker paga o custo da largura TOTAL
                               # por linha (~240 MB/linha a 187 canais), nao so da sua fatia de linhas.
@@ -134,12 +133,14 @@ max_strip_ram_gb  <- 5        # per-strip predictor RAM budget in GB, PER WORKER
                               # com max_strip_ram_gb bem baixo (a margem da janela sozinha exige
                               # ~15 linhas = ~3.6 GB cru). Por isso o numero de workers (n_workers em
                               # 05a_run_parallel.R) e o controle dominante de RAM total, nao so este
-                              # valor. Configuracao calculada para 64 GB de RAM total:
-                              #   n_workers=4, max_strip_ram_gb=5  -> ~13.4 GB pico/worker x 4 = ~54 GB
-                              #     (margem ~10 GB; over-read de I/O ~3.3x) <- valor atual recomendado
-                              #   n_workers=6, max_strip_ram_gb=3  -> ~52 GB total, over-read ~6-8x (mais lento)
-                              #   n_workers=3, max_strip_ram_gb=8  -> ~62 GB total, pouca margem (arriscado)
-                              # Se mudar n_workers em 05a_run_parallel.R, reavalie este valor.
+                              # valor.
+                              # MEDIDO em produção (64 GB RAM, n_workers=4, max_strip_ram_gb=5):
+                              # ~62.7/63.1 GB de pico (99%!) -- ~15.7 GB/worker real, mais alto que a
+                              # estimativa teorica de 2.5-3.5x. CPU so ~20% utilizada (32 threads
+                              # logicos) -- RAM, nao CPU, era o limitante. Reduzido para n_workers=3
+                              # (mesmo max_strip_ram_gb=5, mesma eficiencia de I/O) -> ~3x15.7=~47 GB
+                              # estimado, ~16 GB de margem. Se mudar n_workers em 05a_run_parallel.R,
+                              # reavalie este valor usando o multiplicador empirico (~15.7/5≈3.1x).
 output_block_rows <- 64L      # raster rows per strip; used only when max_strip_ram_gb is NULL
 batch_size        <- 4096L    # patches per GPU forward pass
 

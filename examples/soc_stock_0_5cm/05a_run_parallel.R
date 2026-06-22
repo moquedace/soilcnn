@@ -23,10 +23,17 @@ project_root <- "D:/usuario_armazenamento/cassio/R/deep_learning_caret"
 # of how few rows it owns (~240 MB/row at 187 channels), creating a per-worker
 # RAM floor around ~7-8 GB peak that persists even at a tiny max_strip_ram_gb.
 # n_workers and max_strip_ram_gb (in 05_predict_spatial.R) must be tuned
-# TOGETHER against total RAM. For 64 GB: n_workers=4 with max_strip_ram_gb=5
-# in 05_predict_spatial.R -> ~54 GB peak total, ~10 GB headroom. If you change
-# this, update max_strip_ram_gb to match (see the comment there for the math).
-n_workers <- 4   # <<< EDIT THIS together with max_strip_ram_gb in 05_predict_spatial.R
+# TOGETHER against total RAM.
+#
+# REVISED after observing real usage: n_workers=4 with max_strip_ram_gb=5
+# measured ~62.7/63.1 GB (99%!) on a 64 GB machine — the empirical per-worker
+# peak (~15.7 GB) ran higher than the earlier estimate (~13.4 GB), leaving
+# almost no margin. Dropped to n_workers=3 (same max_strip_ram_gb=5, so the
+# I/O over-read ratio per block is unchanged) -> ~3 x 15.7 = ~47 GB estimated
+# peak, ~16 GB headroom. CPU was only ~20% utilised at 4 workers anyway (32
+# logical threads, RAM was always the binding constraint, not cores), so
+# losing one worker costs little real throughput.
+n_workers <- 3   # <<< EDIT THIS together with max_strip_ram_gb in 05_predict_spatial.R
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
