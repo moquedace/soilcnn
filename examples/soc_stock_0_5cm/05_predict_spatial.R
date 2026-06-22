@@ -704,7 +704,7 @@ for (b in seq_along(block_starts)) {
   terra::writeValues(w_max$rast,    blk_max,    bs, cb$out_nrows)
   terra::writeValues(w_mask$rast,   blk_mask,   bs, cb$out_nrows)
 
-  rss_mb <- .proc_handle$memory_info()[["rss"]] / 1e6
+  rss_mb <- ps::ps_memory_info(.proc_handle)[["rss"]] / 1e6
 
   block_log[[b]] <- tibble::tibble(
     block = b, row_start = bs, row_end = bs + cb$out_nrows - 1L,
