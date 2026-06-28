@@ -109,6 +109,7 @@ if (is.na(avg_total_per_shard) || rate_den == 0L) {
 
   remaining_wall_s <- (remaining_blocks * avg_rate_s_per_block) / max_concurrent
   eta              <- now + remaining_wall_s
+  remaining_dt     <- eta - now   # POSIXct diff -> auto unit (secs/mins/hours/days/weeks)
 
   message(sprintf("\nBlocos totais estimados (todos os %d shards): %s", n_shards,
                   format(round(est_total_all_shards), big.mark = ",")))
@@ -116,6 +117,6 @@ if (is.na(avg_total_per_shard) || rate_den == 0L) {
                   format(done_total, big.mark = ","), 100 * done_total / est_total_all_shards))
   message(sprintf("Ritmo medio observado: %.1f s/bloco (por slot concorrente)", avg_rate_s_per_block))
   message(sprintf("Shards ainda na fila (nao iniciados): %d", n_not_started))
-  message(sprintf("\nETA estimado do job inteiro: %s  (faltam ~%.1f horas)",
-                  format(eta), remaining_wall_s / 3600))
+  message(sprintf("\nETA estimado do job inteiro: %s  (faltam ~%.1f %s)",
+                  format(eta), as.numeric(remaining_dt), units(remaining_dt)))
 }
