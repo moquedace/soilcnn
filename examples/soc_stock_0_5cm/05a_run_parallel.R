@@ -38,10 +38,24 @@ project_root <- "D:/usuario_armazenamento/cassio/R/deep_learning_caret"
 # Total row-partitions. Smaller shards = shorter-lived processes = less time
 # for memory fragmentation to build up before a clean exit, at the cost of a
 # few seconds of repeated startup overhead (package load, model load) per shard.
-# ~30 shards on this raster (~10,600 total blocks across the grid) means each
-# shard processes roughly ~350 blocks instead of ~3,500 -- about a 10x shorter
-# process lifetime than the previous (failed) 3-long-lived-workers attempt.
-n_shards <- 30
+#
+# REVISED (again): n_shards=30 still let individual shards run for DAYS when
+# their row range landed on a sustained-dense band (observed: ~2000-2800
+# s/block for 213+ CONSECUTIVE blocks in one shard -- likely an equatorial
+# band crossing several continents at once). Block count per shard is purely
+# row-range-driven (density-independent), so worst-case wall-clock time is
+# (blocks_per_shard x worst_observed_rate) regardless of n_shards -- and at
+# n_shards=30 that worst case is ~25 days, which is exactly what blew up RAM
+# again (2 such multi-day shards fragmenting simultaneously exhausted the
+# whole system, breaking even unrelated file/network I/O).
+#
+# n_shards=1000 bounds blocks/shard to ~32, so even a shard landing entirely
+# in the densest observed band caps out around ~25 h (~1 day) of process
+# lifetime -- a large improvement on the 5+ days that caused the last
+# failure. Overhead cost: ~500 sequential launches (1000 / max_concurrent=2)
+# x ~30s setup (packages + 5 models + raster metadata) =~ 4.2 h total, small
+# relative to the job's multi-week timeline.
+n_shards <- 1000
 
 # How many shards run AT THE SAME TIME. This — not n_shards — is what bounds
 # peak RAM (same per-process floor as before: this is a GLOBAL raster, so each
