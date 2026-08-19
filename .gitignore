@@ -18,6 +18,9 @@ outputs/
 # Runtime logs
 logs/
 
+# Scratch / isolated test scaffolding (not part of the pipeline)
+_test_gpu/
+
 # OS
 .DS_Store
 Thumbs.db

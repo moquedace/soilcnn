@@ -321,6 +321,13 @@ be insufficient to train it reliably. The three gate types remain in the search 
 this conclusion is dataset-specific and the situation may change with more data or targeted
 spatial splits.
 
+> **Historical note:** cfg_004/cfg_012 were selected under the initial 20 km-resolution
+> prototype (window sizes 3/5/7). After moving to the 250 m production run (window sizes
+> 3/9/15, re-tuned end to end), the selected final model is **cfg_022** (dual-branch,
+> windows 9×9 + 15×15, `vector_featurewise` gate, `embedding_dim=384`). The discussion above
+> is kept for the qualitative conclusion (gate vs. concat), not as a pointer to the current
+> production config.
+
 ---
 
 ## 8. D4 augmentation (patch orientation)

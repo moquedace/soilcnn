@@ -187,7 +187,9 @@ train_one_cnn <- function(
   batch_size    <- cfg$batch_size
   warmup_epochs <- cfg$warmup_epochs
 
-  model <- build_cnn_from_config(cfg, n_channels)$to(device = device)
+  model <- build_cnn_from_config(cfg, n_channels)
+  model <- model$to(device = device)
+  gc()  # evita race condition GC do R vs CUDA async copy
 
   loss_fn <- switch(cfg$loss_fn,
     smooth_l1 = torch::nn_smooth_l1_loss(),

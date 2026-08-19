@@ -1,6 +1,6 @@
-source(
-  "https://raw.githubusercontent.com/moquedace/funcs/refs/heads/main/install_load_pkg.R"
-)
+project_root <- "D:/usuario_armazenamento/cassio/R/deep_learning_caret"
+
+source(file.path(project_root, "utils", "install_load_pkg.R"))
 
 pkg <- c(
   "torch",
