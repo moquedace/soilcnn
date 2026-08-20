@@ -1,5 +1,5 @@
 source(
-  "https://raw.githubusercontent.com/moquedace/funcs/refs/heads/main/install_load_pkg.R"
+  "https://raw.githubusercontent.com/moquedace/funcs/refs/heads/main/utils/install_load_pkg.R"
 )
 
 pkg <- c(
