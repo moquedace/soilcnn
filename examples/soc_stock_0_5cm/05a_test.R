@@ -6,7 +6,7 @@ pkg <- c("processx")
 install_load_pkg(pkg)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 06a_test — Teste do pipeline 2D antes de rodar o job completo
+# 05a_test — Teste do pipeline 2D antes de rodar o job completo
 #
 # Roda apenas test_n_shards shards escolhidos do grid n_row_shards x n_col_shards.
 # O objetivo é verificar:
@@ -45,7 +45,7 @@ poll_interval_s <- 15
 # ── Paths ──────────────────────────────────────────────────────────────────────
 
 script_dir    <- file.path(project_root, "examples", "soc_stock_0_5cm")
-worker_script <- file.path(script_dir, "06_predict_spatial.R")
+worker_script <- file.path(script_dir, "05_predict_spatial.R")
 
 log_dir <- file.path(project_root, "outputs", "spatial_prediction", "_worker_logs",
                      paste0(format(Sys.time(), "%Y%m%d_%H%M%S"), "_TEST2D"))
@@ -280,7 +280,7 @@ if (length(test_tiles) > 0) {
 }
 
 # Recomendações finais
-message("\n── Recomendações para o job real (06a_run_parallel.R) ─────────────")
+message("\n── Recomendações para o job real (05a_run_parallel.R) ─────────────")
 ok_results <- Filter(function(r) !is.null(r) && r$ok, results)
 if (length(ok_results) > 0) {
   rss_vals    <- sapply(ok_results, function(r) r$rss_peak_mb)
@@ -312,7 +312,7 @@ if (length(ok_results) > 0) {
                   n_row_shards, n_col_shards, n_row_shards * n_col_shards,
                   eta_h, eta_h / 24))
 
-  message(sprintf("\n  -> Edite 06a_run_parallel.R: max_concurrent <- %d", safe_concurrent))
+  message(sprintf("\n  -> Edite 05a_run_parallel.R: max_concurrent <- %d", safe_concurrent))
 } else {
   message("  Nenhum shard completou com sucesso — verifique os logs em: ", log_dir)
 }

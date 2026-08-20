@@ -31,45 +31,25 @@ source(file.path(project_root, "R", "tune_grid.R"))
 source(file.path(project_root, "R", "train_cnn.R"))
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 05 — Spatial prediction (block-streaming, seed ensemble)
+# 05 — Spatial prediction 2D-tiled (block-streaming, seed ensemble)
 #
-# Produces a wall-to-wall map of the target from the final CNN ensemble.
+# Each worker receives a RECTANGLE of the raster (a slice of rows AND
+# columns) rather than only a row strip. This keeps per-process RAM
+# proportional to the tile's column fraction, allowing more concurrent
+# workers per machine.
 #
-# Design principles (mirrors the robust streaming logic of the cnn09pp project,
-# generalised to a single configurable window and a seed ensemble):
+# (Historical note: an earlier 1D, row-strip-only version of this script
+# was retired after production use showed it needed ~7-8 GB RAM/shard at
+# 187 bands x ~160k columns, limiting concurrency. The 2D tiling here
+# reduces that to ~2 GB/shard at n_col_shards=4, enough headroom to run
+# ~8 workers concurrently on the same RAM budget.)
 #
-#   • BLOCK STREAMING of predictors. Never loads the full 187-layer stack into
-#     RAM. Reads a horizontal strip of rows at a time, just wide enough to
-#     extract the patch window for the centre rows in that strip. Scales to any
-#     raster size / resolution. Only the single-band OUTPUT layers are held in
-#     memory (cheap), so peak RAM is bounded by one strip of predictors.
+# Each worker writes a tile covering exactly its own rectangle (no NA
+# padding). 05b_merge_spatial_parts.R mosaics all tiles at the end.
 #
-#   • SCALED patches. 02_extract_patches.R now scales vals_matrix in-place
-#     before building patches (z-score for continuous, /100 for percentages,
-#     identity for dummies). Spatial prediction MUST apply the SAME transform
-#     to every strip of raster values before passing patches to the model.
-#     Parameters come from predictor_scaling.csv (training-split statistics
-#     computed in script 01). NOT applying scaling here = wrong map.
-#
-#   • EXACT patch layout match. The (row, col) offset ordering and the reshape
-#     to [N, C, H, W] replicate 02_extract_patches.R byte-for-byte, so patches
-#     reach the model in the same spatial orientation they were trained on.
-#
-#   • SEED ENSEMBLE with a defensible aggregator. Each seed model predicts in
-#     log1p space; we back-transform with expm1 and aggregate ACROSS SEEDS.
-#       - MEDIAN is the primary map: it is invariant to the monotone expm1
-#         (median(expm1(z)) = expm1(median(z))), robust to a single divergent
-#         seed, and consistent with what SmoothL1 learns (a conditional median).
-#       - MEAN is also written for comparison (note: mean in native space is
-#         inflated vs. log space by Jensen's inequality — that gap is itself
-#         diagnostic).
-#       - Uncertainty = ensemble DISAGREEMENT (epistemic, from init/training
-#         only). This is NOT a full predictive interval. SD and the more robust
-#         MAD are both written; MIN/MAX give the raw envelope.
-#
-#   • SANITY GUARDS. Hard checks on channel alignment before predicting, and
-#     plausibility checks on the output distribution after, to refuse to write a
-#     nonsensical map silently.
+# CLI: Rscript 05_predict_spatial.R <row_shard_id> <col_shard_id>
+#                                   <n_row_shards>  <n_col_shards>
+#                                   [max_concurrent]
 # ══════════════════════════════════════════════════════════════════════════════
 
 # ── Settings ──────────────────────────────────────────────────────────────────
@@ -77,86 +57,74 @@ source(file.path(project_root, "R", "train_cnn.R"))
 target_label <- "soc_stock_0_5cm"
 target_unit  <- "ton_ha"
 
-# ── Parallel workers (CPU-only scaling) ────────────────────────────────────────
-# The CNN inference cost per valid pixel is the real bottleneck at planetary
-# scale (~180 valid px/s single-process measured -> ~150 days for ~2.4e9 land
-# pixels). Blocks are embarrassingly parallel (read-only predictor access), so
-# launch N independent Rscript processes, each predicting a disjoint
-# contiguous row range and writing its OWN raster tile under
-# outputs/.../raster/parts/. After ALL workers finish, run
-# 05b_merge_spatial_parts.R once to mosaic the tiles into the final rasters.
-#
-# Defaults below (1 of 1) reproduce the original single-process behaviour.
-# To run N workers, override via command line:
-#   Rscript 05_predict_spatial.R <worker_id> <n_workers>
-#   e.g. Rscript 05_predict_spatial.R 1 8   (... up to 8 8)
-worker_id <- 1L
-n_workers <- 1L
+# ── Argumentos: CLI (Rscript) OU variáveis de ambiente (source() no console) ───
+# rm(list=ls()) acima apaga qualquer variável pré-definida antes do source(),
+# então a forma de passar parâmetros ao rodar via source() é por env var
+# (Sys.setenv() sobrevive ao rm(list=ls()), diferente de objetos no workspace).
+row_shard_id   <- 1L
+col_shard_id   <- 1L
+n_row_shards   <- 1L
+n_col_shards   <- 1L
+max_concurrent <- 1L   # usado para calcular threads_per_worker
+
 .cli_args <- commandArgs(trailingOnly = TRUE)
-if (length(.cli_args) >= 2) {
-  worker_id <- as.integer(.cli_args[1])
-  n_workers <- as.integer(.cli_args[2])
+if (length(.cli_args) >= 4L) {
+  row_shard_id  <- as.integer(.cli_args[1])
+  col_shard_id  <- as.integer(.cli_args[2])
+  n_row_shards  <- as.integer(.cli_args[3])
+  n_col_shards  <- as.integer(.cli_args[4])
+  if (length(.cli_args) >= 5L) max_concurrent <- as.integer(.cli_args[5])
+} else if (nzchar(Sys.getenv("SOC_ROW_SHARD_ID"))) {
+  row_shard_id  <- as.integer(Sys.getenv("SOC_ROW_SHARD_ID"))
+  col_shard_id  <- as.integer(Sys.getenv("SOC_COL_SHARD_ID"))
+  n_row_shards  <- as.integer(Sys.getenv("SOC_N_ROW_SHARDS"))
+  n_col_shards  <- as.integer(Sys.getenv("SOC_N_COL_SHARDS"))
+  if (nzchar(Sys.getenv("SOC_MAX_CONCURRENT"))) {
+    max_concurrent <- as.integer(Sys.getenv("SOC_MAX_CONCURRENT"))
+  }
 }
-stopifnot(n_workers >= 1L, worker_id >= 1L, worker_id <= n_workers)
 
-config_id    <- "auto"        # "auto" -> rank-1 config from the final-run summary;
-                              #           or set to an explicit id, e.g. "cfg_007"
-final_run_id <- "latest"      # "latest" -> most recent final_* run, or an explicit id
-seeds        <- c(42L, 123L, 456L, 789L, 2025L)  # ensemble members (script 04)
+stopifnot(
+  n_row_shards >= 1L, n_col_shards >= 1L,
+  row_shard_id >= 1L, row_shard_id <= n_row_shards,
+  col_shard_id >= 1L, col_shard_id <= n_col_shards,
+  max_concurrent >= 1L
+)
 
-# Which aggregation is reported as the headline map in the summary. Both median
-# and mean rasters are always written; this only flags the recommended one.
-ensemble_center <- "median"   # "median" (recommended) or "mean"
+n_total_shards <- n_row_shards * n_col_shards
+is_partitioned <- n_total_shards > 1L
 
-# Streaming / GPU parameters
-#
-# Output is STREAMED to disk block-by-block (terra writeStart/writeValues/
-# writeStop). The full-grid result is NEVER materialised in RAM — essential at
-# fine resolution: a 250 m global grid has ~1.0e10 cells, so a single full-grid
-# double vector needs ~82 GB and the 7 output layers together would need ~0.5 TB.
-# Streaming bounds OUTPUT RAM to one block (tens of MB).
-#
-# The remaining RAM cost is the predictor STRIP (all C bands for the block's
-# window), read once per block:
-#   strip_bytes ≈ (output_block_rows + 2*half_w_max) * r_ncol * n_channels * 8
-# max_strip_ram_gb auto-sizes output_block_rows to stay within that budget and
-# avoids the std::bad_alloc that a too-large single strip would trigger at fine
-# resolution (the same heap-fragmentation failure fixed in 02_extract_patches).
-max_strip_ram_gb  <- 4        # per-strip predictor RAM budget in GB, PER CONCURRENT SHARD (NULL = use fixed rows below)
-                              # IMPORTANT: pico de RAM real >> strip sozinho:
-                              #   • apply_predictor_scaling aciona copy-on-modify do R (~+1x strip)
-                              #   • terra aloca buffers internos ao ler 187 arquivos (~+1x strip)
-                              # CRITICO em modo paralelo (05a_run_parallel.R): este e um raster
-                              # GLOBAL (160k+ colunas) -- cada shard paga o custo da largura TOTAL
-                              # por linha (~240 MB/linha a 187 canais), nao so da sua fatia de linhas.
-                              # Isso cria um PISO de ~7-8 GB de pico por shard que nao some mesmo
-                              # com max_strip_ram_gb bem baixo (a margem da janela sozinha exige
-                              # ~15 linhas = ~3.6 GB cru). Por isso max_concurrent (05a_run_parallel.R)
-                              # e o controle dominante de RAM total, nao so este valor.
-                              # HISTORICO DE TENTATIVAS (64 GB RAM):
-                              #   n_workers=4, g=5 (long-lived) -> ~62.7/63.1 GB (99%)
-                              #   n_workers=3, g=5 (long-lived) -> 63.1/63.1 GB (100%) apos ~9.5h
-                              #     (fragmentacao de R/Windows ao longo do tempo de vida do processo)
-                              #   max_concurrent=3, g=5 (shards curtos) -> OOM em ~20 blocos
-                              #     ("cannot allocate vector of size 4.5 Gb") -- picos individuais
-                              #     (~14 GB visto num shard so) somados passam de 63 GB mesmo so 3 de
-                              #     vida curta. NAO era so fragmentacao, o pico por processo e mais
-                              #     alto que o modelo teorico previa.
-                              # ATUAL: max_concurrent=2, g=4 -> ~2x13=~26 GB estimado, bem mais
-                              # margem. Se mudar max_concurrent em 05a_run_parallel.R, reavalie aqui.
-output_block_rows <- 64L      # raster rows per strip; used only when max_strip_ram_gb is NULL
-batch_size        <- 4096L    # patches per GPU forward pass
+config_id    <- "auto"
+final_run_id <- "latest"
+seeds        <- c(42L, 123L, 456L, 789L, 2025L)
+ensemble_center <- "median"
 
-# Plausibility bounds for the post-prediction sanity check (native units).
-# Wide on purpose — only meant to catch gross failures (e.g. unscaled inputs).
-plausible_median_range <- c(1, 200)   # global median of the map should fall here
-plausible_hard_max     <- 1000        # warn if any pixel exceeds this
+# Parâmetros de streaming / RAM
+# Com tiling 2D, bytes_per_strip_row usa strip_ncol (colunas do tile + margens),
+# não r_ncol inteiro -> output_block_rows maior -> menos blocos -> menos overhead.
+max_strip_ram_gb  <- 4        # budget de RAM por strip, por shard
+output_block_rows <- 64L      # usado somente se max_strip_ram_gb for NULL
+# Cap de linhas por bloco independente do strip budget.
+# O RSS real por shard é dominado pelo acúmulo de patch arrays no heap do R
+# (vals_valid + step1 + step2 para branches 9x9 e 15x15) proporcional ao
+# n_valid/bloco. Com output_block_rows=52 e blocos densos (109k válidos/bloco)
+# o RSS atingiu 34 GB -- inviável com max_concurrent>1. Limitando em 16 linhas:
+# n_valid/bloco cai ~3x -> RSS esperado ~10-15 GB em shards densos.
+max_output_block_rows <- 16L  # cap: nunca mais que isso, mesmo com strip barato
+# batch_size domina o pico de RAM por chunk em build_patches_multi (a checagem
+# de validade da janela indexa strip_values para todo o chunk, criando uma
+# matriz temporaria de ~batch_size * n_pos_janela * n_channels * 8 bytes).
+# Isso e independente de output_block_rows -- reduzir batch_size e o que
+# realmente limita o pico de RSS por chunk. Com batch_size=4096 e janela 15x15
+# (225 posicoes) x 187 canais, o pico chegava a ~1.4 GB soh nessa checagem,
+# repetido a cada chunk -- e o que gerava os picos de 30-37 GB observados.
+batch_size        <- 512L
 
-# Split available CPU threads across concurrent worker processes — requesting
-# the full thread count per worker would oversubscribe the CPU when n_workers > 1
-# (e.g. 8 workers x 30 threads on a 24-core machine fights itself via context
-# switching instead of speeding anything up).
-threads_per_worker <- max(1L, parallel::detectCores() %/% n_workers)
+plausible_median_range <- c(1, 200)
+plausible_hard_max     <- 1000
+
+# Threads divididos por max_concurrent (passado via CLI pelo orquestrador)
+threads_per_worker <- max(1L, parallel::detectCores() %/% max_concurrent)
 device <- setup_torch_device(n_threads = threads_per_worker, use_cuda = TRUE)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
@@ -172,7 +140,6 @@ raster_table_file      <- file.path(metadata_dir, "raster_table_used.csv")
 predictor_scaling_file <- file.path(metadata_dir, "predictor_scaling.csv")
 patch_manifest_file    <- file.path(patch_dir, "patch_manifest.rds")
 
-# Resolve "latest" final run
 if (identical(final_run_id, "latest")) {
   run_dirs <- list.dirs(final_model_base, recursive = FALSE, full.names = FALSE)
   run_dirs <- run_dirs[grepl("^final_", run_dirs)]
@@ -183,72 +150,67 @@ if (identical(final_run_id, "latest")) {
 
 final_run_dir <- file.path(final_model_base, final_run_id)
 
-# Resolve "auto" config_id → rank-1 do final_run_summary.rds
 if (identical(config_id, "auto")) {
   tmp_summary_path <- file.path(final_run_dir, "comparison", "final_run_summary.rds")
   if (!file.exists(tmp_summary_path))
-    stop("Nao foi possivel resolver config_id='auto': arquivo nao encontrado: ",
-         tmp_summary_path)
+    stop("Nao foi possivel resolver config_id='auto': ", tmp_summary_path)
   config_id <- readRDS(tmp_summary_path)$selected_cfgs$config_id[1]
   message("config_id resolved to: ", config_id)
 }
 
-model_dir     <- file.path(final_run_dir, config_id, "models")
-summary_file  <- file.path(final_run_dir, "comparison", "final_run_summary.rds")
+model_dir    <- file.path(final_run_dir, config_id, "models")
+summary_file <- file.path(final_run_dir, "comparison", "final_run_summary.rds")
 
-output_dir <- file.path(project_root, "outputs", "spatial_prediction",
-                        "soc_stock_modeling", target_label, config_id)
+output_dir        <- file.path(project_root, "outputs", "spatial_prediction",
+                               "soc_stock_modeling", target_label, config_id)
 output_raster_dir <- file.path(output_dir, "raster")
 output_log_dir    <- file.path(output_dir, "log")
 
 create_output_dirs(c(output_dir, output_raster_dir, output_log_dir))
 
-# ── Validate inputs exist ─────────────────────────────────────────────────────
+# ── Validate inputs ────────────────────────────────────────────────────────────
 
 for (f in c(raster_table_file, predictor_scaling_file, summary_file)) {
   if (!file.exists(f)) stop("Required input not found: ", f)
 }
 if (!dir.exists(model_dir)) stop("Model directory not found: ", model_dir)
 
-# ── Load predictor scaling parameters ────────────────────────────────────────
+# ── Predictor scaling ─────────────────────────────────────────────────────────
 
 predictor_scaling <- readr::read_csv2(predictor_scaling_file, show_col_types = FALSE)
 
-temperature_min_valid_celsius <- -100   # must match script 01
+temperature_min_valid_celsius <- -100
 
-# Pre-compute vectors for fast per-strip application (channel order = predictor_cols order,
-# validated below after raster_table is loaded).
-# Applied to each strip of raw raster values before patch extraction.
 apply_predictor_scaling <- function(mat, pred_names, scale_method,
                                     scale_center, scale_factor,
                                     temp_threshold) {
   for (i in seq_len(ncol(mat))) {
     x <- mat[, i]
-
     if (grepl("surface_temperature_celsius$", pred_names[i])) {
       x[!is.na(x) & is.finite(x) & x <= temp_threshold] <- NA_real_
     }
-
     if (scale_method[i] == "zscore_train") {
       x <- (x - scale_center[i]) / scale_factor[i]
     } else if (scale_method[i] == "percentage_0_100_to_0_1") {
-      x[!is.na(x) & is.finite(x) & (x < 0 | x > 100)] <- NA_real_
+      # Clamp into [0, 100] instead of discarding as NA: these are continuous
+      # interpolated surfaces (PNV classes, clay mineralogy) that legitimately
+      # overshoot slightly past 0/100 near sharp spatial transitions. Treating
+      # that as missing data amplifies into large gaps once the CNN's
+      # full-window validity rule invalidates the whole patch around each
+      # discarded pixel. Genuine NA/Inf pass through untouched.
+      finite_idx <- !is.na(x) & is.finite(x)
+      x[finite_idx] <- pmin(pmax(x[finite_idx], 0), 100)
       x <- x / 100
     }
-    # "none_dummy_0_1": no transformation
-
     mat[, i] <- x
   }
   mat
 }
 
-# ── Load model config from the final-run summary ──────────────────────────────
+# ── Model config ──────────────────────────────────────────────────────────────
 
 final_summary <- readRDS(summary_file)
 
-# Resolve "auto" config_id: pick the rank-1 config by mean test CCC across seeds.
-# When 04 trains multiple configs, all_seed_results has one row per (config, seed);
-# we rank by mean CCC descending and take the top config.
 if (identical(config_id, "auto")) {
   if (nrow(final_summary$all_seed_results) > 0) {
     auto_rank <- final_summary$all_seed_results %>%
@@ -257,31 +219,21 @@ if (identical(config_id, "auto")) {
       dplyr::arrange(dplyr::desc(mean_ccc))
     config_id <- auto_rank$config_id[1]
     message("config_id resolved to: ", config_id,
-            sprintf(" (mean test CCC %.4f across %d seeds)",
-                    auto_rank$mean_ccc[1], sum(final_summary$all_seed_results$config_id == config_id)))
+            sprintf(" (mean test CCC %.4f)", auto_rank$mean_ccc[1]))
   } else {
     stop("config_id = 'auto' but final_run_summary$all_seed_results is empty.")
   }
 }
 
 if (!config_id %in% final_summary$selected_cfgs$config_id) {
-  stop("config_id '", config_id, "' not in final run summary. Available: ",
-       paste(final_summary$selected_cfgs$config_id, collapse = ", "))
+  stop("config_id '", config_id, "' not in final run summary.")
 }
 
-cfg <- dplyr::filter(final_summary$selected_cfgs, config_id == !!config_id)
-
-# Handles BOTH single-branch (1 window) and dual-branch (2 windows) configs.
-# For dual-branch the two windows are read from the SAME predictor strip; a
-# centre pixel is predicted only if ALL channels of BOTH windows are finite
-# (the validity intersection), and the two patch arrays are fed to the two
-# branches in window_sizes order (branch1 = window_sizes[1], branch2 = [2]).
+cfg          <- dplyr::filter(final_summary$selected_cfgs, config_id == !!config_id)
 window_sizes <- cfg$window_sizes[[1]]
 n_branches   <- length(window_sizes)
-if (!n_branches %in% c(1L, 2L)) {
-  stop("cfg ", config_id, " has ", n_branches, " windows; expected 1 or 2.")
-}
-half_w_max   <- (max(window_sizes) - 1L) %/% 2L   # margins sized by the largest window
+if (!n_branches %in% c(1L, 2L)) stop("cfg ", config_id, " has ", n_branches, " windows.")
+half_w_max   <- (max(window_sizes) - 1L) %/% 2L
 
 message("\nConfig ", config_id,
         " | window(s) ", paste(window_sizes, collapse = "x"), " (", n_branches, "-branch)",
@@ -289,10 +241,7 @@ message("\nConfig ", config_id,
         " | embed ", cfg$embedding_dim,
         " | gate ", cfg$gate_type)
 
-# ── Canonical predictor order + raster files ──────────────────────────────────
-# raster_table_used.csv stores predictors in the EXACT order script 01/02 used
-# (alphabetical), with their source file paths. This is the single source of
-# truth for channel alignment.
+# ── Raster table ──────────────────────────────────────────────────────────────
 
 raster_table <- readr::read_csv2(raster_table_file, show_col_types = FALSE)
 if (!all(c("raster_file", "predictor") %in% names(raster_table))) {
@@ -309,15 +258,12 @@ if (length(missing_rasters) > 0) {
   stop("Some predictor raster files no longer exist.")
 }
 
-# Align predictor_scaling to the EXACT channel order of raster_table / predictor_cols.
-# Misalignment here = wrong scale applied to wrong channel = corrupted predictions.
 predictor_scaling <- predictor_scaling %>%
   dplyr::filter(predictor %in% predictor_cols) %>%
   dplyr::arrange(match(predictor, predictor_cols))
 
 if (!identical(predictor_scaling$predictor, predictor_cols)) {
-  stop("predictor_scaling.csv channel order does not match raster_table_used.csv. ",
-       "Re-check script 01 outputs.")
+  stop("predictor_scaling.csv channel order does not match raster_table_used.csv.")
 }
 
 scale_method <- predictor_scaling$scaling_method
@@ -326,22 +272,18 @@ scale_factor <- predictor_scaling$train_sd
 
 message("Predictor scaling loaded and aligned (", n_channels, " channels).")
 
-# Cross-check against the patch manifest the model was actually trained on.
 if (file.exists(patch_manifest_file)) {
   manifest <- readRDS(patch_manifest_file)
   manifest_predictors <- strsplit(manifest$predictor_cols_final, ";")[[1]]
   if (!identical(as.character(manifest_predictors), as.character(predictor_cols))) {
-    stop("Predictor order in raster_table_used.csv does NOT match the patch ",
-         "manifest the model was trained on. Channel alignment would be wrong. ",
-         "Re-check 01/02 outputs.")
+    stop("Predictor order mismatch vs patch manifest.")
   }
-  message("Channel alignment verified against patch manifest (", n_channels, " predictors).")
+  message("Channel alignment verified against patch manifest.")
 } else {
-  message("WARNING: patch_manifest.rds not found — cannot cross-check channel order. ",
-          "Proceeding with raster_table_used.csv order (", n_channels, " predictors).")
+  message("WARNING: patch_manifest.rds not found.")
 }
 
-# ── Open raster stack (lazy) and check geometry ───────────────────────────────
+# ── Open raster stack ─────────────────────────────────────────────────────────
 
 rast_stack <- terra::rast(raster_files)
 names(rast_stack) <- predictor_cols
@@ -363,85 +305,81 @@ n_cell <- terra::ncell(rast_stack)
 
 message("Raster grid: ", r_nrow, " rows x ", r_ncol, " cols x ", n_channels, " layers")
 
-# ── Partition rows across parallel workers ─────────────────────────────────────
-# Each worker owns a disjoint contiguous row range of the FULL grid. compute_block()
-# still reads from the complete predictor stack (read-only — concurrent reads from
-# multiple processes are safe), so a worker's margin rows can dip into a
-# neighbour's territory without conflict. Only OUTPUT is partitioned: each worker
-# writes a tile sized to exactly its own row range (no NA padding, no overlap).
-worker_row_bounds <- floor(seq(1, r_nrow + 1, length.out = n_workers + 1L))
-my_row_start <- worker_row_bounds[worker_id]
-my_row_end   <- worker_row_bounds[worker_id + 1L] - 1L
-part_suffix  <- if (n_workers > 1L) sprintf("_part%02dof%02d", worker_id, n_workers) else ""
+# ── Partição 2D ───────────────────────────────────────────────────────────────
+# Cada worker cobre um retângulo [my_row_start:my_row_end, my_col_start:my_col_end].
+# A LEITURA inclui margens de half_w_max em todas as direções (para os patches
+# dos pixels de borda). Apenas o retângulo interno é ESCRITO no tile de saída.
 
-if (n_workers > 1L) {
-  message(sprintf("Worker %d/%d: rows %d-%d (%s of %s total rows)",
-                  worker_id, n_workers, my_row_start, my_row_end,
-                  format(my_row_end - my_row_start + 1L, big.mark = ","),
-                  format(r_nrow, big.mark = ",")))
+row_bounds   <- floor(seq(1, r_nrow + 1, length.out = n_row_shards + 1L))
+my_row_start <- row_bounds[row_shard_id]
+my_row_end   <- row_bounds[row_shard_id + 1L] - 1L
+
+col_bounds   <- floor(seq(1, r_ncol + 1, length.out = n_col_shards + 1L))
+my_col_start <- col_bounds[col_shard_id]
+my_col_end   <- col_bounds[col_shard_id + 1L] - 1L
+
+tile_nrow <- my_row_end   - my_row_start   + 1L
+tile_ncol <- my_col_end   - my_col_start   + 1L
+tile_ncell <- tile_nrow * tile_ncol
+
+part_suffix <- if (is_partitioned) {
+  sprintf("_r%03dof%03d_c%03dof%03d", row_shard_id, n_row_shards, col_shard_id, n_col_shards)
+} else {
+  ""
 }
 
-# ── Resolve output_block_rows from the per-strip RAM budget ───────────────────
-# half_w_max (largest window) sets the strip margin. The predictor strip is the
-# dominant allocation; size it to stay within max_strip_ram_gb.
+if (is_partitioned) {
+  message(sprintf(
+    "Shard [%d/%d row, %d/%d col]: rows %d-%d (%s), cols %d-%d (%s)",
+    row_shard_id, n_row_shards, col_shard_id, n_col_shards,
+    my_row_start, my_row_end, format(tile_nrow, big.mark = ","),
+    my_col_start, my_col_end, format(tile_ncol, big.mark = ",")))
+}
 
-bytes_per_strip_row <- as.numeric(r_ncol) * n_channels * 8   # all bands, one row
+# Colunas lidas pela strip: tile + margem (clamped às bordas do raster)
+read_col_start <- max(1L,      my_col_start - half_w_max)
+read_col_end   <- min(r_ncol,  my_col_end   + half_w_max)
+strip_ncol     <- read_col_end - read_col_start + 1L
+
+# ── output_block_rows do budget de RAM ────────────────────────────────────────
+# Com 2D: strip_ncol << r_ncol, entao bytes_per_strip_row e muito menor ->
+# output_block_rows maior -> menos overhead de I/O vs. um esquema 1D (linha
+# inteira por strip).
+
+bytes_per_strip_row <- as.numeric(strip_ncol) * n_channels * 8
 
 if (!is.null(max_strip_ram_gb)) {
   output_block_rows <- max(1L, as.integer(
     floor(max_strip_ram_gb * 1e9 / bytes_per_strip_row) - 2L * half_w_max
   ))
-  message(sprintf(
-    "Auto output_block_rows = %d  (strip budget %.1f GB -> %.2f GB/strip, %d blocks)",
-    output_block_rows, max_strip_ram_gb,
-    (output_block_rows + 2L * half_w_max) * bytes_per_strip_row / 1e9,
-    as.integer(ceiling(r_nrow / output_block_rows))
-  ))
 } else {
-  message(sprintf(
-    "output_block_rows = %d  (%.2f GB/strip, %d blocks)",
-    output_block_rows,
-    (output_block_rows + 2L * half_w_max) * bytes_per_strip_row / 1e9,
-    as.integer(ceiling(r_nrow / output_block_rows))
-  ))
+  # sem auto-cálculo: usa o valor fixo acima
 }
+# Aplica o cap: independente do strip budget, nunca excede max_output_block_rows.
+# Impede que o RSS de predição (patch arrays × n_valid/bloco) exploda em
+# shards densos quando o strip seria barato o suficiente para blocos grandes.
+output_block_rows <- min(output_block_rows, max_output_block_rows)
 
-# Guard: a too-large single strip is the std::bad_alloc risk (heap can't find a
-# big enough contiguous block). Warn well before that point so the user can lower
-# output_block_rows / set max_strip_ram_gb.
+message(sprintf(
+  "output_block_rows = %d (cap=%d | strip budget %.1f GB | strip_ncol %d vs r_ncol %d -> %.2f GB/strip)",
+  output_block_rows, max_output_block_rows,
+  if (!is.null(max_strip_ram_gb)) max_strip_ram_gb else NA_real_,
+  strip_ncol, r_ncol,
+  (output_block_rows + 2L * half_w_max) * bytes_per_strip_row / 1e9
+))
+
 strip_gb <- (output_block_rows + 2L * half_w_max) * bytes_per_strip_row / 1e9
 if (strip_gb > 8) {
-  message(sprintf(
-    "  WARNING: each predictor strip is ~%.1f GB. At fine resolution a single ",
-    strip_gb),
-    "contiguous read this large can fail with std::bad_alloc. Lower ",
-    "output_block_rows or set max_strip_ram_gb (e.g. 4).")
+  message(sprintf("  WARNING: strip ~%.1f GB. Considere reduzir max_strip_ram_gb.", strip_gb))
 }
 
-# Guard (opposite end): when the largest window is big relative to the RAM budget,
-# output_block_rows collapses to a handful of rows while the strip still spans
-# output_block_rows + 2*half_w_max rows. Each block then RE-READS its margin rows,
-# so the strip/useful-rows ratio is the disk over-read factor. At fine resolution
-# (250 m, 187 bands) a window-15 config with max_strip_ram_gb = 4 yields ~2 useful
-# rows per ~16-row strip → ~8x more raster I/O than necessary. Correct, just slow.
-overread_factor <- (output_block_rows + 2L * half_w_max) / output_block_rows
-if (output_block_rows < 8L && half_w_max >= 2L) {
-  message(sprintf(
-    "  NOTE: only %d useful row(s) per block but the strip spans %d rows (margin %d each side) -> ~%.1fx disk over-read.",
-    output_block_rows, output_block_rows + 2L * half_w_max, half_w_max, overread_factor))
-  message(sprintf(
-    "        This is correct but I/O-heavy for window %d at this resolution. If you have the RAM, raise max_strip_ram_gb (e.g. 16-32) to enlarge the block and cut re-reads.",
-    max(window_sizes)))
-}
-
-# ── Load seed models ──────────────────────────────────────────────────────────
+# ── Seed models ───────────────────────────────────────────────────────────────
 
 model_files <- file.path(model_dir, sprintf("seed%04d_best.pt", seeds))
 have <- file.exists(model_files)
 if (!any(have)) stop("No seed model files found in: ", model_dir)
 if (!all(have)) {
-  message("WARNING: missing seed files, using only the ", sum(have), " available:")
-  print(model_files[!have])
+  message("WARNING: missing seeds, using only ", sum(have), " available.")
 }
 seeds       <- seeds[have]
 model_files <- model_files[have]
@@ -451,7 +389,7 @@ message("\nLoading ", n_seeds, " seed model(s) for ", config_id, "...")
 models <- purrr::map(seq_len(n_seeds), function(i) {
   m  <- build_cnn_from_config(cfg, n_channels)
   st <- torch::torch_load(model_files[i])
-  m$load_state_dict(st)      # errors loudly if n_channels / architecture mismatch
+  m$load_state_dict(st)
   m$to(device = device)
   m$eval()
   m
@@ -459,29 +397,21 @@ models <- purrr::map(seq_len(n_seeds), function(i) {
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-#' Build one [n, C, w, w] patch array PER window for the given centre pixels,
-#' sharing a single validity mask across all windows (the intersection).
-#'
-#' Works for 1 window (single branch) or 2 windows (dual branch). For dual
-#' branch a centre is kept only if EVERY channel of BOTH windows is finite, so
-#' both branches always receive the exact same set of samples.
-#'
-#' Layout replicates 02_extract_patches.R EXACTLY, per window:
-#'   offsets = expand.grid(dr, dc) with dr (row offset) varying fastest;
-#'   cells indexed row-major within the strip; reshape [n_pos, n, C] -> aperm ->
-#'   [n, C, w, w] so dim3 = row offset, dim4 = col offset (PyTorch N,C,H,W).
-#'
-#' Returns list(arrays, valid): `arrays` is a list of patch arrays in
-#' window_sizes order (each holding only the common-valid centres); `valid`
-#' flags, over ALL input centres, which were kept.
-build_patches_multi <- function(center_row, center_col, strip_values,
-                                read_row_start, n_cols, n_ch, window_sizes) {
+# build_patches_multi recebe center_col LOCAL (1-based dentro da strip de leitura),
+# nao a coluna global. strip_values tem strip_ncol colunas (nao r_ncol).
+#
+# A versao anterior indexava strip_values[cells, ] DUAS vezes por branch de
+# janela: uma vez (para todo o chunk) so para checar is.finite, e de novo
+# (para o subconjunto valido) para montar o array final. Essa reindexacao era
+# o maior custo de RAM/CPU do chunk. Agora a indexacao acontece uma unica vez
+# por branch e o resultado (vals_full) e reaproveitado tanto para a checagem
+# de validade quanto para montar o array final (so reshape/slice, sem copiar
+# de strip_values de novo).
+build_patches_multi <- function(center_row, center_col_local, strip_values,
+                                read_row_start, strip_ncol_arg, n_ch, window_sizes) {
   n         <- length(center_row)
-  row_local <- center_row - read_row_start + 1L   # 1-based row within the strip
+  row_local <- center_row - read_row_start + 1L
 
-  # ── Pass 1: per-window cell-index matrix + validity → common (AND) mask ─────
-  # Keep only the cheap integer cell matrices; the (large) extracted values are
-  # transient here and re-extracted for valid centres in pass 2.
   per_win      <- vector("list", length(window_sizes))
   valid_common <- rep(TRUE, n)
 
@@ -493,20 +423,23 @@ build_patches_multi <- function(center_row, center_col, strip_values,
 
     cell_mat <- matrix(0L, nrow = n, ncol = n_pos)
     for (j in seq_len(n_pos)) {
-      cell_mat[, j] <- (row_local + offsets$dr[j] - 1L) * n_cols +
-                       (center_col + offsets$dc[j])
+      cell_mat[, j] <- (row_local + offsets$dr[j] - 1L) * strip_ncol_arg +
+                       (center_col_local + offsets$dc[j])
     }
 
-    row_finite <- rowSums(!is.finite(
-      strip_values[as.vector(t(cell_mat)), , drop = FALSE])) == 0
+    vals_full <- strip_values[as.vector(t(cell_mat)), , drop = FALSE]
+    row_finite <- rowSums(!is.finite(vals_full)) == 0
     valid_w      <- colSums(matrix(row_finite, nrow = n_pos, ncol = n)) == n_pos
     valid_common <- valid_common & valid_w
 
-    per_win[[k]] <- list(w = w, n_pos = n_pos, cell_mat = cell_mat)
+    # Reshape para (n_pos, n, n_ch) sem reindexar strip_values -- so muda o
+    # atributo dim (barato). Ordem de as.vector(t(cell_mat)) ja e point-major
+    # em blocos de n_pos, entao bate exatamente com esse layout.
+    dim(vals_full) <- c(n_pos, n, n_ch)
+    per_win[[k]] <- list(w = w, n_pos = n_pos, vals_full = vals_full)
   }
 
   arrays <- vector("list", length(window_sizes))
-
   if (!any(valid_common)) {
     for (k in seq_along(window_sizes)) {
       arrays[[k]] <- array(0, dim = c(0L, n_ch, per_win[[k]]$w, per_win[[k]]$w))
@@ -514,24 +447,18 @@ build_patches_multi <- function(center_row, center_col, strip_values,
     return(list(arrays = arrays, valid = valid_common))
   }
 
-  # ── Pass 2: extract + reshape only the common-valid centres, per window ─────
   valid_pos <- which(valid_common)
   for (k in seq_along(window_sizes)) {
     w     <- per_win[[k]]$w
     n_pos <- per_win[[k]]$n_pos
-    sub_cells  <- as.vector(t(per_win[[k]]$cell_mat[valid_pos, , drop = FALSE]))
-    vals_valid <- strip_values[sub_cells, , drop = FALSE]   # (n_valid*n_pos) x C
-
-    step1 <- array(vals_valid, dim = c(n_pos, length(valid_pos), n_ch)) # [pos, n, ch]
-    step2 <- aperm(step1, c(2L, 3L, 1L))                                # [n, ch, pos]
-    arrays[[k]] <- array(step2, dim = c(length(valid_pos), n_ch, w, w)) # [n, ch, r, c]
+    step1 <- per_win[[k]]$vals_full[, valid_pos, , drop = FALSE]
+    step2 <- aperm(step1, c(2L, 3L, 1L))
+    arrays[[k]] <- array(step2, dim = c(length(valid_pos), n_ch, w, w))
   }
 
   list(arrays = arrays, valid = valid_common)
 }
 
-#' Predict log1p values for a list of patch arrays (one per branch) with one
-#' model, batched on the GPU. Single branch → list of length 1; dual → length 2.
 predict_one_model <- function(model, arr_list, device, batch_size) {
   n <- dim(arr_list[[1]])[1]
   if (n == 0L) return(numeric(0))
@@ -542,27 +469,32 @@ predict_one_model <- function(model, arr_list, device, batch_size) {
       tensors <- lapply(arr_list, function(a)
         torch::torch_tensor(a[idx, , , , drop = FALSE],
                             dtype = torch::torch_float(), device = device))
-      p <- do.call(model, tensors)        # 1 or 2 branch inputs -> [b, 1], log1p
+      p <- do.call(model, tensors)
       out[idx] <- as.numeric(p$squeeze(2L)$to(device = "cpu"))
     }
   })
   out
 }
 
-# ── Per-block prediction helper ───────────────────────────────────────────────
-#
-# Predicts every interior centre pixel inside one block of raster rows and
-# returns the ensemble statistics, WITHOUT materialising any full-grid object.
-# Returns global (row-major) cell indices so the caller can map them to the
-# block-local positions it writes to disk.
+# ── compute_block ─────────────────────────────────────────────────────────────
+# Prediz os pixels do retângulo do tile para um bloco de linhas.
+# Diferenças vs 05:
+#   - center_cols limitados a my_col_start:my_col_end
+#   - terra::values lê somente read_col_start:read_col_end (strip_ncol colunas)
+#   - center_col passado para build_patches_multi e quick_ok e LOCAL (strip)
+#   - cells_valid sao GLOBAIS (row-1)*r_ncol+col, convertidos para tile-local
+#     no loop principal (fora desta funcao)
+
 compute_block <- function(b_start) {
-  # Capped at my_row_end (not r_nrow) so a block never spills past this
-  # worker's own row range into a neighbour's output tile.
   out_nrows   <- min(output_block_rows, my_row_end - b_start + 1L)
   out_row_end <- b_start + out_nrows - 1L
 
   center_rows <- intersect(b_start:out_row_end,
                            (half_w_max + 1L):(r_nrow - half_w_max))
+
+  # Colunas do tile clampadas pelas margens globais
+  cc_start <- max(my_col_start, half_w_max + 1L)
+  cc_end   <- min(my_col_end,   r_ncol - half_w_max)
 
   empty <- list(out_nrows = out_nrows, n_req = 0L, n_val = 0L,
                 cells_all = integer(0), valid = logical(0),
@@ -570,15 +502,18 @@ compute_block <- function(b_start) {
                 median = numeric(0), mean = numeric(0), sd = numeric(0),
                 mad = numeric(0), min = numeric(0), max = numeric(0),
                 t_read = 0, t_scale = 0, t_predict = 0, n_quick_ok = 0L)
-  if (length(center_rows) == 0L) return(empty)
+  if (length(center_rows) == 0L || cc_start > cc_end) return(empty)
 
   read_row_start <- min(center_rows) - half_w_max
   read_row_end   <- max(center_rows) + half_w_max
   read_nrows     <- read_row_end - read_row_start + 1L
 
   .t_read_start <- Sys.time()
-  strip_values <- terra::values(rast_stack, row = read_row_start,
-                                nrows = read_nrows, mat = TRUE)
+  # Leitura da fatia 2D da strip (so as colunas deste tile + margem)
+  strip_values <- terra::values(rast_stack,
+                                row   = read_row_start, nrows = read_nrows,
+                                col   = read_col_start, ncols = strip_ncol,
+                                mat   = TRUE)
   t_read <- as.numeric(Sys.time() - .t_read_start, units = "secs")
 
   .t_scale_start <- Sys.time()
@@ -588,29 +523,24 @@ compute_block <- function(b_start) {
   t_scale <- as.numeric(Sys.time() - .t_scale_start, units = "secs")
 
   .t_predict_start <- Sys.time()
-  center_cols <- (half_w_max + 1L):(r_ncol - half_w_max)
+  center_cols <- cc_start:cc_end
   grid  <- expand.grid(center_row = center_rows, center_col = center_cols)
   n_req <- nrow(grid)
 
+  # Índices GLOBAIS (para cells_all / cells_valid retornados ao caller)
   cells_all <- (grid$center_row - 1L) * r_ncol + grid$center_col
   valid_all <- logical(n_req)
 
-  # pre-allocate stat buffers to the max possible size; fill by pointer, trim
   med <- mean_ <- sd_ <- mad_ <- min_ <- max_ <- numeric(n_req)
   cells_valid <- integer(n_req)
   ptr <- 0L
-  n_quick_ok <- 0L   # diagnostic: how many centres survived the cheap pre-filter
+  n_quick_ok <- 0L
 
   chunk_list <- split(seq_len(n_req), ceiling(seq_len(n_req) / max(batch_size, 1L)))
   n_chunks <- length(chunk_list)
-  # Heartbeat: a single block can in principle contain tens of thousands of
-  # chunks (n_req / batch_size) and the only progress line printed by the
-  # caller fires once the WHOLE block finishes -- if one block is pathologically
-  # slow (e.g. a chunk-heavy region), the worker looks identical to a true hang
-  # from outside (a stalled worker was observed in production with no way to
-  # tell the two apart). Print a cheap periodic progress line so that's visible.
   .heartbeat_last   <- Sys.time()
   heartbeat_every_s <- 120
+
   for (chunk_idx in seq_along(chunk_list)) {
     ci <- chunk_list[[chunk_idx]]
 
@@ -624,27 +554,24 @@ compute_block <- function(b_start) {
     }
 
     cr <- grid$center_row[ci]
-    cc <- grid$center_col[ci]
+    cc <- grid$center_col[ci]   # colunas GLOBAIS
 
-    # Fast pre-filter: check only the CENTRE pixel (no window expansion) across
-    # all channels first. On a planetary-extent grid the vast majority of
-    # candidate centres are ocean/no-data; build_patches_multi's full check
-    # expands every centre to its window positions (up to ~225 per window)
-    # before testing finiteness across all channels, which is wasted work for
-    # cells that can never be valid. Discarding them here on a cheap
-    # single-row-per-centre check avoids that expansion entirely.
+    # quick_ok: índices locais dentro da strip (strip_ncol colunas)
     row_local_c <- cr - read_row_start + 1L
-    center_idx  <- (row_local_c - 1L) * r_ncol + cc
+    col_local_c <- cc - read_col_start + 1L   # coluna local na strip
+    center_idx  <- (row_local_c - 1L) * strip_ncol + col_local_c
     quick_ok    <- rowSums(!is.finite(strip_values[center_idx, , drop = FALSE])) == 0
     n_quick_ok  <- n_quick_ok + sum(quick_ok)
 
-    if (!any(quick_ok)) next   # valid_all[ci] stays FALSE (default)
+    if (!any(quick_ok)) next
 
-    pb <- build_patches_multi(cr[quick_ok], cc[quick_ok], strip_values, read_row_start,
-                              r_ncol, n_channels, window_sizes)
-    valid_sub     <- logical(length(ci))
+    # build_patches_multi recebe coluna LOCAL na strip
+    cc_local <- cc - read_col_start + 1L
+    pb <- build_patches_multi(cr[quick_ok], cc_local[quick_ok], strip_values,
+                              read_row_start, strip_ncol, n_channels, window_sizes)
+    valid_sub      <- logical(length(ci))
     valid_sub[quick_ok] <- pb$valid
-    valid_all[ci] <- valid_sub
+    valid_all[ci]  <- valid_sub
     if (dim(pb$arrays[[1]])[1] == 0L) next
 
     preds_native <- matrix(NA_real_, nrow = dim(pb$arrays[[1]])[1], ncol = n_seeds)
@@ -653,6 +580,7 @@ compute_block <- function(b_start) {
                                                          device, batch_size)), 0)
     }
 
+    # cells_valid: índices GLOBAIS
     cv  <- ((cr[quick_ok] - 1L) * r_ncol + cc[quick_ok])[pb$valid]
     nv  <- length(cv)
     rng <- (ptr + 1L):(ptr + nv)
@@ -661,7 +589,7 @@ compute_block <- function(b_start) {
       med[rng]   <- matrixStats::rowMedians(preds_native)
       mean_[rng] <- rowMeans(preds_native)
       sd_[rng]   <- matrixStats::rowSds(preds_native)
-      mad_[rng]  <- matrixStats::rowMads(preds_native)   # constant 1.4826
+      mad_[rng]  <- matrixStats::rowMads(preds_native)
       min_[rng]  <- matrixStats::rowMins(preds_native)
       max_[rng]  <- matrixStats::rowMaxs(preds_native)
     } else {
@@ -674,7 +602,6 @@ compute_block <- function(b_start) {
   }
 
   t_predict <- as.numeric(Sys.time() - .t_predict_start, units = "secs")
-
   rm(strip_values); gc()
   keep <- seq_len(ptr)
   list(out_nrows = out_nrows, n_req = n_req, n_val = ptr,
@@ -686,9 +613,7 @@ compute_block <- function(b_start) {
        n_quick_ok = n_quick_ok)
 }
 
-# ── Open streaming writers (one per output layer) ─────────────────────────────
-# Each layer is written incrementally with writeStart/writeValues/writeStop, so
-# only one block of rows per layer is ever in RAM.
+# ── Template do tile e writers ─────────────────────────────────────────────────
 
 gdal_opts <- function(datatype) {
   predictor <- if (grepl("^INT|^UINT|^BYTE", datatype)) 2L else 3L
@@ -696,21 +621,22 @@ gdal_opts <- function(datatype) {
     "TILED=YES", "BLOCKXSIZE=512", "BLOCKYSIZE=512")
 }
 
-# When running with multiple workers, output is a per-worker tile cropped to
-# exactly this worker's row range — sized to its real data, no NA padding —
-# written into raster/parts/. Run 05b_merge_spatial_parts.R once after every
-# worker finishes to mosaic the tiles into the final full-extent rasters.
-worker_template <- if (n_workers > 1L) {
-  full_ext  <- as.vector(terra::ext(raster_template))   # named: xmin, xmax, ymin, ymax
-  yres_full <- terra::yres(raster_template)
+if (is_partitioned) {
+  full_ext    <- as.vector(terra::ext(raster_template))
+  xres_full   <- terra::xres(raster_template)
+  yres_full   <- terra::yres(raster_template)
   worker_ymax <- full_ext[["ymax"]] - (my_row_start - 1L) * yres_full
   worker_ymin <- full_ext[["ymax"]] - my_row_end * yres_full
-  worker_ext  <- terra::ext(full_ext[["xmin"]], full_ext[["xmax"]], worker_ymin, worker_ymax)
-  terra::crop(raster_template, worker_ext, snap = "near")
+  worker_xmin <- full_ext[["xmin"]] + (my_col_start - 1L) * xres_full
+  worker_xmax <- full_ext[["xmin"]] + my_col_end * xres_full
+  worker_ext  <- terra::ext(worker_xmin, worker_xmax, worker_ymin, worker_ymax)
+  worker_template <- terra::crop(raster_template, worker_ext, snap = "near")
 } else {
-  raster_template
+  worker_template <- raster_template
 }
-output_raster_dir_w <- if (n_workers > 1L) file.path(output_raster_dir, "parts") else output_raster_dir
+
+output_raster_dir_w <- if (is_partitioned)
+  file.path(output_raster_dir, "parts_2d") else output_raster_dir
 create_output_dirs(output_raster_dir_w)
 
 open_writer <- function(band_name, file_suffix, datatype = "FLT4S") {
@@ -740,26 +666,16 @@ abort_and_cleanup <- function(msg) {
   stop(msg, call. = FALSE)
 }
 
-# ── Block-streaming prediction loop (compute → write → discard) ───────────────
+# ── Loop principal ─────────────────────────────────────────────────────────────
 
-# Diagnostic mode: log timing breakdown (read/scale/predict) and process RSS
-# memory every `diag_log_every` blocks, to track down the per-block slowdown
-# observed in production (time/block grew ~3x over the first 125 blocks
-# without a matching growth in valid-pixel count, suggesting an accumulating
-# leak rather than legitimate extra work).
 diag_log_every <- 1L
 .proc_handle   <- ps::ps_handle()
 
 block_starts <- seq(my_row_start, my_row_end, by = output_block_rows)
 block_log    <- vector("list", length(block_starts))
 
-# Running stats on the headline (median) map — avoids holding all pixels in RAM.
-run_n         <- 0
-run_sum       <- 0
-run_min       <- Inf
-run_max       <- -Inf
-run_nonfinite <- 0
-probe_done    <- FALSE
+run_n <- 0; run_sum <- 0; run_min <- Inf; run_max <- -Inf
+run_nonfinite <- 0; probe_done <- FALSE
 
 t0 <- Sys.time()
 
@@ -767,43 +683,48 @@ for (b in seq_along(block_starts)) {
   bs <- block_starts[b]
   cb <- compute_block(bs)
 
-  blk_len    <- cb$out_nrows * r_ncol
+  # blk_len: linhas do bloco x colunas do TILE (nao do raster inteiro)
+  blk_len    <- cb$out_nrows * tile_ncol
   blk_median <- rep(NA_real_, blk_len)
   blk_mean   <- rep(NA_real_, blk_len)
   blk_sd     <- rep(NA_real_, blk_len)
   blk_mad    <- rep(NA_real_, blk_len)
   blk_min    <- rep(NA_real_, blk_len)
   blk_max    <- rep(NA_real_, blk_len)
-  blk_mask   <- rep(0L,       blk_len)
+  blk_mask   <- rep(0L, blk_len)
 
   if (cb$n_req > 0L) {
-    base <- (bs - 1L) * r_ncol                       # global→block-local offset
-    blk_mask[cb$cells_all - base] <- as.integer(cb$valid)
+    # Converte índices GLOBAIS (row-1)*r_ncol+col para índices no bloco do tile
+    g2tile <- function(cells) {
+      row_g       <- (cells - 1L) %/% r_ncol + 1L
+      col_g       <- (cells - 1L) %% r_ncol + 1L
+      row_in_blk  <- row_g - bs + 1L
+      col_in_tile <- col_g - my_col_start + 1L
+      (row_in_blk - 1L) * tile_ncol + col_in_tile
+    }
+
+    blk_mask[g2tile(cb$cells_all)] <- as.integer(cb$valid)
 
     if (cb$n_val > 0L) {
-      lv <- cb$cells_valid - base
-      blk_median[lv] <- cb$median
-      blk_mean[lv]   <- cb$mean
-      blk_sd[lv]     <- cb$sd
-      blk_mad[lv]    <- cb$mad
-      blk_min[lv]    <- cb$min
-      blk_max[lv]    <- cb$max
+      tv <- g2tile(cb$cells_valid)
+      blk_median[tv] <- cb$median
+      blk_mean[tv]   <- cb$mean
+      blk_sd[tv]     <- cb$sd
+      blk_mad[tv]    <- cb$mad
+      blk_min[tv]    <- cb$min
+      blk_max[tv]    <- cb$max
 
-      # update running stats on the median map
       run_n         <- run_n + cb$n_val
       run_sum       <- run_sum + sum(cb$median[is.finite(cb$median)])
       run_min       <- min(run_min, min(cb$median, na.rm = TRUE))
       run_max       <- max(run_max, max(cb$median, na.rm = TRUE))
       run_nonfinite <- run_nonfinite + sum(!is.finite(cb$median))
 
-      # fail-fast probe on the first block with predictions: catches the gross
-      # "unscaled input" failure (predictions in the thousands) before spending
-      # hours on the full grid.
       if (!probe_done) {
         probe_mean <- mean(cb$median[is.finite(cb$median)])
         if (!is.finite(probe_mean) || probe_mean > plausible_hard_max) {
           abort_and_cleanup(sprintf(
-            "Fail-fast probe: first-block mean of median map = %.1f %s (> %g). Likely an input-scaling or channel-alignment problem. Partial rasters deleted.",
+            "Fail-fast probe: first-block mean = %.1f %s (> %g).",
             probe_mean, target_unit, plausible_hard_max))
         }
         probe_done <- TRUE
@@ -811,8 +732,7 @@ for (b in seq_along(block_starts)) {
     }
   }
 
-  # Tile-local row offset: the worker's own writers address rows 1..N of its
-  # OWN cropped tile, not the global raster row bs.
+  # Linha local no tile do worker (1-based)
   bs_local <- bs - my_row_start + 1L
 
   terra::writeValues(w_median$rast, blk_median, bs_local, cb$out_nrows)
@@ -827,6 +747,7 @@ for (b in seq_along(block_starts)) {
 
   block_log[[b]] <- tibble::tibble(
     block = b, row_start = bs, row_end = bs + cb$out_nrows - 1L,
+    col_start = my_col_start, col_end = my_col_end,
     n_centers = cb$n_req, n_quick_ok = cb$n_quick_ok, n_valid = cb$n_val,
     n_invalid = cb$n_req - cb$n_val,
     t_read = cb$t_read, t_scale = cb$t_scale, t_predict = cb$t_predict,
@@ -835,17 +756,16 @@ for (b in seq_along(block_starts)) {
 
   if (b %% diag_log_every == 0L || b == 1L || b == length(block_starts)) {
     message(sprintf(
-      "Block %d/%d | rows %d-%d | centers %s quick_ok %s valid %s | read %.1fs scale %.1fs predict %.1fs | RSS %.0f MB",
+      "Block %d/%d | rows %d-%d cols %d-%d | centers %s quick_ok %s valid %s | read %.1fs scale %.1fs predict %.1fs | RSS %.0f MB",
       b, length(block_starts), bs, bs + cb$out_nrows - 1L,
+      my_col_start, my_col_end,
       format(cb$n_req, big.mark = ","), format(cb$n_quick_ok, big.mark = ","),
       format(cb$n_val, big.mark = ","), cb$t_read, cb$t_scale, cb$t_predict, rss_mb))
   }
 
   if (b == 1L || b %% 25L == 0L || b == length(block_starts)) {
     el <- Sys.time() - t0
-    message(sprintf("  └─ cumulative elapsed: %.2f %s", el, units(el)))
-    # Diagnostic checkpoint: persist the timing/RSS log so far so it survives
-    # an early interrupt (e.g. a deliberate stop for this investigation).
+    message(sprintf("  └─ cumulative elapsed: %.2f %s", as.numeric(el), units(el)))
     safe_write_csv2(dplyr::bind_rows(block_log[seq_len(b)]),
                     file.path(output_log_dir,
                               paste0("prediction_block_summary_partial", part_suffix, ".csv")))
@@ -858,74 +778,57 @@ rm(models); gc()
 total_time    <- Sys.time() - t0
 n_valid_total <- run_n
 
-# ── Sanity checks (delete rasters if the written map is implausible) ───────────
-# Exact global median is not held in RAM; we gate on the running MEAN of the
-# median map (sufficient to catch gross failures) and report an approximate
-# median sampled back from the written raster.
+# ── Sanity checks ──────────────────────────────────────────────────────────────
 
 global_mean_med <- if (run_n > 0) run_sum / run_n else NA_real_
 global_max      <- run_max
 
 message("\n── Sanity checks ─────────────────────────────────────────────────")
-message(sprintf("  Valid pixels         : %s (%.2f%% of grid)",
-                format(n_valid_total, big.mark = ","), 100 * n_valid_total / n_cell))
+message(sprintf("  Valid pixels         : %s (%.2f%% do tile)",
+                format(n_valid_total, big.mark = ","), 100 * n_valid_total / tile_ncell))
 message(sprintf("  Median map mean      : %.2f %s", global_mean_med, target_unit))
 message(sprintf("  Median map range     : %.2f – %.2f %s", run_min, run_max, target_unit))
 
-f_median <- w_median$file
-f_mean   <- w_mean$file
-f_sd     <- w_sd$file
-f_mad    <- w_mad$file
-f_min    <- w_min$file
-f_max    <- w_max$file
+f_median <- w_median$file; f_mean <- w_mean$file; f_sd <- w_sd$file
+f_mad    <- w_mad$file;    f_min  <- w_min$file;  f_max <- w_max$file
 f_mask   <- w_mask$file
 written_files <- c(f_median, f_mean, f_sd, f_mad, f_min, f_max, f_mask)
 
-# With n_workers > 1 each process only ever sees ITS OWN row strip. A strip
-# that lands entirely over ocean/no-data (e.g. a polar band) legitimately has
-# n_valid_total == 0 and an undefined mean — that is NOT a failure, so the
-# global-plausibility / zero-valid checks below are skipped per-worker and
-# deferred to 05b_merge_spatial_parts.R, which runs them once on the
-# mosaicked full-extent map where they are meaningful again. Per-worker we
-# only still fail fast on actually corrupt math (non-finite values).
 sanity_ok <- TRUE
-if (n_workers == 1L && n_valid_total == 0L) {
+if (!is_partitioned && n_valid_total == 0L) {
   sanity_ok <- FALSE
-  message("  [FAIL] No valid pixels were predicted.")
+  message("  [FAIL] No valid pixels.")
 }
 if (run_nonfinite > 0L) {
   sanity_ok <- FALSE
-  message(sprintf("  [FAIL] %d non-finite values in the median map.", run_nonfinite))
+  message(sprintf("  [FAIL] %d non-finite values in median map.", run_nonfinite))
 }
-if (n_workers == 1L && is.finite(global_mean_med) &&
+if (!is_partitioned && is.finite(global_mean_med) &&
     (global_mean_med < plausible_median_range[1] ||
      global_mean_med > plausible_median_range[2])) {
   sanity_ok <- FALSE
-  message(sprintf("  [FAIL] Median-map mean %.2f outside plausible range [%g, %g].",
-                  global_mean_med, plausible_median_range[1], plausible_median_range[2]))
+  message(sprintf("  [FAIL] Mean %.2f fora do range plausivel.", global_mean_med))
 }
 if (is.finite(global_max) && global_max > plausible_hard_max) {
-  message(sprintf("  [WARN] Max %.0f exceeds %g %s — inspect the high tail.",
-                  global_max, plausible_hard_max, target_unit))
+  message(sprintf("  [WARN] Max %.0f > %g %s.", global_max, plausible_hard_max, target_unit))
 }
-if (n_workers > 1L && n_valid_total == 0L) {
-  message("  [INFO] This worker's row range has no valid pixels (likely ocean/no-data only) — expected for some strips, not an error.")
+if (is_partitioned && n_valid_total == 0L) {
+  message("  [INFO] Tile sem pixels validos (provavelmente oceano) — nao e erro.")
 }
 if (!sanity_ok) {
   suppressWarnings(file.remove(written_files[file.exists(written_files)]))
-  stop("Sanity checks failed. Written rasters were DELETED. See messages above.")
+  stop("Sanity checks failed. Rasters deletados.")
 }
 message("  All hard checks passed.")
 
-# Approximate global median, sampled from the written raster (cheap, bounded RAM)
 global_med <- tryCatch({
   samp <- terra::spatSample(terra::rast(f_median), size = 2e5,
                             method = "regular", na.rm = TRUE, values = TRUE)
   stats::median(samp[[1]], na.rm = TRUE)
 }, error = function(e) NA_real_)
-message(sprintf("  Global median (sampled, n=2e5): %.2f %s", global_med, target_unit))
+message(sprintf("  Global median (sampled): %.2f %s", global_med, target_unit))
 
-# ── Metadata / manifests ──────────────────────────────────────────────────────
+# ── Manifests ─────────────────────────────────────────────────────────────────
 
 block_summary <- dplyr::bind_rows(block_log)
 safe_write_csv2(block_summary,
@@ -943,7 +846,11 @@ prediction_config <- tibble::tibble(
   aggregation_space = "per_seed_expm1_then_aggregate_across_seeds",
   output_block_rows = output_block_rows, batch_size = batch_size,
   r_nrow = r_nrow, r_ncol = r_ncol, n_cell = n_cell,
-  n_valid = n_valid_total, valid_fraction = n_valid_total / n_cell,
+  tile_nrow = tile_nrow, tile_ncol = tile_ncol, tile_ncell = tile_ncell,
+  row_shard_id = row_shard_id, col_shard_id = col_shard_id,
+  n_row_shards = n_row_shards, n_col_shards = n_col_shards,
+  strip_ncol = strip_ncol,
+  n_valid = n_valid_total, valid_fraction = n_valid_total / tile_ncell,
   global_median_ton_ha = global_med, global_max_ton_ha = global_max,
   runtime_min = as.numeric(total_time, units = "mins"),
   device = device$type, predicted_at = as.character(Sys.time())
@@ -951,15 +858,13 @@ prediction_config <- tibble::tibble(
 safe_write_csv2(prediction_config,
                 file.path(output_log_dir, paste0("prediction_config", part_suffix, ".csv")))
 
-# per-layer global stats (read back to confirm what was actually written)
 raster_summary <- purrr::map_dfr(
   list(median = f_median, mean = f_mean, sd = f_sd, mad = f_mad,
        min = f_min, max = f_max, mask = f_mask),
   function(f) {
     r <- terra::rast(f)
     tibble::tibble(
-      file = f,
-      band = names(r),
+      file = f, band = names(r),
       gmin  = terra::global(r, "min",  na.rm = TRUE)[1, 1],
       gmean = terra::global(r, "mean", na.rm = TRUE)[1, 1],
       gmax  = terra::global(r, "max",  na.rm = TRUE)[1, 1]
@@ -970,40 +875,31 @@ raster_summary <- purrr::map_dfr(
 safe_write_csv2(raster_summary,
                 file.path(output_log_dir, paste0("prediction_raster_summary", part_suffix, ".csv")))
 
-if (worker_id == 1L) {   # identical across workers — only worker 1 writes it, to avoid concurrent writes
+if (row_shard_id == 1L && col_shard_id == 1L) {
   safe_write_csv2(
     tibble::tibble(order = seq_len(n_channels), predictor = predictor_cols),
     file.path(output_log_dir, "predictor_order_used.csv")
   )
 }
 
-# ── Report ────────────────────────────────────────────────────────────────────
+# ── Report ─────────────────────────────────────────────────────────────────────
 
-message("\n── Spatial prediction complete ───────────────────────────────────")
+message("\n── Spatial prediction complete (2D tile) ────────────────────────")
+message(sprintf("  Shard            : row %d/%d, col %d/%d",
+                row_shard_id, n_row_shards, col_shard_id, n_col_shards))
 message(sprintf("  Config / seeds   : %s / %d", config_id, n_seeds))
 message(sprintf("  Valid pixels     : %s", format(n_valid_total, big.mark = ",")))
-message(sprintf("  Runtime          : %.2f %s", total_time, units(total_time)))
-message(sprintf("  Headline map     : %s", ensemble_center))
+message(sprintf("  Runtime          : %.2f %s",
+                as.numeric(total_time), units(total_time)))
+message(sprintf("  strip_ncol       : %d (vs r_ncol %d -> RAM %.1fx menor)",
+                strip_ncol, r_ncol, r_ncol / strip_ncol))
 
-# Stats are read back from the written rasters (raster_summary) — nothing is held
-# in RAM. terra::global gives mean/min/max per layer; the median map's median is
-# the sampled estimate computed above.
 rs_get <- function(layer, col) raster_summary[[col]][raster_summary$layer == layer]
-
-message("\n  Central tendency (native ", target_unit, "), over valid pixels:")
+message("\n  Central tendency (", target_unit, "):")
 message(sprintf("    median map -> median ~%.2f | mean %.2f | max %.2f",
                 global_med, rs_get("median", "gmean"), rs_get("median", "gmax")))
 message(sprintf("    mean map   ->            mean %.2f | max %.2f",
                 rs_get("mean", "gmean"), rs_get("mean", "gmax")))
-message(sprintf("    (mean-map mean exceeds median-map mean by %.2f %s = Jensen gap)",
-                rs_get("mean", "gmean") - rs_get("median", "gmean"), target_unit))
-message("\n  Ensemble disagreement (native ", target_unit, ", epistemic only):")
-message(sprintf("    SD  : mean %.2f | max %.2f",
-                rs_get("sd",  "gmean"), rs_get("sd",  "gmax")))
-message(sprintf("    MAD : mean %.2f | max %.2f",
-                rs_get("mad", "gmean"), rs_get("mad", "gmax")))
 
-message("\n  Rasters written to: ", output_raster_dir)
-message("  Logs written to:    ", output_log_dir)
-message("\n  RECOMMENDED map: ", basename(f_median),
-        " (median is invariant to expm1, robust, matches the SmoothL1 target).")
+message("\n  Rasters: ", output_raster_dir_w)
+message("  Logs:    ", output_log_dir)

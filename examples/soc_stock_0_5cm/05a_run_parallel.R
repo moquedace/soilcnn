@@ -6,76 +6,62 @@ pkg <- c("processx")
 install_load_pkg(pkg)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 05a — Orchestrate parallel spatial prediction (sharded job queue)
+# 05a — Orquestrador de predição espacial com tiling 2D
 #
-# Single entry point: set n_shards / max_concurrent below and run this script
-# ONCE. It splits the raster into n_shards row-partitions (each one a
-# `Rscript 05_predict_spatial.R <shard_id> <n_shards>` call) and runs at most
-# max_concurrent of them at a time, queueing the rest. As soon as one finishes
-# its slot is handed to the next pending shard. Once every shard is done it
-# automatically runs 05b_merge_spatial_parts.R to mosaic the results.
+# Divide o raster em n_row_shards x n_col_shards retângulos. Cada shard é um
+# processo independente que lê apenas a faixa de colunas do seu tile (+ margem
+# half_w_max de cada lado), reduzindo o piso de RAM proporcionalmente.
 #
-# WHY SHARDED (not just "n_workers long-lived processes"):
-# Windows R sessions accumulate memory fragmentation over a long run that
-# gc() does NOT return to the OS — RSS creeps upward over hours even when the
-# actual per-block working set is constant. Three long-lived workers (each
-# covering ~1/3 of the raster, ~9+ hours) hit 100% system RAM well after
-# starting clean, even though the same settings looked safe in the first
-# couple of hours. Many SHORT-LIVED shards sidestep this: each process exits
-# (full OS memory reclaim, guaranteed) long before fragmentation becomes
-# dangerous, and the next shard in that slot starts from a clean process.
+# Exemplo com raster global 160 k colunas, 187 bandas:
+#   tiling 1D (n_col_shards=1, esquema anterior, retirado): ~240 MB/linha ->
+#     piso ~7-8 GB -> max_concurrent=2
+#   tiling 2D (n_col_shards=4, esquema atual): ~60 MB/linha -> piso ~2 GB ->
+#     max_concurrent=8
 #
-# RAM is still bounded by max_concurrent (concurrently running shards), NOT by
-# n_shards — splitting into more, smaller shards does not increase peak RAM,
-# it only shortens each process's lifetime (less time to fragment) and adds a
-# bit of process-startup overhead (model loading etc., a few seconds each).
+# n_col_shards deve ser escolhido de modo que:
+#   ceil(r_ncol / n_col_shards) >> 2 * half_w_max  (tile >> margem)
+# Para half_w_max = 16 (janela 33), n_col_shards <= 160 k / (10 * 32) = 500 e
+# razoavel (ex: 4-8 ja dao reducao suficiente sem overhead excessivo).
+#
+# Tiles de saida vao para raster/parts_2d/ com sufixo _rXXXofYYY_cXXXofYYY.
+# Ao final roda 05b_merge_spatial_parts.R para montar os mapas finais.
 # ══════════════════════════════════════════════════════════════════════════════
 
-project_root <- "D:/usuario_armazenamento/cassio/R/deep_learning_caret"
+# ── Configuração ───────────────────────────────────────────────────────────────
 
-# ── Settings ────────────────────────────────────────────────────────────────────
+# Fatias de linha. Mais fatias = processo vive
+# menos tempo = menos fragmentacao de RAM.
+n_row_shards <- 250
 
-# Total row-partitions. Smaller shards = shorter-lived processes = less time
-# for memory fragmentation to build up before a clean exit, at the cost of a
-# few seconds of repeated startup overhead (package load, model load) per shard.
-#
-# REVISED (again): n_shards=30 still let individual shards run for DAYS when
-# their row range landed on a sustained-dense band (observed: ~2000-2800
-# s/block for 213+ CONSECUTIVE blocks in one shard -- likely an equatorial
-# band crossing several continents at once). Block count per shard is purely
-# row-range-driven (density-independent), so worst-case wall-clock time is
-# (blocks_per_shard x worst_observed_rate) regardless of n_shards -- and at
-# n_shards=30 that worst case is ~25 days, which is exactly what blew up RAM
-# again (2 such multi-day shards fragmenting simultaneously exhausted the
-# whole system, breaking even unrelated file/network I/O).
-#
-# n_shards=1000 bounds blocks/shard to ~32, so even a shard landing entirely
-# in the densest observed band caps out around ~25 h (~1 day) of process
-# lifetime -- a large improvement on the 5+ days that caused the last
-# failure. Overhead cost: ~500 sequential launches (1000 / max_concurrent=2)
-# x ~30s setup (packages + 5 models + raster metadata) =~ 4.2 h total, small
-# relative to the job's multi-week timeline.
-n_shards <- 1000
+# Fatias de coluna: cada fatia reduz strip_ncol por 1/n_col_shards -> RAM
+# por processo proporcional. n_col_shards=4 divide ~240 MB/linha em ~60 MB.
+n_col_shards <- 4
 
-# How many shards run AT THE SAME TIME. This — not n_shards — is what bounds
-# peak RAM (same per-process floor as before: this is a GLOBAL raster, so each
-# concurrent process pays for the full row width regardless of how few rows it
-# owns). Keep this at the value already tuned against max_strip_ram_gb in
-# 05_predict_spatial.R (currently max_strip_ram_gb=5, tuned for 3 concurrent
-# processes on 64 GB RAM).
-# REVISED: 3 concurrent shards at max_strip_ram_gb=5 OOM'd ("cannot allocate
-# vector of size 4.5 Gb") after only 20 blocks (minutes, not hours) -- so this
-# was NOT primarily long-run fragmentation, individual per-process peaks
-# (observed up to ~14 GB on a single shard) simply add up past 64 GB when 3
-# happen to spike together. Dropped to 2 concurrent + max_strip_ram_gb=4 in
-# 05_predict_spatial.R for more headroom (~2 x 13 GB ≈ 26 GB estimated, vs the
-# ~63 GB ceiling) at the cost of less parallelism (CPU was never the
-# bottleneck here, so this mainly costs wall-clock time, not correctness).
-max_concurrent <- 2
+# Total de shards = n_row_shards * n_col_shards
+# Com 250 x 4 = 1000 shards (igual ao 05a em numero total, mas layout 2D)
+
+# Processos simultâneos.
+# Causa raiz do RSS alto identificada e corrigida: nao era output_block_rows,
+# e sim batch_size em build_patches_multi (a checagem de validade da janela
+# indexava strip_values para todo o chunk, gerando um pico transitorio de
+# ~batch_size * n_pos_janela * n_channels * 8 bytes, independente do tamanho
+# do bloco). Reduzindo batch_size 4096 -> 512 e eliminando a reindexacao
+# duplicada em build_patches_multi, reteste (05a_test.R, linha 1, 4 col-shards)
+# deu:
+#   shards sparse (oceano): RSS ~2.2 GB, ~2.7 min/shard
+#   shard denso (mesma regiao que antes batia 37 GB): RSS pico 13.2 GB,
+#     estavel ao longo dos 16 blocos (sem mais degradacao progressiva),
+#     34.5 min/shard (antes 89 min para o mesmo shard)
+# Maquina: 32 nucleos, ~64 GB RAM.
+# -> max_concurrent=4: pior caso 4 x 13.2 GB ~= 53 GB / 64 GB (margem ~11 GB).
+#    threads_per_worker = 32/4 = 8 (suficiente para a inferencia CNN).
+# -> Se o job real mostrar shards mais densos que o testado (regioes tropicais
+#    nao amostradas no teste), reavaliar via 05c_estimate_eta.R e cair para 3.
+max_concurrent <- 4
 
 poll_interval_s <- 30
 
-# ── Paths ─────────────────────────────────────────────────────────────────────
+# ── Paths ──────────────────────────────────────────────────────────────────────
 
 script_dir    <- file.path(project_root, "examples", "soc_stock_0_5cm")
 worker_script <- file.path(script_dir, "05_predict_spatial.R")
@@ -86,87 +72,171 @@ log_dir <- file.path(project_root, "outputs", "spatial_prediction", "_worker_log
 dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
 
 rscript_bin <- file.path(R.home("bin"), "Rscript.exe")
-if (!file.exists(rscript_bin)) stop("Rscript.exe not found at: ", rscript_bin)
+if (!file.exists(rscript_bin)) stop("Rscript.exe not found: ", rscript_bin)
 
-# ── Launch a bounded queue of shards ───────────────────────────────────────────
+# ── Resolve config_id/target_label (mesma logica do 05_predict_spatial.R) ─────
+# Necessario aqui so para saber onde ficam os tiles ja gerados (resume).
 
-message(sprintf("Running %d shard(s), %d at a time...", n_shards, max_concurrent))
-message("Per-shard logs: ", log_dir, "\n")
+target_label <- "soc_stock_0_5cm"
+final_run_id <- "latest"
 
-pending    <- seq_len(n_shards)
-active     <- list()            # named list: shard_id (as character) -> process
-exit_codes <- integer(n_shards)
-launch_log <- function(shard_id) {
-  log_file <- file.path(log_dir, sprintf("shard_%02dof%02d.log", shard_id, n_shards))
+metadata_dir     <- file.path(project_root, "outputs", "metadata",
+                              "soc_stock_modeling", target_label)
+final_model_base <- file.path(project_root, "outputs", "final_model",
+                              "soc_stock_modeling", target_label)
+
+if (identical(final_run_id, "latest")) {
+  run_dirs <- list.dirs(final_model_base, recursive = FALSE, full.names = FALSE)
+  run_dirs <- run_dirs[grepl("^final_", run_dirs)]
+  if (length(run_dirs) == 0) stop("Nenhum final_* encontrado em: ", final_model_base)
+  final_run_id <- sort(run_dirs, decreasing = TRUE)[1]
+}
+final_run_dir <- file.path(final_model_base, final_run_id)
+summary_file  <- file.path(final_run_dir, "comparison", "final_run_summary.rds")
+if (!file.exists(summary_file)) stop("final_run_summary.rds nao encontrado: ", summary_file)
+config_id <- readRDS(summary_file)$selected_cfgs$config_id[1]
+
+output_log_dir <- file.path(project_root, "outputs", "spatial_prediction",
+                            "soc_stock_modeling", target_label, config_id, "log")
+
+message(sprintf("config_id: %s | final_run_id: %s | logs em: %s",
+                config_id, final_run_id, output_log_dir))
+
+# ── Gerar lista de todos os shards (produto cartesiano row x col) ──────────────
+
+shards <- expand.grid(row_shard = seq_len(n_row_shards),
+                       col_shard = seq_len(n_col_shards))
+# Ordena por linha primeiro (itera linha a linha) para mosaico progressivo
+shards <- shards[order(shards$row_shard, shards$col_shard), ]
+n_shards_total <- nrow(shards)
+
+message(sprintf("Tiling 2D: %d x %d = %d shards, %d por vez",
+                n_row_shards, n_col_shards, n_shards_total, max_concurrent))
+message("Logs: ", log_dir, "\n")
+
+# ── Resume: pula shards ja concluidos com sucesso ─────────────────────────────
+# Os tiles .tif sao criados (writeStart) com as dimensoes corretas ja no
+# INICIO do bloco 1 -- se o processo morrer no meio (ex: bloco 11/16), o
+# arquivo pode continuar abrindo sem erro no terra, so com blocos faltando.
+# Checar so a existencia dos .tif daria falso-positivo (tile incompleto
+# aceito como concluido -> buraco silencioso no mosaico final).
+#
+# Sinal confiavel: prediction_config_r###of###_c###of###.csv em cfg_022/log/
+# so e escrito DEPOIS do writeStop() de todos os rasters e das checagens de
+# sanidade passarem (ver 05_predict_spatial.R). Se o processo morre antes
+# disso, esse CSV nunca existe -- entao a existencia dele implica shard
+# 100% concluido e validado.
+
+shard_config_file <- function(rs, cs) {
+  suf <- sprintf("_r%03dof%03d_c%03dof%03d", rs, n_row_shards, cs, n_col_shards)
+  file.path(output_log_dir, paste0("prediction_config", suf, ".csv"))
+}
+
+shard_already_done <- function(rs, cs) {
+  file.exists(shard_config_file(rs, cs))
+}
+
+message("Verificando shards ja concluidos (resume)...")
+done_mask <- vapply(seq_len(n_shards_total), function(idx)
+  shard_already_done(shards$row_shard[idx], shards$col_shard[idx]), logical(1))
+n_already_done <- sum(done_mask)
+if (n_already_done > 0L) {
+  message(sprintf("  %d/%d shards ja concluidos -- pulando (resume).",
+                  n_already_done, n_shards_total))
+}
+
+# ── Fila ───────────────────────────────────────────────────────────────────────
+
+pending    <- which(!done_mask)          # índice nas linhas de `shards`
+active     <- list()                     # idx -> process
+exit_codes <- integer(n_shards_total)
+exit_codes[done_mask] <- 0L
+
+launch_shard <- function(idx) {
+  rs <- shards$row_shard[idx]
+  cs <- shards$col_shard[idx]
+  log_file <- file.path(log_dir,
+    sprintf("shard_r%03dof%03d_c%03dof%03d.log", rs, n_row_shards, cs, n_col_shards))
   p <- processx::process$new(
     rscript_bin,
-    args   = c(worker_script, as.character(shard_id), as.character(n_shards)),
-    stdout = log_file,
-    stderr = log_file,
+    args = c(worker_script,
+             as.character(rs), as.character(cs),
+             as.character(n_row_shards), as.character(n_col_shards),
+             as.character(max_concurrent)),
+    stdout  = log_file,
+    stderr  = log_file,
     cleanup = TRUE
   )
-  message(sprintf("  Shard %2d/%2d started (PID %d) -> %s",
-                  shard_id, n_shards, p$get_pid(), basename(log_file)))
+  message(sprintf("  Shard [r%03d/c%03d] started (PID %d) -> %s",
+                  rs, cs, p$get_pid(), basename(log_file)))
   p
 }
 
-# Prime the queue
 while (length(active) < max_concurrent && length(pending) > 0) {
-  sid <- pending[1]; pending <- pending[-1]
-  active[[as.character(sid)]] <- launch_log(sid)
+  idx <- pending[1]; pending <- pending[-1]
+  active[[as.character(idx)]] <- launch_shard(idx)
 }
 
 t0 <- Sys.time()
 n_done <- 0L
+
 while (length(active) > 0 || length(pending) > 0) {
   Sys.sleep(poll_interval_s)
 
   finished_ids <- character(0)
-  for (sid_chr in names(active)) {
-    p <- active[[sid_chr]]
+  for (idx_chr in names(active)) {
+    p <- active[[idx_chr]]
     if (!p$is_alive()) {
-      sid <- as.integer(sid_chr)
-      exit_codes[sid] <- p$get_exit_status()
+      idx  <- as.integer(idx_chr)
+      rs   <- shards$row_shard[idx]
+      cs   <- shards$col_shard[idx]
+      exit_codes[idx] <- p$get_exit_status()
       n_done <- n_done + 1L
-      status <- if (exit_codes[sid] == 0L) "OK" else paste0("FALHOU (exit ", exit_codes[sid], ")")
-      message(sprintf("  Shard %2d/%2d finished: %s", sid, n_shards, status))
-      finished_ids <- c(finished_ids, sid_chr)
+      status <- if (exit_codes[idx] == 0L) "OK"
+                else paste0("FALHOU (exit ", exit_codes[idx], ")")
+      message(sprintf("  [r%03d/c%03d] finished: %s", rs, cs, status))
+      finished_ids <- c(finished_ids, idx_chr)
     }
   }
   active[finished_ids] <- NULL
 
   while (length(active) < max_concurrent && length(pending) > 0) {
-    sid <- pending[1]; pending <- pending[-1]
-    active[[as.character(sid)]] <- launch_log(sid)
+    idx <- pending[1]; pending <- pending[-1]
+    active[[as.character(idx)]] <- launch_shard(idx)
   }
 
   el <- Sys.time() - t0
-  message(sprintf("  [%.1f %s elapsed] %d/%d done, %d running, %d queued",
-                  el, units(el), n_done, n_shards, length(active), length(pending)))
+  message(sprintf("  [%.1f %s elapsed] %d/%d done (%d ja prontos + %d nesta sessao), %d rodando, %d na fila",
+                  as.numeric(el), units(el),
+                  n_already_done + n_done, n_shards_total, n_already_done, n_done,
+                  length(active), length(pending)))
 }
 
-message("\nAll shards finished (", format(Sys.time() - t0, units = "auto"), ").")
-message("Exit codes: ", paste(exit_codes, collapse = ", "), " (0 = success)")
+el_total <- Sys.time() - t0
+message(sprintf("\nTodos os shards concluidos em %.1f %s.",
+                as.numeric(el_total), units(el_total)))
 
-if (any(exit_codes != 0L)) {
-  failed <- which(exit_codes != 0L)
-  stop("Shard(s) ", paste(failed, collapse = ", "), " failed (non-zero exit code). ",
-       "Check their logs in: ", log_dir, " before re-running.")
+failed <- which(exit_codes != 0L)
+if (length(failed) > 0) {
+  failed_info <- shards[failed, ]
+  msg <- paste(sprintf("[r%d/c%d]", failed_info$row_shard, failed_info$col_shard),
+               collapse = ", ")
+  stop("Shards com falha: ", msg, "\nLogs em: ", log_dir)
 }
 
-# ── Merge ─────────────────────────────────────────────────────────────────────
+# ── Merge ──────────────────────────────────────────────────────────────────────
 
-message("\nRunning merge step (05b_merge_spatial_parts.R)...\n")
-merge_log <- file.path(log_dir, "merge.log")
+message("\nRodando merge (05b_merge_spatial_parts.R)...\n")
+merge_log    <- file.path(log_dir, "merge.log")
 merge_result <- processx::run(rscript_bin, args = merge_script,
                               stdout = "|", stderr = "|", echo = TRUE,
                               error_on_status = FALSE)
 writeLines(c(merge_result$stdout, merge_result$stderr), merge_log)
 
 if (merge_result$status != 0L) {
-  stop("Merge step failed (exit code ", merge_result$status, "). See: ", merge_log)
+  stop("Merge falhou (exit ", merge_result$status, "). Ver: ", merge_log)
 }
 
-message("\n── All done ──────────────────────────────────────────────────────────")
-message("  Shard logs: ", log_dir)
-message("  Merge log:  ", merge_log)
+message("\n── Tudo pronto ───────────────────────────────────────────────────")
+message("  Logs: ", log_dir)
+message("  Merge: ", merge_log)

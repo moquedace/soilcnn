@@ -229,7 +229,14 @@ if (patch_array_gb > 25) {
   if (method == "zscore_train") {
     vec <- (vec - pred_scaling$train_mean[band_idx]) / pred_scaling$train_sd[band_idx]
   } else if (method == "percentage_0_100_to_0_1") {
-    vec[!is.na(vec) & is.finite(vec) & (vec < 0 | vec > 100)] <- NA_real_
+    # Clamp into [0, 100] instead of discarding as NA: these are continuous
+    # interpolated surfaces (PNV classes, clay mineralogy) that legitimately
+    # overshoot slightly past 0/100 near sharp spatial transitions. Treating
+    # that as missing data amplifies into large gaps once the CNN's
+    # full-window validity rule invalidates the whole patch around each
+    # discarded pixel. Genuine NA/Inf pass through untouched.
+    finite_idx <- !is.na(vec) & is.finite(vec)
+    vec[finite_idx] <- pmin(pmax(vec[finite_idx], 0), 100)
     vec <- vec / 100
   }
   # "none_dummy_0_1": no transformation

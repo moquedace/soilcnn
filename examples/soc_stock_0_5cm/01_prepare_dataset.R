@@ -216,13 +216,23 @@ if (length(temperature_cols) > 0) {
     ))
 }
 
-# Percentage predictors: clip out-of-range values → NA
+# Percentage predictors: clamp out-of-range values into [0, 100].
+# These predictors are continuous/interpolated probability-like surfaces
+# (e.g. PNV classes, clay mineralogy) that legitimately overshoot slightly
+# below 0 or above 100 near sharp spatial transitions (Gibbs-like ringing
+# from whatever smoothing produced them) — not sensor error, not missing
+# data. Treating that overshoot as NA (old behaviour) discarded genuinely
+# valid near-boundary signal and, downstream, blew up into large windowed
+# gaps once the CNN's full-window validity rule amplified each discarded
+# pixel into its surrounding patch footprint. Clamping preserves the value
+# (effectively ~0% or ~100%) instead of manufacturing missingness that
+# was never really there. Genuine NA/Inf are left untouched.
 if (length(percentage_predictor_cols) > 0) {
   dataset_qc <- dataset_qc %>%
     dplyr::mutate(dplyr::across(
       dplyr::all_of(percentage_predictor_cols),
-      ~ dplyr::if_else(!is.na(.x) & is.finite(.x) & (.x < 0 | .x > 100),
-                       NA_real_, as.numeric(.x))
+      ~ dplyr::if_else(!is.na(.x) & is.finite(.x),
+                       pmin(pmax(as.numeric(.x), 0), 100), as.numeric(.x))
     ))
 }
 
