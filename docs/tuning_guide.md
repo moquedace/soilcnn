@@ -55,7 +55,7 @@ The gate (see below) learns how to weight each scale per sample — some locatio
 **What it is:** A vector of integers specifying the number of feature maps (filters) in each convolutional block.  
 The **length** of the vector determines the number of blocks (network depth).
 
-| Example | Depth | Parameters (approx., 204 input ch.) |
+| Example | Depth | Parameters (approx., 187 input ch.) |
 |---------|-------|--------------------------------------|
 | `c(32, 64)` | 2 blocks | ~400 k |
 | `c(64, 128)` | 2 blocks | ~1.7 M |
@@ -63,7 +63,7 @@ The **length** of the vector determines the number of blocks (network depth).
 | `c(128, 256, 256)` | 3 blocks | ~8.5 M |
 
 **DSM connection:**  
-With 200+ predictor channels, the first conv block is doing a major dimension reduction (204 → 64 channels). More subsequent blocks allow the network to learn higher-order interactions between predictor-derived features. However, more depth = more risk of overfitting, especially with < 30 000 training samples.
+With 180+ predictor channels, the first conv block is doing a major dimension reduction (187 → 64 channels). More subsequent blocks allow the network to learn higher-order interactions between predictor-derived features. However, more depth = more risk of overfitting, especially with < 30 000 training samples.
 
 **Recommendation:**  
 - Start with `c(64, 128)` or `c(64, 128, 128)`.  
@@ -124,7 +124,7 @@ All gate and head operations happen in this space.
 **Range:** `128`, `256`, `384`, `512`
 
 **Trade-off:**  
-Larger embedding → more representational capacity, but quadratically more parameters in the linear projection (e.g., for a 5×5 patch with 128 final channels: flatten = 128 × 25 = 3200 → linear 3200 × embedding_dim).  
+Larger embedding → more representational capacity, but quadratically more parameters in the linear projection (e.g., for a 9×9 patch with 128 final channels: flatten = 128 × 81 = 10 368 → linear 10 368 × embedding_dim).  
 For datasets with < 30 000 samples, 256–384 is usually a good balance.
 
 ---

@@ -564,4 +564,27 @@ The scaling transform applied during patch extraction (script 02) **must be iden
 transform applied during spatial prediction (script 05). Any mismatch — different statistics,
 different column order, omitted QC steps — will cause the spatial prediction to receive inputs
 from a different distribution than the training data, producing systematic map artefacts.
+
+### Out-of-range proportions: clamp, don't discard
+Proportion channels (e.g. potential-natural-vegetation class fractions, clay mineralogy) are
+continuous, interpolated surfaces. Near sharp spatial transitions — a biome boundary, a mosaic
+seam — they can legitimately overshoot slightly past their `[0, 100]` bounds (a small negative
+value where the true signal is ~0%, or slightly over 100% at the other extreme). This is
+Gibbs-like ringing from whatever smoothing produced the surface, not sensor error and not
+genuinely missing data.
+
+An earlier version of the scaling step set any out-of-range value to `NA` instead of clamping
+it. Because the CNN requires every cell of the receptive window to be finite, a single discarded
+pixel invalidated up to a 15×15 neighbourhood around it. Since near-zero noise is common
+wherever a class's true probability is low — i.e. almost everywhere, for most classes — this
+cascaded into large, spurious gaps in both the training set (patches dropped that had no real
+missing data) and the spatial prediction map (holes where coverage should have been complete).
+Validated on a 250 m test tile: coverage went from 0.72% to 100% after switching from discard to
+clamp, with no change to the predicted value distribution in the pixels that were already valid.
+
+**Fix:** clamp to `[0, 100]` (`pmin(pmax(x, 0), 100)`) instead of discarding. Genuine `NA`/`Inf`
+— actual missing data in the source raster — still propagate to `NA` and still correctly
+invalidate the window; only the harmless boundary noise is preserved instead of manufactured
+into missingness. Applied identically in scripts 01, 02, and 05, per the consistency requirement
+above.
 The `predictor_scaling.csv` file is the single source of truth for both scripts.

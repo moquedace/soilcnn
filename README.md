@@ -49,9 +49,28 @@ Rasters (TIF stack)                 Soil profiles (GPKG)
            Top configs × N seeds  (paired comparison, same init per seed)
                      │
                      ▼
-           05_predict_spatial.R
+           05_predict_spatial.R      ◄── single-tile worker, not run alone at scale
            Block-streaming · seed ensemble · median map + uncertainty layers
+                     │
+                     ▼
+           05a_run_parallel.R
+           Orchestrates many 05 workers over a row × col tile grid, with
+           resume-on-restart. (05a_test.R: cheap dry-run on a few tiles first.)
+                     │
+                     ▼
+           05b_merge_spatial_parts.R
+           Mosaics all tiles into the final wall-to-wall rasters
 ```
+
+`05_predict_spatial.R` predicts a single rectangular tile — that's the whole
+point of the 2D-tiled design (bounded RAM per process, see
+[`docs/design_decisions.md`](docs/design_decisions.md)). For anything beyond
+a one-off test tile, `05a_run_parallel.R` is what you actually run: it splits
+the raster into a `n_row_shards × n_col_shards` grid and launches many `05`
+workers concurrently, tracking progress so an interrupted job resumes instead
+of restarting. `05c_estimate_eta.R` can be run at any time while a job is in
+flight to check progress. See the [applied example](#applied-example) below
+for the full script-by-script breakdown.
 
 ---
 
@@ -176,6 +195,7 @@ All splits (train · validation · test) are evaluated with six metrics, also br
 | **MAE** | Mean Absolute Error (native target units) |
 | **NSE** | Nash-Sutcliffe Efficiency — 0 = mean-only model, 1 = perfect |
 | **RMSE** | Root Mean Squared Error |
+| **RPD** | Ratio of Performance to Deviation = sd(obs) / RMSE — standard pedometric benchmark (<1.4 poor, 1.4–2.0 fair, >2.0 good) |
 | **MQI** | Model Quality Index = (CCC × NSE) / (MAE / mean(obs)) |
 
 Model selection across configs ranks by a **validation-only composite score** (CCC · MAE · R² · NSE · RMSE · MQI + tail MAE for Q95–Q100). The test set is opened **once**, after the winning architecture is locked in. This avoids the common mistake of tuning toward test performance.
@@ -203,9 +223,10 @@ install.packages(c(
   "torch", "coro",                          # deep learning
   "terra", "sf",                            # geospatial
   "dplyr", "tidyr", "readr", "tibble",      # data wrangling
-  "purrr", "janitor", "ggplot2",            # utilities
+  "purrr", "janitor", "ggplot2", "stringr", # utilities
   "DescTools",                              # CCC calculation
-  "matrixStats"                             # rowMedians / rowSds for ensemble aggregation
+  "matrixStats",                            # rowMedians / rowSds for ensemble aggregation
+  "ps", "processx"                          # spatial prediction: RSS monitoring, worker orchestration (05a_run_parallel.R)
 ))
 ```
 
@@ -223,7 +244,11 @@ The [`examples/soc_stock_0_5cm/`](examples/soc_stock_0_5cm/) directory contains 
 | [`02_extract_patches.R`](examples/soc_stock_0_5cm/02_extract_patches.R) | Extract 3×3, 9×9, 15×15 patch arrays (band-by-band) with consistent channel scaling |
 | [`03_run_tuning.R`](examples/soc_stock_0_5cm/03_run_tuning.R) | Generate grid · train all configs · rank by validation metrics |
 | [`04_final_model.R`](examples/soc_stock_0_5cm/04_final_model.R) | Re-train winning config(s) with N seeds · paired-by-seed comparison |
-| [`05_predict_spatial.R`](examples/soc_stock_0_5cm/05_predict_spatial.R) | Block-streaming wall-to-wall prediction · seed ensemble · median + uncertainty rasters |
+| [`05_predict_spatial.R`](examples/soc_stock_0_5cm/05_predict_spatial.R) | Worker: predicts **one** row × col tile · seed ensemble · median + uncertainty layers |
+| [`05a_test.R`](examples/soc_stock_0_5cm/05a_test.R) | Cheap dry-run on a handful of tiles — sanity-check geometry/RAM/throughput before committing to the full job |
+| [`05a_run_parallel.R`](examples/soc_stock_0_5cm/05a_run_parallel.R) | Orchestrator: splits the raster into a tile grid, runs many `05` workers concurrently, resumes on restart |
+| [`05b_merge_spatial_parts.R`](examples/soc_stock_0_5cm/05b_merge_spatial_parts.R) | Mosaics all finished tiles into the final wall-to-wall rasters |
+| [`05c_estimate_eta.R`](examples/soc_stock_0_5cm/05c_estimate_eta.R) | Re-runnable at any time while `05a_run_parallel.R` is in flight — reports progress and ETA |
 
 ---
 
