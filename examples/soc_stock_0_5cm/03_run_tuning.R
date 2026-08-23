@@ -164,7 +164,19 @@ print(
 #   Applied to predictions before computing CCC, MAE, etc.
 #   The model trains in log1p space; metrics are always in native units.
 
-run_id <- paste0("soc_0_5cm_", format(Sys.time(), "%Y%m%d_%H%M%S"))
+# Para RETOMAR um run interrompido (crash, queda de luz, etc.): preencha
+# resume_run_id com o run_id exato da pasta em outputs/tuning/ que parou no
+# meio (ex: "soc_0_5cm_20260715_093000") e rode o script de novo. run_cnn_tuning
+# detecta sozinho quais config_id já têm checkpoint (models/{id}_best.pt) e
+# pula direto para os que faltam -- NÃO retreina do zero. Deixe NULL para
+# sempre começar um run novo (comportamento padrão, gera timestamp novo).
+resume_run_id <- NULL
+
+run_id <- if (is.null(resume_run_id)) {
+  paste0("soc_0_5cm_", format(Sys.time(), "%Y%m%d_%H%M%S"))
+} else {
+  resume_run_id
+}
 
 results <- do.call(
   run_cnn_tuning,
@@ -177,7 +189,8 @@ results <- do.call(
       transform    = expm1,
       output_dir   = output_tuning_dir,
       device       = device,
-      run_id       = run_id
+      run_id       = run_id,
+      resume       = TRUE
     ),
     training_args
   )

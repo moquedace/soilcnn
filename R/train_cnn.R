@@ -385,10 +385,22 @@ train_one_cnn <- function(
 #' @param transform    Inverse transform for predictions (default: identity).
 #' @param output_dir   Root output directory.
 #' @param device       torch_device.
-#' @param run_id       String label for this tuning run.
+#' @param run_id       String label for this tuning run. Reuse the SAME run_id
+#'   across restarts to resume — a new (timestamped) run_id always starts fresh.
 #' @param base_seed    Base RNG seed. Config i is trained after setting the seed
 #'   to base_seed + i (both R and torch), so each config has a reproducible
-#'   weight initialisation independent of the configs run before it.
+#'   weight initialisation independent of the configs run before it. Because of
+#'   this, resuming and re-running from scratch produce identical results for
+#'   every config, whether skipped or (re)trained.
+#' @param resume       If TRUE (default), a config is skipped when its model
+#'   checkpoint (`models/{config_id}_best.pt`) already exists in `run_dir` —
+#'   the checkpoint is only written after train_one_cnn() returns successfully,
+#'   so a config that crashed mid-training (power loss, OOM, etc.) has no
+#'   checkpoint and is correctly retrained, never silently treated as done.
+#'   Existing rows are reloaded from `comparison/comparison_all.csv` so the
+#'   final ranking still includes configs completed in earlier runs.
+#'   Set FALSE to force retraining every config (e.g. after changing code that
+#'   affects already-trained configs).
 #' @param ...          Passed to train_one_cnn() (n_epochs, patience, etc.).
 run_cnn_tuning <- function(
   tune_grid,
@@ -400,6 +412,7 @@ run_cnn_tuning <- function(
   device,
   run_id      = format(Sys.time(), "%Y%m%d_%H%M%S"),
   base_seed   = 42L,
+  resume      = TRUE,
   ...
 ) {
   run_dir <- file.path(output_dir, run_id)
@@ -407,8 +420,24 @@ run_cnn_tuning <- function(
                                    "metrics", "gates", "comparison"))
   create_output_dirs(dirs)
 
+  grid_rds_path <- file.path(run_dir, "tune_grid.rds")
+
+  # ── Resume safety check ─────────────────────────────────────────────────────
+  # If a tune_grid.rds already exists for this run_id, it MUST match the grid
+  # passed in now (same config_ids in the same order) before we trust any
+  # checkpoint found under models/. Reusing a run_id with a DIFFERENT grid
+  # would silently pair the wrong checkpoint with the wrong config_id.
+  if (resume && file.exists(grid_rds_path)) {
+    prev_grid <- readRDS(grid_rds_path)
+    if (!identical(prev_grid$config_id, tune_grid$config_id)) {
+      stop("resume=TRUE but tune_grid.rds in '", run_dir, "' has different ",
+           "config_ids than the tune_grid passed now. Use a new run_id, or ",
+           "pass the exact same tune_grid used to start this run.")
+    }
+  }
+
   # Save the grid so the run can be reproduced
-  safe_save_rds(tune_grid, file.path(run_dir, "tune_grid.rds"), compress = FALSE)
+  safe_save_rds(tune_grid, grid_rds_path, compress = FALSE)
   safe_write_csv2(
     dplyr::mutate(tune_grid,
       window_sizes  = purrr::map_chr(window_sizes, paste, collapse = "_"),
@@ -424,11 +453,35 @@ run_cnn_tuning <- function(
           paste(windows_needed, collapse = ", "))
   tensor_cache <- .build_tensor_cache(patches, windows_needed)
 
+  n_cfg <- nrow(tune_grid)
+
+  # ── Resume: reload comparison rows already computed, skip done configs ─────
+  comparison_path <- file.path(run_dir, "comparison", "comparison_all.csv")
   comparison <- tibble::tibble()
-  n_cfg      <- nrow(tune_grid)
+  done_ids   <- character(0)
+  if (resume && file.exists(comparison_path)) {
+    comparison <- readr::read_csv2(comparison_path, show_col_types = FALSE)
+    done_ids   <- comparison$config_id[comparison$status == "success"]
+  }
+  # Belt-and-suspenders: a config only counts as done if BOTH the comparison
+  # row AND the model checkpoint exist (checkpoint is written after training
+  # succeeds, comparison row after that) — protects against a partially
+  # written comparison_all.csv from a crash mid-write.
+  done_ids <- done_ids[file.exists(file.path(run_dir, "models",
+                                             paste0(done_ids, "_best.pt")))]
+  if (length(done_ids) > 0L) {
+    message(sprintf("Resume: %d/%d configs already trained -- skipping: %s",
+                    length(done_ids), n_cfg, paste(done_ids, collapse = ", ")))
+  }
 
   for (i in seq_len(n_cfg)) {
     cfg <- tune_grid[i, ]
+
+    if (cfg$config_id %in% done_ids) {
+      message("\n── Config ", i, "/", n_cfg, ": ", cfg$config_id,
+              " -- already trained, skipping ──")
+      next
+    }
 
     # Per-config reproducible seed (init independent of previously run configs)
     set.seed(base_seed + i)

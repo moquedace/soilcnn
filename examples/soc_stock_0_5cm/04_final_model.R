@@ -54,7 +54,7 @@ selected_config_ids <- NULL
 # Sementes. Cada seed é um treino independente do zero. A variância entre seeds
 # estima a estabilidade do treinamento — resultado publicável deve ter baixo
 # desvio (idealmente < ~5% do CCC médio).
-seeds <- c(42L, 123L, 456L, 789L, 2025L)
+seeds <- c(7, 28, 42L, 94, 123L, 333, 456L, 666, 789L, 2025L)
 
 device <- setup_torch_device(n_threads = 30, use_cuda = TRUE)
 
