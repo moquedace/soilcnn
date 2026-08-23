@@ -253,25 +253,309 @@ if (all_02_exist) {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ETAPA 03 — Busca de hiperparâmetros (tuning)
+# ══════════════════════════════════════════════════════════════════════════════
+
+message("\n-- Etapa 03: tuning de hiperparametros --\n")
+
+tuning_dir <- file.path(project_root, "outputs", "tuning", "soc_stock_modeling", target_label)
+
+if (!dir.exists(tuning_dir)) {
+  message("Etapa 03 nao iniciada -- pasta nao encontrada: ", tuning_dir)
+} else {
+  tuning_runs <- list.dirs(tuning_dir, recursive = FALSE, full.names = FALSE)
+  if (length(tuning_runs) == 0) {
+    message("Etapa 03 incompleta -- nenhum run encontrado em: ", tuning_dir)
+  } else {
+    # Mais recente por ordenacao do nome (run_id e timestamped) -- mesmo
+    # criterio usado para resolver "latest" no 04/05/06.
+    tuning_run_id <- sort(tuning_runs, decreasing = TRUE)[1]
+    run_dir <- file.path(tuning_dir, tuning_run_id)
+    message("Run mais recente: ", tuning_run_id)
+
+    f_grid_csv <- file.path(run_dir, "tune_grid.csv")
+    f_grid_rds <- file.path(run_dir, "tune_grid.rds")
+    f_cmp_all  <- file.path(run_dir, "comparison", "comparison_all.csv")
+    f_cmp_rank <- file.path(run_dir, "comparison", "comparison_ranked.csv")
+
+    files_03 <- c(f_grid_csv, f_grid_rds, f_cmp_all, f_cmp_rank)
+    all_03_exist <- all(purrr::map_lgl(files_03, ~ check_exists("03", basename(.x), .x)))
+
+    if (all_03_exist) {
+
+      tune_grid  <- readr::read_csv2(f_grid_csv, show_col_types = FALSE)
+      comparison <- readr::read_csv2(f_cmp_rank, show_col_types = FALSE)
+
+      n_grid <- nrow(tune_grid)
+      n_cmp  <- nrow(comparison)
+
+      # A checagem mais importante desta etapa: nenhuma config do grid ficou
+      # pra tras (crash silencioso, config pulada por engano no resume, etc.)
+      missing_ids <- setdiff(tune_grid$config_id, comparison$config_id)
+      add_check("03", "todas as configs do grid tem linha na comparacao",
+                if (length(missing_ids) == 0) "PASS" else "FAIL",
+                if (length(missing_ids) == 0) sprintf("%d/%d configs", n_cmp, n_grid)
+                else paste("faltando:", paste(missing_ids, collapse = ", ")))
+
+      # Nenhuma linha extra na comparacao que nao esteja no grid atual --
+      # indicaria mistura de runs diferentes (ex.: resume com tune_grid trocado
+      # sem passar por um run_id novo).
+      extra_ids <- setdiff(comparison$config_id, tune_grid$config_id)
+      add_check("03", "nenhuma config na comparacao fora do grid atual",
+                if (length(extra_ids) == 0) "PASS" else "FAIL",
+                if (length(extra_ids) == 0) "" else paste("extras:", paste(extra_ids, collapse = ", ")))
+
+      # status == success para todas -- configs com erro nunca escrevem linha
+      # em comparison_all.csv (ver run_cnn_tuning), entao qualquer coisa
+      # != success aqui seria corrupcao inesperada do CSV, nao uma falha normal
+      # de treino (essas simplesmente nao aparecem, ja coberto pelo check acima).
+      n_not_success <- sum(comparison$status != "success", na.rm = TRUE)
+      add_check("03", "todas as linhas tem status == success",
+                if (n_not_success == 0) "PASS" else "FAIL",
+                sprintf("%d linha(s) com status != success", n_not_success))
+
+      # Cada config com linha na comparacao precisa ter o checkpoint .pt -- e
+      # o sinal de "realmente terminou o treino" usado pelo resume (ver
+      # run_cnn_tuning em R/train_cnn.R). Uma linha sem checkpoint deixaria um
+      # resume futuro confuso sobre se aquela config precisa ser retreinada.
+      ckpt_files <- file.path(run_dir, "models", paste0(comparison$config_id, "_best.pt"))
+      n_missing_ckpt <- sum(!file.exists(ckpt_files))
+      add_check("03", "todo config_id da comparacao tem checkpoint .pt",
+                if (n_missing_ckpt == 0) "PASS" else "FAIL",
+                sprintf("%d checkpoint(s) faltando", n_missing_ckpt))
+
+      # best_epoch nao pode ser NA nem <= 0 (indicaria que o treino nunca
+      # passou no criterio de melhora do early stopping -- treino quebrado).
+      n_bad_epoch <- sum(is.na(comparison$best_epoch) | comparison$best_epoch <= 0)
+      add_check("03", "best_epoch valido (nao-NA, > 0) em todas as configs",
+                if (n_bad_epoch == 0) "PASS" else "FAIL",
+                sprintf("%d config(s) com best_epoch invalido", n_bad_epoch))
+
+      # Metricas de validacao dentro de faixa FISICAMENTE plausivel (nao NA,
+      # CCC em [-1,1], MAE/RMSE > 0). Nao julga "quao bom" o modelo e -- isso
+      # e decisao de modelagem, nao bug estrutural -- so descarta valores
+      # impossiveis (sinal de erro no calculo, nao de modelo ruim).
+      n_na_metrics <- sum(is.na(comparison$val_ccc) | is.na(comparison$val_mae) |
+                          is.na(comparison$val_rmse))
+      add_check("03", "val_ccc/val_mae/val_rmse sem NA",
+                if (n_na_metrics == 0) "PASS" else "FAIL",
+                sprintf("%d config(s) com metrica NA", n_na_metrics))
+
+      n_ccc_out_of_range <- sum(comparison$val_ccc < -1 | comparison$val_ccc > 1, na.rm = TRUE)
+      add_check("03", "val_ccc dentro de [-1, 1]",
+                if (n_ccc_out_of_range == 0) "PASS" else "FAIL",
+                sprintf("%d config(s) fora do range", n_ccc_out_of_range))
+
+      n_nonpos_error <- sum(comparison$val_mae <= 0 | comparison$val_rmse <= 0, na.rm = TRUE)
+      add_check("03", "val_mae e val_rmse > 0",
+                if (n_nonpos_error == 0) "PASS" else "FAIL",
+                sprintf("%d config(s) com erro <= 0", n_nonpos_error))
+
+      # rank 1 realmente e o maior val_ccc -- confirma que a ordenacao nao
+      # inverteu nem ficou desalinhada apos um resume que reordenou linhas.
+      top_by_rank <- comparison$config_id[comparison$rank == 1][1]
+      top_by_ccc  <- comparison$config_id[which.max(comparison$val_ccc)]
+      check_equal("03", "rank==1 corresponde ao maior val_ccc",
+                  top_by_rank, top_by_ccc, "rank_1", "max_ccc")
+
+      # gate_summary.csv so deveria existir para configs dual-branch (janela
+      # com "x" no nome, ex. "9x15") com gate != no_gate_concat -- confirma
+      # que a logica condicional de extract_gate_analysis() nao esta gerando
+      # (ou deixando de gerar) arquivo para o tipo de config errado.
+      gated_ids <- comparison$config_id[
+        grepl("x", comparison$window_sizes) & comparison$gate_type != "no_gate_concat"
+      ]
+      gate_files <- file.path(run_dir, "gates", paste0(gated_ids, "_gate_summary.csv"))
+      n_missing_gate <- sum(!file.exists(gate_files))
+      add_check("03", "gate_summary.csv existe p/ toda config dual-branch com gate",
+                if (n_missing_gate == 0) "PASS" else "WARN",
+                sprintf("%d/%d faltando", n_missing_gate, length(gated_ids)))
+
+      message(sprintf(
+        "\n  Melhor config (val_ccc): %s | CCC=%.3f | MAE=%.2f | RMSE=%.2f | janela=%s | gate=%s",
+        top_by_ccc,
+        comparison$val_ccc[comparison$config_id == top_by_ccc][1],
+        comparison$val_mae[comparison$config_id == top_by_ccc][1],
+        comparison$val_rmse[comparison$config_id == top_by_ccc][1],
+        comparison$window_sizes[comparison$config_id == top_by_ccc][1],
+        comparison$gate_type[comparison$config_id == top_by_ccc][1]))
+
+    } else {
+      message("Etapa 03 incompleta -- pulando checagens de conteudo.")
+    }
+  }
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ETAPA 04 — Modelo final (ensemble multi-seed)
+# ══════════════════════════════════════════════════════════════════════════════
+
+message("\n-- Etapa 04: modelo final (ensemble multi-seed) --\n")
+
+final_model_base <- file.path(project_root, "outputs", "final_model",
+                              "soc_stock_modeling", target_label)
+
+if (!dir.exists(final_model_base)) {
+  message("Etapa 04 nao iniciada -- pasta nao encontrada: ", final_model_base)
+} else {
+  final_runs <- list.dirs(final_model_base, recursive = FALSE, full.names = FALSE)
+  final_runs <- final_runs[grepl("^final_", final_runs)]
+  if (length(final_runs) == 0) {
+    message("Etapa 04 incompleta -- nenhum run encontrado em: ", final_model_base)
+  } else {
+    final_run_id <- sort(final_runs, decreasing = TRUE)[1]
+    run_dir <- file.path(final_model_base, final_run_id)
+    message("Run mais recente: ", final_run_id)
+
+    f_summary_rds <- file.path(run_dir, "comparison", "final_run_summary.rds")
+    f_all_seeds   <- file.path(run_dir, "comparison", "all_seed_results_test.csv")
+    f_cfg_summary <- file.path(run_dir, "comparison", "config_summary_test.csv")
+
+    files_04 <- c(f_summary_rds, f_all_seeds, f_cfg_summary)
+    all_04_exist <- all(purrr::map_lgl(files_04, ~ check_exists("04", basename(.x), .x)))
+
+    if (all_04_exist) {
+
+      summary_rds      <- readRDS(f_summary_rds)
+      all_seed_results  <- readr::read_csv2(f_all_seeds,   show_col_types = FALSE)
+      config_summary    <- readr::read_csv2(f_cfg_summary, show_col_types = FALSE)
+
+      selected_cfgs    <- summary_rds$selected_cfgs
+      seeds_expected    <- summary_rds$seeds
+      n_seeds_expected  <- length(seeds_expected)
+
+      # O 04 grava qual run de tuning (etapa 03) usou -- confirma que essa
+      # pasta ainda existe (nao foi apagada/renomeada depois) e, quando a
+      # etapa 03 tambem rodou nesta mesma checagem, que e exatamente o run
+      # mais recente resolvido la em cima (evita ficar preso num run antigo
+      # por engano, ex.: tuning_run_id fixo esquecido no script).
+      linked_tuning_dir <- file.path(tuning_dir, summary_rds$tuning_run_id)
+      add_check("04", "tuning_run_id referenciado pelo 04 ainda existe",
+                if (dir.exists(linked_tuning_dir)) "PASS" else "FAIL",
+                summary_rds$tuning_run_id)
+      if (exists("tuning_run_id") && all_03_exist) {
+        check_equal("04", "tuning_run_id do 04 == run mais recente da etapa 03",
+                    summary_rds$tuning_run_id, tuning_run_id, "usado_pelo_04", "mais_recente_03")
+      }
+
+      # Quando selected_config_ids foi deixado NULL (comportamento padrao,
+      # recomendado no cabecalho do 04), o config escolhido tem que ser
+      # exatamente o rank==1 do ranking de validacao daquele run de tuning --
+      # senao o modelo final estaria sendo treinado numa arquitetura que nao
+      # e a melhor encontrada na etapa 03. Selecao manual de top-N e valida,
+      # entao isso e so um alerta (WARN), nao falha.
+      if (exists("tuning_run_id") && all_03_exist &&
+          identical(summary_rds$tuning_run_id, tuning_run_id)) {
+        rank1_id <- comparison$config_id[comparison$rank == 1L]
+        add_check("04", "config(s) selecionado(s) inclui o rank==1 da etapa 03",
+                  if (rank1_id %in% selected_cfgs$config_id) "PASS" else "WARN",
+                  paste0("rank1=", rank1_id, " | selecionados=",
+                        paste(selected_cfgs$config_id, collapse = ", ")))
+      }
+
+      # Cada config selecionado precisa ter exatamente n_seeds_expected linhas
+      # de resultado -- nem seed faltando (crash/erro silencioso), nem seed a
+      # mais (resquicio de outro run com seeds diferentes).
+      seed_counts <- dplyr::count(all_seed_results, config_id, name = "n_seeds_found")
+      for (cid in selected_cfgs$config_id) {
+        found <- seed_counts$n_seeds_found[seed_counts$config_id == cid]
+        found <- if (length(found) == 0) 0L else found
+        add_check("04", paste0("n_seeds completas (", cid, ")"),
+                  if (found == n_seeds_expected) "PASS" else "FAIL",
+                  sprintf("%d/%d seeds", found, n_seeds_expected))
+      }
+
+      # Cada (config, seed) esperado tem checkpoint .pt salvo -- mesmo
+      # principio do check em "03": resultado sem modelo salvo por tras
+      # deixaria o run inutilizavel para inferencia futura mesmo aparecendo
+      # como sucesso na tabela de metricas.
+      ckpt_paths <- character(0)
+      for (cid in selected_cfgs$config_id) {
+        ckpt_paths <- c(ckpt_paths, file.path(run_dir, cid, "models",
+                                              sprintf("seed%04d_best.pt", seeds_expected)))
+      }
+      n_missing_ckpt <- sum(!file.exists(ckpt_paths))
+      add_check("04", "todo (config, seed) esperado tem checkpoint .pt",
+                if (n_missing_ckpt == 0) "PASS" else "FAIL",
+                sprintf("%d/%d checkpoint(s) faltando", n_missing_ckpt, length(ckpt_paths)))
+
+      # Metricas de teste sem NA e em faixa fisicamente plausivel (mesma
+      # logica do 03: nao julga "quao bom", so descarta valores impossiveis).
+      n_na_metrics <- sum(is.na(all_seed_results$ccc) | is.na(all_seed_results$mae) |
+                          is.na(all_seed_results$rmse))
+      add_check("04", "ccc/mae/rmse sem NA (todas as seeds)",
+                if (n_na_metrics == 0) "PASS" else "FAIL",
+                sprintf("%d linha(s) com metrica NA", n_na_metrics))
+
+      n_ccc_out <- sum(all_seed_results$ccc < -1 | all_seed_results$ccc > 1, na.rm = TRUE)
+      add_check("04", "ccc dentro de [-1, 1] (todas as seeds)",
+                if (n_ccc_out == 0) "PASS" else "FAIL",
+                sprintf("%d linha(s) fora do range", n_ccc_out))
+
+      n_nonpos <- sum(all_seed_results$mae <= 0 | all_seed_results$rmse <= 0, na.rm = TRUE)
+      add_check("04", "mae e rmse > 0 (todas as seeds)",
+                if (n_nonpos == 0) "PASS" else "FAIL",
+                sprintf("%d linha(s) com erro <= 0", n_nonpos))
+
+      # Estabilidade entre seeds: SD do CCC como % da media. Um desvio grande
+      # (ver docs/design_decisions.md secao 11) indica treino instavel/pouco
+      # reprodutivel, nao so "sorte" de inicializacao -- resultado publicavel
+      # deveria ter baixo desvio.
+      for (i in seq_len(nrow(config_summary))) {
+        cs <- config_summary[i, ]
+        pct_sd <- 100 * cs$ccc_sd / cs$ccc_mean
+        check_threshold("04", paste0("CCC SD relativo (", cs$config_id, ")"),
+                        pct_sd, warn_above = 10, fail_above = 20, unit = "% da media")
+      }
+
+      # config_summary bate com a agregacao recalculada a partir de
+      # all_seed_results -- redundancia contra corrupcao/desalinhamento do CSV.
+      recalc <- all_seed_results %>%
+        dplyr::group_by(config_id) %>%
+        dplyr::summarise(ccc_mean_recalc = mean(ccc), .groups = "drop")
+      merged <- dplyr::left_join(config_summary, recalc, by = "config_id")
+      for (i in seq_len(nrow(merged))) {
+        check_equal("04", paste0("ccc_mean salvo == recalculado (", merged$config_id[i], ")"),
+                    round(merged$ccc_mean[i], 6), round(merged$ccc_mean_recalc[i], 6),
+                    "salvo", "recalculado")
+      }
+
+      # gate_summary.csv por seed so deveria existir para configs dual-branch
+      # (2 janelas) com gate_type != no_gate_concat -- mesma logica do 03.
+      for (i in seq_len(nrow(selected_cfgs))) {
+        cid <- selected_cfgs$config_id[i]
+        ws  <- selected_cfgs$window_sizes[[i]]
+        gt  <- selected_cfgs$gate_type[i]
+        if (length(ws) == 2L && gt != "no_gate_concat") {
+          gate_files <- file.path(run_dir, cid, "gates",
+                                  sprintf("seed%04d_gate_summary.csv", seeds_expected))
+          n_missing_gate <- sum(!file.exists(gate_files))
+          add_check("04", paste0("gate_summary.csv por seed existe (", cid, ")"),
+                    if (n_missing_gate == 0) "PASS" else "WARN",
+                    sprintf("%d/%d faltando", n_missing_gate, length(seeds_expected)))
+        }
+      }
+
+      for (i in seq_len(nrow(config_summary))) {
+        cs <- config_summary[i, ]
+        message(sprintf(
+          "\n  Modelo final [%s]: CCC=%.4f +/- %.4f | MAE=%.3f | RMSE=%.3f | %d seeds",
+          cs$config_id, cs$ccc_mean, cs$ccc_sd, cs$mae_mean, cs$rmse_mean, cs$n_seeds))
+      }
+
+    } else {
+      message("Etapa 04 incompleta -- pulando checagens de conteudo.")
+    }
+  }
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
 # [Placeholder para etapas futuras]
 #
-# Ao terminar de rodar o 03, adicione uma secao "ETAPA 03" aqui, seguindo o
-# mesmo padrao: checar arquivos existem -> checar metricas dentro de faixas
-# plausiveis -> checar consistencia entre arquivos relacionados. Ideias para
-# quando chegar la:
-#   - todas as configs do grid terminaram (nenhum config faltando no ranking)
-#   - CCC/MAE/RMSE de validacao dentro de faixa plausivel (nao NA, nao
-#     negativo absurdo, RMSE > 0)
-#   - comparison_ranked.csv tem exatamente tune_length linhas (ou menos, se
-#     algum config falhou -- nesse caso, WARN com quantos falharam)
-#
-# Etapa 04 (modelo final): todos os seeds terminaram, desvio entre seeds nao
-# e absurdamente alto (>20% do CCC medio, por ex.), arquivos .pt existem e
-# tem tamanho > 0 para cada seed.
-#
-# Etapa 05 (predicao espacial): valid_fraction dos tiles nao caiu de novo
+# Etapa 05/06 (predicao espacial): valid_fraction dos tiles nao caiu de novo
 # pra perto de zero -- mesma logica do check do 02, adaptada para os logs
-# de shard/merge.
+# de shard/merge. Ver tambem 05a_test.R / 05c_estimate_eta.R, que ja cobrem
+# parte disso para o pipeline 2D.
 # ══════════════════════════════════════════════════════════════════════════════
 
 # ── Resumo final ─────────────────────────────────────────────────────────────
