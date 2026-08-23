@@ -1,9 +1,9 @@
 project_root <- "D:/usuario_armazenamento/cassio/R/deep_learning_caret"
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 06c — ETA do job 2D (05a_run_parallel.R)
+# 05c — ETA do job 2D (05a_run_parallel.R)
 #
-# Re-rodável a qualquer momento enquanto o 06a estiver rodando. Detecta
+# Re-rodável a qualquer momento enquanto o 05a estiver rodando. Detecta
 # automaticamente o run mais recente com logs no formato 2D
 # (shard_rXXXofYYY_cXXXofZZZ.log). Não interfere no 05c.
 # ══════════════════════════════════════════════════════════════════════════════

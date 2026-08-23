@@ -18,7 +18,7 @@ setwd(project_root)
 source(file.path(project_root, "R", "utils.R"))
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 06b — Mosaica os tiles 2D produzidos por 05_predict_spatial.R
+# 05b — Mosaica os tiles 2D produzidos por 05_predict_spatial.R
 #
 # Encontra todos os arquivos em raster/parts_2d/ com sufixo
 # _rXXXofYYY_cXXXofZZZ.tif, agrupa por camada (median, sd, etc.) e monta

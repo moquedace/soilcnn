@@ -98,7 +98,11 @@ is_partitioned <- n_total_shards > 1L
 
 config_id    <- "auto"
 final_run_id <- "latest"
-seeds        <- c(42L, 123L, 456L, 789L, 2025L)
+# Resolvido logo abaixo, a partir de final_run_summary$seeds (a lista real de
+# seeds treinadas no 04) -- nao fixar aqui: um valor hardcoded ficaria
+# defasado silenciosamente se o 04 mudar o numero/valor das seeds (ja
+# aconteceu: 04 passou de 5 para 10 seeds e este valor nao acompanhou).
+seeds        <- NULL
 ensemble_center <- "median"
 
 # Parâmetros de streaming / RAM
@@ -229,6 +233,15 @@ if (identical(config_id, "auto")) {
 
 if (!config_id %in% final_summary$selected_cfgs$config_id) {
   stop("config_id '", config_id, "' not in final run summary.")
+}
+
+if (is.null(seeds)) {
+  seeds <- final_summary$seeds
+  if (is.null(seeds) || length(seeds) == 0L) {
+    stop("Could not resolve seeds from final_run_summary$seeds: ", summary_file)
+  }
+  message("seeds resolved from final_run_summary.rds: ", paste(seeds, collapse = ", "),
+          " (", length(seeds), " seed(s))")
 }
 
 cfg          <- dplyr::filter(final_summary$selected_cfgs, config_id == !!config_id)

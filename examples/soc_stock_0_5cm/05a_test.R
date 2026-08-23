@@ -21,15 +21,15 @@ install_load_pkg(pkg)
 # (referência: ~7-8 GB piso, ~130 s/bloco após otimização).
 #
 # NÃO roda o merge — os tiles de teste ficam em raster/parts_2d/ para
-# inspeção manual. Apague-os antes de rodar o 06a real.
+# inspeção manual. Apague-os antes de rodar o 05a real.
 # ══════════════════════════════════════════════════════════════════════════════
 
 # ── Configuração de TESTE ──────────────────────────────────────────────────────
-# Estes valores devem ser os MESMOS que você planeja usar no 06a real.
+# Estes valores devem ser os MESMOS que você planeja usar no 05a real.
 # Só test_n_shards e max_concurrent podem ser menores no teste.
 
-n_row_shards <- 250      # igual ao que usará no 06a real
-n_col_shards <- 4        # igual ao que usará no 06a real
+n_row_shards <- 250      # igual ao que usará no 05a real
+n_col_shards <- 4        # igual ao que usará no 05a real
 
 # Quantos shards rodar no teste. 4 = 1 por coluna (testa toda a largura).
 # Aumente para 8 se quiser testar 2 linhas de shards.
@@ -322,4 +322,4 @@ if (length(ok_results) > 0) {
 message(sprintf("\nTeste concluido em %.1f %s. Logs em: %s",
                 as.numeric(el_total), units(el_total), log_dir))
 message("Tiles de teste em: ", parts_dir)
-message("Apague os tiles de teste antes de rodar o 06a real.")
+message("Apague os tiles de teste antes de rodar o 05a real.")
