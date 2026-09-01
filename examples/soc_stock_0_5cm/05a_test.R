@@ -59,17 +59,25 @@ if (!file.exists(rscript_bin)) stop("Rscript.exe not found: ", rscript_bin)
 # ── Montar lista de shards de teste ──────────────────────────────────────────
 
 if (identical(test_shards, "auto")) {
-  # 1 shard por tile de coluna, todos na linha 1 — testa a geometria completa
-  # da largura do raster com poucos blocos (linha 1 = latitudes mais altas = geralmente menos pixels validos = rapido)
-  test_shards <- lapply(seq_len(n_col_shards), function(cs) c(1L, cs))
-  if (test_n_shards > n_col_shards) {
-    # adiciona shards da linha do meio (mais densos, melhor teste de throughput)
-    mid_row <- ceiling(n_row_shards / 2)
-    extra <- lapply(seq_len(min(test_n_shards - n_col_shards, n_col_shards)),
-                    function(cs) c(mid_row, cs))
-    test_shards <- c(test_shards, extra)
-  }
-  test_shards <- test_shards[seq_len(min(test_n_shards, length(test_shards)))]
+  # Bug corrigido: a versao anterior so adicionava uma amostra da linha do
+  # meio (mais densa/tropical -- o que realmente calibra throughput/RAM real)
+  # quando test_n_shards > n_col_shards. Com os valores padrao deste arquivo
+  # (ambos 4) essa condicao NUNCA era TRUE, entao o teste so via a linha 1
+  # (quase toda oceano/gelo polar, exceto onde cruza terra) e a recomendacao
+  # de max_concurrent/ETA saia de uma media distorcida (shards quase vazios
+  # com RSS~1.7 GB e predict~2s, escondendo o unico shard real com RSS~12.7 GB
+  # e predict~550s -- media = numero sem sentido, perigoso se usado pra
+  # RAM: max_concurrent tao alto que shards densos concorrentes estourariam
+  # a RAM da maquina).
+  # Agora SEMPRE reserva pelo menos 1 shard da linha do meio, mesmo que
+  # precise reduzir a cobertura de largura da linha 1.
+  n_row1 <- max(1L, min(test_n_shards - 1L, n_col_shards))
+  n_mid  <- max(1L, test_n_shards - n_row1)
+  mid_row <- ceiling(n_row_shards / 2)
+  test_shards <- c(
+    lapply(seq_len(n_row1), function(cs) c(1L, cs)),
+    lapply(seq_len(min(n_mid, n_col_shards)), function(cs) c(mid_row, cs))
+  )
 }
 
 n_test <- length(test_shards)
