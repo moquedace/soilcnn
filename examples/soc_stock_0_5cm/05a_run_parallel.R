@@ -55,11 +55,22 @@ n_col_shards <- 4
 #     estavel ao longo dos 16 blocos (sem mais degradacao progressiva),
 #     34.5 min/shard (antes 89 min para o mesmo shard)
 # Maquina: 32 nucleos, ~64 GB RAM.
-# -> max_concurrent=4: pior caso 4 x 13.2 GB ~= 53 GB / 64 GB (margem ~11 GB).
-#    threads_per_worker = 32/4 = 8 (suficiente para a inferencia CNN).
-# -> Se o job real mostrar shards mais densos que o testado (regioes tropicais
-#    nao amostradas no teste), reavaliar via 05c_estimate_eta.R e cair para 3.
-max_concurrent <- 4
+#
+# ATUALIZACAO (apos smoke test completo em 1 km, mesma largura de strip ~40 mil
+# colunas por bloco que a config 4 col-shards aqui): RSS pico medido de verdade
+# ficou em 13.9-14.9 GB/shard (um pouco acima dos 13.2 GB de referencia acima --
+# essa referencia e de antes do modelo final ter 10 seeds; mais seeds nao muda
+# muito o pico de RSS -- quem domina o pico e o buffer de checagem de validade
+# de janela, dimensionado por batch_size, nao por n_seeds -- mas ainda assim
+# vale a margem extra). Alem disso, esta maquina NAO tem GPU acessivel ao torch
+# (cuda_is_available()==FALSE, cuda_device_count()==0, confirmado nos logs do
+# teste 1 km -- "Device: cpu") -- o trabalho e 100% CPU-bound, entao subir
+# max_concurrent alem do necessario para caber na RAM NAO acelera o total (a
+# CPU total da maquina e fixa); so reduz a margem de seguranca. Por isso:
+# -> max_concurrent=3: pior caso 3 x 14.9 GB ~= 45 GB / 64 GB (margem ~19 GB).
+#    threads_per_worker = 32/3 = 10.
+# -> Reavalie via 05c_estimate_eta.R conforme os primeiros shards reais terminam.
+max_concurrent <- 3
 
 poll_interval_s <- 30
 

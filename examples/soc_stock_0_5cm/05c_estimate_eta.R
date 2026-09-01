@@ -8,7 +8,7 @@ project_root <- "D:/usuario_armazenamento/cassio/R/deep_learning_caret"
 # (shard_rXXXofYYY_cXXXofZZZ.log). Não interfere no 05c.
 # ══════════════════════════════════════════════════════════════════════════════
 
-max_concurrent <- 4   # <<< manter igual ao 05a_run_parallel.R
+max_concurrent <- 3   # <<< manter igual ao 05a_run_parallel.R
 
 log_root <- file.path(project_root, "outputs", "spatial_prediction", "_worker_logs")
 run_dirs <- list.dirs(log_root, recursive = FALSE, full.names = FALSE)
