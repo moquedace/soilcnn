@@ -181,9 +181,13 @@ parse_worker_log <- function(idx) {
   }
 
   # RSS máximo
-  rss_vals <- as.numeric(regmatches(lines,
-    gregexpr("RSS ([0-9]+(?:\\.[0-9]+)?) MB", lines, perl = TRUE)) |>
-    lapply(function(x) sub("RSS ", "", x)) |> unlist())
+  # Bug corrigido: a versao anterior deixava o sufixo " MB" no valor extraido
+  # (sub() so removia o prefixo "RSS "), entao as.numeric("12345 MB") sempre
+  # dava NA -- rss_peak_mb ficava sempre NA e a recomendacao de max_concurrent
+  # caia pra -Inf/absurda. Lookbehind/lookahead evita capturar o texto.
+  rss_lines <- lines[grepl("RSS [0-9]+(?:\\.[0-9]+)? MB", lines, perl = TRUE)]
+  rss_vals  <- as.numeric(regmatches(rss_lines,
+    regexpr("(?<=RSS )[0-9]+(?:\\.[0-9]+)?(?= MB)", rss_lines, perl = TRUE)))
   rss_peak_mb <- if (length(rss_vals) > 0) max(rss_vals, na.rm = TRUE) else NA_real_
 
   # s/bloco (predict)
