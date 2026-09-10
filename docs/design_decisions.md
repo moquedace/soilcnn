@@ -323,10 +323,11 @@ spatial splits.
 
 > **Historical note:** cfg_004/cfg_012 were selected under the initial 20 km-resolution
 > prototype (window sizes 3/5/7). After moving to the 250 m production run (window sizes
-> 3/9/15, re-tuned end to end), the selected final model is **cfg_022** (dual-branch,
-> windows 9×9 + 15×15, `vector_featurewise` gate, `embedding_dim=384`). The discussion above
-> is kept for the qualitative conclusion (gate vs. concat), not as a pointer to the current
-> production config.
+> 3/9/15, re-tuned end to end), the selected final model is **cfg_014** (dual-branch,
+> windows 9×9 + 15×15, `no_gate_concat`, `embedding_dim=256`, val CCC 0.657) — the same
+> `no_gate_concat` conclusion held up at 250 m. The discussion above is kept for the
+> qualitative conclusion (gate vs. concat), not as a pointer to a specific config id, which
+> is reassigned on every new tuning run.
 
 ---
 

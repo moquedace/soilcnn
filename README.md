@@ -198,7 +198,7 @@ All splits (train · validation · test) are evaluated with six metrics, also br
 | **RPD** | Ratio of Performance to Deviation = sd(obs) / RMSE — standard pedometric benchmark (<1.4 poor, 1.4–2.0 fair, >2.0 good) |
 | **MQI** | Model Quality Index = (CCC × NSE) / (MAE / mean(obs)) |
 
-Model selection across configs ranks by a **validation-only composite score** (CCC · MAE · R² · NSE · RMSE · MQI + tail MAE for Q95–Q100). The test set is opened **once**, after the winning architecture is locked in. This avoids the common mistake of tuning toward test performance.
+Model selection across configs ranks by **validation CCC** (descending), then **validation MAE** (ascending) as a tiebreaker. Test metrics are computed and written to the comparison CSV for every config during tuning, but strictly as diagnostic reference — they are never read to choose between configurations. Only after the winning architecture is locked in does a human actually look at test performance. This avoids the common mistake of tuning toward test performance.
 
 Early stopping uses **validation SmoothL1 loss** — keeping the stopping criterion consistent with the training objective.
 
