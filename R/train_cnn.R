@@ -26,8 +26,10 @@
 predict_loader <- function(model, data_loader, points_valid, dataset_role,
                            transform = identity, device, clamp = c(0, Inf)) {
   if (length(clamp) != 2L || anyNA(clamp) || clamp[1] > clamp[2]) {
-    stop("clamp must be c(lower, upper) with lower <= upper, no NA.")
+    stop("clamp must be c(lower, upper) with lower <= upper, no NA.",
+         call. = FALSE)
   }
+  check_point_contract(points_valid, what = "points_valid")
   model$eval()
   pred_raw <- numeric(0)
   torch::with_no_grad({
@@ -400,19 +402,43 @@ train_one_cnn <- function(
 #'
 #' @param tune_grid    tibble from make_tune_grid() or make_manual_tune_grid().
 #' @param n_channels   Number of predictor channels.
-#' @param patches      Named list: train, validation, test – each a list with
-#'   x_arrays (one per window size) and y (target, transformed scale).
-#' @param points_valid Named list: train, validation, test – metadata tibbles.
+#' @param cache        Scaled, split tensors from build_fold_cache()$cache:
+#'   cache[[role]][[window_key]] plus cache[[role]]$y. Built by the CALLER,
+#'   because the scaling is fold-dependent – the grid loop must not own
+#'   that decision. When resampling arrives this argument simply becomes the
+#'   current fold's cache, with no change to the loop below.
+#' @param points_valid Named list of metadata tibbles, one per role, sliced
+#'   with the SAME index as the tensors (see fold_points_valid()). predict_loader()
+#'   matches loader row i to metadata row i, so a mismatch here silently
+#'   pairs the wrong observation with the wrong prediction.
 #' @param transform    Inverse transform for predictions (default: identity).
 #' @param output_dir   Root output directory.
 #' @param device       torch_device.
 #' @param run_id       String label for this tuning run. Reuse the SAME run_id
 #'   across restarts to resume — a new (timestamped) run_id always starts fresh.
-#' @param base_seed    Base RNG seed. Config i is trained after setting the seed
-#'   to base_seed + i (both R and torch), so each config has a reproducible
-#'   weight initialisation independent of the configs run before it. Because of
-#'   this, resuming and re-running from scratch produce identical results for
-#'   every config, whether skipped or (re)trained.
+#' @param base_seed    Base RNG seed. Repetition s of EVERY config is trained
+#'   under the same seed, base_seed + s - 1 (both R and torch).
+#'
+#'   THE SEED IS SHARED ACROSS CONFIGS, ON PURPOSE. It used to be
+#'   base_seed + i, one per config, which meant two configs differed both in
+#'   their hyperparameters AND in the random draw that initialised them -- so
+#'   part of every comparison was luck, and there was no way to tell how much.
+#'   With the seed tied to the repetition instead, configs within a repetition
+#'   start from the same draw, and the spread ACROSS repetitions measures the
+#'   luck directly.
+#'
+#'   Reproducibility is unchanged: a given (config, fold, seed) trains
+#'   identically whether it is reached fresh or on resume.
+#' @param n_seeds      Repetitions per config, each with its own seed.
+#'   Raising it later is resumable: the repetitions already on disk are
+#'   recognised and only the new ones train. It is
+#'   what turns "config A beat config B" into a claim with an error bar: with
+#'   one seed each, a gap smaller than the seed-to-seed spread is
+#'   indistinguishable from noise, and picking the winner is picking the
+#'   luckiest draw.
+#' @param fold         Which fold of the resampling plan this call is training.
+#'   Recorded in every row and in the checkpoint name; run_cnn_resample() sets
+#'   it. Left at 1 for a single holdout.
 #' @param resume       If TRUE (default), a config is skipped when its model
 #'   checkpoint (`models/{config_id}_best.pt`) already exists in `run_dir` —
 #'   the checkpoint is only written after train_one_cnn() returns successfully,
@@ -423,19 +449,75 @@ train_one_cnn <- function(
 #'   Set FALSE to force retraining every config (e.g. after changing code that
 #'   affects already-trained configs).
 #' @param ...          Passed to train_one_cnn() (n_epochs, patience, etc.).
+# Le um comparison_all.csv de um run gravado ANTES do RDS existir.
+#
+# So para esses; runs novos leem o RDS e nunca passam por aqui. O tipo de cada
+# coluna nao e adivinhado nem listado a mao: vem do `tune_grid`, que e a
+# autoridade sobre os hiperparametros e esta carregado ali do lado. As demais
+# colunas sao conhecidas e poucas -- identificadores e status sao texto,
+# contadores sao inteiros, e o que sobra sao metricas, que sao numericas.
+.comparison_from_csv <- function(path, tune_grid) {
+  cmp <- readr::read_csv2(path, show_col_types = FALSE)
+
+  as_chr <- c("unit_id", "config_id", "status", "error_message",
+              "window_sizes", "conv_channels")
+  as_int <- c("fold", "seed", "best_epoch", "rank")
+
+  for (nm in intersect(as_chr, names(cmp))) cmp[[nm]] <- as.character(cmp[[nm]])
+  for (nm in intersect(as_int, names(cmp))) cmp[[nm]] <- as.integer(cmp[[nm]])
+
+  # Hiperparametros: o tipo e o que o tune_grid diz que e.
+  for (nm in intersect(names(tune_grid), names(cmp))) {
+    if (nm %in% c(as_chr, as_int)) next
+    want <- class(tune_grid[[nm]])[1]
+    got  <- class(cmp[[nm]])[1]
+    if (identical(want, got)) next
+    cmp[[nm]] <- switch(want,
+      character = as.character(cmp[[nm]]),
+      integer   = as.integer(cmp[[nm]]),
+      numeric   = as.numeric(cmp[[nm]]),
+      logical   = as.logical(cmp[[nm]]),
+      cmp[[nm]])
+  }
+
+  # O que sobra e metrica: numerica, e um texto aqui significa que o locale
+  # nao parseou algum valor (notacao cientifica, por exemplo).
+  known <- unique(c(as_chr, as_int, names(tune_grid)))
+  for (nm in setdiff(names(cmp), known)) {
+    if (is.character(cmp[[nm]])) {
+      cmp[[nm]] <- suppressWarnings(as.numeric(sub(",", ".", cmp[[nm]],
+                                                   fixed = TRUE)))
+    }
+  }
+  cmp
+}
+
+# O CSV e a copia legivel; o RDS e a copia AUTORITATIVA, a que a retomada le.
+# Gravados sempre juntos, para nunca discordarem.
+write_comparison <- function(comparison, csv_path, rds_path) {
+  safe_write_csv2(comparison, csv_path)
+  safe_save_rds(comparison, rds_path, compress = FALSE)
+  invisible(comparison)
+}
+
 run_cnn_tuning <- function(
   tune_grid,
   n_channels,
-  patches,
+  cache,
   points_valid,
   transform   = identity,
   output_dir  = "./outputs/tuning",
   device,
   run_id      = format(Sys.time(), "%Y%m%d_%H%M%S"),
   base_seed   = 42L,
+  n_seeds     = 1L,
+  fold        = 1L,
   resume      = TRUE,
   ...
 ) {
+  n_seeds <- as.integer(n_seeds)
+  fold    <- as.integer(fold)
+  stopifnot(n_seeds >= 1L, fold >= 1L)
   run_dir <- file.path(output_dir, run_id)
   dirs    <- file.path(run_dir, c("models", "history", "predictions",
                                    "metrics", "gates", "comparison"))
@@ -467,22 +549,58 @@ run_cnn_tuning <- function(
     file.path(run_dir, "tune_grid.csv")
   )
 
-  # Build the tensor cache once for every window size used anywhere in the grid,
-  # then reuse it across all configs (avoids recreating large tensors per row).
+  # The cache is built by the caller and reused across every config here. It
+  # used to be built inside this function from raw patches, which forced the
+  # scaling to be a property of the stored data; now the scaling belongs to
+  # the fold and the grid loop only consumes the result.
   windows_needed <- sort(unique(unlist(tune_grid$window_sizes)))
-  message("Building tensor cache for windows: ",
-          paste(windows_needed, collapse = ", "))
-  tensor_cache <- .build_tensor_cache(patches, windows_needed)
+  keys_needed    <- patch_window_key(windows_needed)
+  have_keys      <- setdiff(names(cache[[1]]), "y")
+  missing_keys   <- setdiff(keys_needed, have_keys)
+  if (length(missing_keys) > 0L) {
+    stop("The grid needs window(s) ", paste(missing_keys, collapse = ", "),
+         " but the cache only holds ", paste(have_keys, collapse = ", "),
+         call. = FALSE)
+  }
 
   n_cfg <- nrow(tune_grid)
 
   # ── Resume: reload comparison rows already computed, skip done configs ─────
   comparison_path <- file.path(run_dir, "comparison", "comparison_all.csv")
+  comparison_rds  <- file.path(run_dir, "comparison", "comparison_all.rds")
   comparison <- tibble::tibble()
   done_ids   <- character(0)
   if (resume && file.exists(comparison_path)) {
-    comparison <- readr::read_csv2(comparison_path, show_col_types = FALSE)
-    done_ids   <- comparison$config_id[comparison$status == "success"]
+    # A RETOMADA LE O RDS, NUNCA O CSV.
+    #
+    # O CSV e para humanos; ele nao preserva tipo. read_csv2() adivinha, e
+    # adivinha errado de duas maneiras que ja derrubaram este run:
+    #
+    #   window_sizes  "3"      (config de janela unica) -> lido como NUMERO
+    #   weight_decay  "1e-04"  (notacao cientifica)     -> com decimal virgula
+    #                                                     nao parseia, vira TEXTO
+    #
+    # Em qualquer dos casos o bind_rows aborta com "Can't combine <double> and
+    # <character>" -- DEPOIS de treinar, perdendo o trabalho da unidade.
+    #
+    # A primeira tentativa de conserto foi forcar uma LISTA de colunas a
+    # character. Estrategia errada: a lista nunca esta completa, e cada coluna
+    # nova e uma chance de repetir o mesmo erro. O RDS guarda a tibble como
+    # ela e -- nenhuma coluna para lembrar, nenhum tipo para adivinhar.
+    #
+    # O fallback para o CSV existe so para runs gravados antes deste RDS.
+    comparison <- if (file.exists(comparison_rds)) {
+      readRDS(comparison_rds)
+    } else {
+      .comparison_from_csv(comparison_path, tune_grid)
+    }
+
+    # Older runs have no unit_id column (one row per config). Treat those rows
+    # as units named by their config_id, which is exactly what they were.
+    if (!"unit_id" %in% names(comparison)) {
+      comparison$unit_id <- comparison$config_id
+    }
+    done_ids <- comparison$unit_id[comparison$status == "success"]
   }
   # Belt-and-suspenders: a config only counts as done if BOTH the comparison
   # row AND the model checkpoint exist (checkpoint is written after training
@@ -490,25 +608,63 @@ run_cnn_tuning <- function(
   # written comparison_all.csv from a crash mid-write.
   done_ids <- done_ids[file.exists(file.path(run_dir, "models",
                                              paste0(done_ids, "_best.pt")))]
+
+  # ── The unit of work is (config, seed), not config ──────────────────────────
+  # Flattened into one table instead of nested loops so that resume, ordering
+  # and reporting all see the same list of things to do. Seeds run INNERMOST:
+  # a config's repetitions finish together, so an interrupted run leaves whole
+  # configs measured rather than every config measured once and none twice.
+  units <- expand.grid(seed_i = seq_len(n_seeds), i = seq_len(n_cfg))
+  units <- units[order(units$i, units$seed_i), c("i", "seed_i")]
+  n_units <- nrow(units)
+
   if (length(done_ids) > 0L) {
-    message(sprintf("Resume: %d/%d configs already trained -- skipping: %s",
-                    length(done_ids), n_cfg, paste(done_ids, collapse = ", ")))
+    # `done_ids` conta as unidades prontas do RUN INTEIRO (todos os folds);
+    # `n_units` e o que ESTA chamada vai treinar (um fold). Misturar os dois
+    # produzia linhas como "Resume: 18/9", que nao significa nada. Reporta a
+    # fracao deste fold e o total do run separadamente.
+    mine <- sum(done_ids %in% sprintf("%s_f%d_s%d",
+                                      rep(tune_grid$config_id, each = n_seeds),
+                                      fold, seq_len(n_seeds)))
+    message(sprintf(
+      "Resume: %d/%d unidades deste fold ja treinadas (%d no run inteiro)",
+      mine, n_units, length(done_ids)))
   }
 
-  for (i in seq_len(n_cfg)) {
-    cfg <- tune_grid[i, ]
+  for (u in seq_len(n_units)) {
+    i      <- units$i[u]
+    seed_i <- units$seed_i[u]
+    cfg    <- tune_grid[i, ]
 
-    if (cfg$config_id %in% done_ids) {
-      message("\n── Config ", i, "/", n_cfg, ": ", cfg$config_id,
+    # O nome da unidade e SEMPRE o mesmo formato.
+    #
+    # A primeira versao disto abreviava para o config_id puro quando havia um
+    # fold e uma semente, para manter os nomes de arquivo de antes da
+    # reamostragem. Era uma armadilha: mudar n_seeds renomeava as unidades,
+    # entao retomar um run de 1 semente pedindo 3 retreinava tudo e ainda
+    # deixava linhas duplicadas na comparacao (config_id E config_id_f1_s1
+    # para o mesmo trabalho).
+    #
+    # Nome uniforme faz de "aumentar n_seeds" uma mudanca RETOMAVEL: as
+    # repeticoes que ja existem sao reconhecidas e so as novas treinam. O que
+    # se perde e a leitura de diretorios anteriores a reamostragem -- e nao ha
+    # nenhum: a etapa 03 nunca rodou desde a limpeza das saidas.
+    unit_id <- sprintf("%s_f%d_s%d", cfg$config_id, fold, seed_i)
+
+    if (unit_id %in% done_ids) {
+      message("\n── ", u, "/", n_units, ": ", unit_id,
               " -- already trained, skipping ──")
       next
     }
 
-    # Per-config reproducible seed (init independent of previously run configs)
-    set.seed(base_seed + i)
-    torch::torch_manual_seed(base_seed + i)
+    # Seed depends on the REPETITION, never on the config: see base_seed.
+    this_seed <- base_seed + seed_i - 1L
+    set.seed(this_seed)
+    torch::torch_manual_seed(this_seed)
 
-    message("\n── Config ", i, "/", n_cfg, ": ", cfg$config_id, " ──")
+    message("\n── ", u, "/", n_units, ": ", unit_id,
+            "  (config ", i, "/", n_cfg, ", fold ", fold,
+            ", seed ", this_seed, ") ──")
     message("  window_sizes : ", paste(cfg$window_sizes[[1]], collapse = "x"))
     message("  conv_channels: ", paste(cfg$conv_channels[[1]], collapse = ", "))
     message("  embedding_dim: ", cfg$embedding_dim,
@@ -520,7 +676,7 @@ run_cnn_tuning <- function(
             " | loss: ", cfg$loss_fn)
 
     # Build DataLoaders for this config's window sizes from the shared cache
-    loaders <- .make_loaders_from_cache(tensor_cache, cfg)
+    loaders <- .make_loaders_from_cache(cache, cfg)
 
     err_msg <- NA_character_
     result <- tryCatch(
@@ -531,7 +687,7 @@ run_cnn_tuning <- function(
         points_valid = points_valid,
         transform    = transform,
         device       = device,
-        model_name   = cfg$config_id,
+        model_name   = unit_id,
         ...
       ),
       error = function(e) {
@@ -545,13 +701,20 @@ run_cnn_tuning <- function(
     # from one that was never run -- and `resume` filters on status ==
     # "success", which implied a "failed" was meant to exist. Write it.
     if (nrow(comparison) > 0L) {
-      comparison <- dplyr::filter(comparison, config_id != cfg$config_id)
+      # .env$ is not optional here: the column and the local variable share a
+      # name, and without the pronoun dplyr resolves BOTH to the column, the
+      # filter is always FALSE, and every row survives -- duplicating the unit
+      # instead of replacing it.
+      comparison <- dplyr::filter(comparison, unit_id != .env$unit_id)
     }
 
     if (is.null(result)) {
       comparison <- dplyr::bind_rows(comparison, dplyr::bind_cols(
         tibble::tibble(
+          unit_id       = unit_id,
           config_id     = cfg$config_id,
+          fold          = fold,
+          seed          = this_seed,
           best_epoch    = NA_integer_,
           runtime_min   = NA_real_,
           best_val_loss = NA_real_,
@@ -562,13 +725,15 @@ run_cnn_tuning <- function(
         ),
         dplyr::select(cfg, -config_id, -window_sizes, -conv_channels)
       ))
-      safe_write_csv2(comparison, comparison_path)
+      write_comparison(comparison, comparison_path, comparison_rds)
       rm(result); gc()
       next
     }
 
-    # Save outputs
-    cid <- cfg$config_id
+    # Save outputs, named by UNIT: two seeds of the same config are two
+    # models, two histories and two prediction tables, never one overwriting
+    # the other.
+    cid <- unit_id
     safe_torch_save(result$best_state, file.path(run_dir, "models",
                     paste0(cid, "_best.pt")))
     safe_write_csv2(result$history,
@@ -597,7 +762,10 @@ run_cnn_tuning <- function(
       dplyr::rename_with(~ paste0("test_", .x))
     row <- dplyr::bind_cols(
       tibble::tibble(
-        config_id      = cid,
+        unit_id        = unit_id,
+        config_id      = cfg$config_id,
+        fold           = fold,
+        seed           = this_seed,
         best_epoch     = result$best_epoch,
         runtime_min    = round(result$runtime_min, 2),
         best_val_loss  = round(result$best_val_loss, 6),
@@ -611,12 +779,19 @@ run_cnn_tuning <- function(
       test_metrics
     )
     comparison <- dplyr::bind_rows(comparison, row)
-    safe_write_csv2(comparison, comparison_path)
+    write_comparison(comparison, comparison_path, comparison_rds)
 
     rm(result); gc()
   }
 
   # Rank by VALIDATION metrics only — test set is read-only diagnostic
+  #
+  # Two tables, because they answer different questions:
+  #   comparison_ranked.csv     every unit, as it was measured (the audit trail)
+  #   comparison_by_config.csv  one row per config, mean +/- sd (the decision)
+  # Ranking UNITS would let one lucky seed of a mediocre config outrank the
+  # steady mean of a good one -- which is precisely the mistake repetitions
+  # exist to prevent.
   n_ok <- sum(comparison$status == "success", na.rm = TRUE)
   if (nrow(comparison) > 0) {
     # Failed configs sort last (val_ccc is NA) and get no rank -- they are
@@ -630,6 +805,23 @@ run_cnn_tuning <- function(
       )
     safe_write_csv2(comparison,
                     file.path(run_dir, "comparison", "comparison_ranked.csv"))
+
+    # Aggregated view, written whenever there is anything to aggregate.
+    by_config <- summarise_resamples(comparison)
+    if (nrow(by_config) > 0L) {
+      safe_write_csv2(by_config,
+                      file.path(run_dir, "comparison", "comparison_by_config.csv"))
+      if (max(by_config$n_units) > 1L) {
+        message("\n-- Por config (media +/- sd sobre ", max(by_config$n_units),
+                " repeticao(oes)) --")
+        print(dplyr::slice_head(
+          dplyr::select(by_config, rank, config_id, n_units, n_folds, n_seeds,
+                        dplyr::starts_with("val_ccc"),
+                        dplyr::starts_with("val_mae"), n_failed),
+          n = 5), width = Inf)
+        print_noise_floor(seed_noise_floor(comparison))
+      }
+    }
 
     n_bad <- nrow(comparison) - n_ok
     if (n_bad > 0L) {
@@ -651,50 +843,140 @@ run_cnn_tuning <- function(
   invisible(list(comparison = comparison, run_dir = run_dir))
 }
 
-# ── DataLoader builders (internal) ────────────────────────────────────────────
+# ── Resampling: the same grid, once per fold ──────────────────────────────────
+#
+# WHY THE FOLD IS THE OUTER LOOP
+# The per-fold cache is the expensive object: scaling is fitted on that fold's
+# training rows and broadcast over every patch, which costs seconds of CPU and
+# gigabytes of RAM. Training one config is minutes. So the loop order is fold
+# outside, configs and seeds inside -- each cache is built once and amortised
+# over the whole grid. The intuitive order ("for each config, for each fold")
+# would rebuild every cache k times for nothing.
+#
+# Everything lands in ONE run directory: the fold is a column, not a folder.
+# That is what lets summarise_resamples() average over folds and seeds without
+# anybody having to stitch directories together afterwards.
 
-#' Build float tensors once per (split, window) and per split target.
+#' Run a tuning grid across every fold of a resampling plan.
 #'
-#' The patch arrays are large (the 7×7 train array is ~1.6 GB). Converting them
-#' to tensors once and reusing across all configs avoids recreating the same
-#' tensors on every grid row. Tensors live on CPU; batches are moved to the
-#' device inside the training/eval loops.
-#'
-#' @param patches      Named list: train, validation, test.
-#' @param window_sizes Integer vector of window sizes to cache (union over grid).
-#' @return Nested list: cache[[split]][["x_WxW_array"]] and cache[[split]]$y.
-.build_tensor_cache <- function(patches, window_sizes) {
-  splits <- c("train", "validation", "test")
-  cache  <- vector("list", length(splits))
-  names(cache) <- splits
-  for (split in splits) {
-    cache[[split]] <- list()
-    for (w in window_sizes) {
-      key <- paste0("x_", w, "x", w, "_array")
-      cache[[split]][[key]] <- torch::torch_tensor(
-        patches[[split]][[key]], dtype = torch::torch_float()
-      )
-    }
-    cache[[split]]$y <- torch::torch_tensor(
-      as.numeric(patches[[split]]$y), dtype = torch::torch_float()
-    )$view(c(-1L, 1L))
+#' @param tune_grid    Grid from make_tune_grid().
+#' @param store        Patch store from load_patch_store().
+#' @param points       Point values, aligned via align_points_to_meta().
+#' @param type_table   Predictor types, in channel order.
+#' @param plan         A fold_plan (holdout(), spatial_folds(), ...).
+#' @param n_seeds      Repetitions per config within each fold.
+#' @param release_store When TRUE (default) the raw patch tensors are dropped
+#'   after the LAST fold's cache is built. They are needed until then, since
+#'   each fold rescales them from raw.
+#' @param ...          Passed through to run_cnn_tuning() and train_one_cnn().
+#' @return list(comparison, by_config, run_dir, plan)
+run_cnn_resample <- function(tune_grid, store, points, type_table, plan,
+                             transform  = identity,
+                             output_dir = "./outputs/tuning",
+                             device,
+                             run_id     = format(Sys.time(), "%Y%m%d_%H%M%S"),
+                             base_seed  = 42L,
+                             n_seeds    = 1L,
+                             resume     = TRUE,
+                             release_store = TRUE,
+                             ...) {
+  stopifnot(inherits(plan, "fold_plan"))
+
+  # A broken plan costs a second to find here and the whole run to find later.
+  fold_sizes <- check_fold_plan(plan)
+  message("\n-- Plano de reamostragem --")
+  print(plan)
+
+  windows_needed <- sort(unique(unlist(tune_grid$window_sizes)))
+  run_dir <- file.path(output_dir, run_id)
+  create_output_dirs(file.path(run_dir, "comparison"))
+
+  # The plan is written BEFORE any training: results whose folds cannot be
+  # reconstructed are results that cannot be defended.
+  safe_save_rds(plan, file.path(run_dir, "fold_plan.rds"), compress = FALSE)
+  safe_write_csv2(dplyr::mutate(fold_sizes, method = plan$method),
+                  file.path(run_dir, "fold_sizes.csv"))
+  if (!is.null(plan$assignment)) {
+    safe_write_csv2(plan$assignment,
+                    file.path(run_dir, "fold_assignment.csv"))
   }
-  cache
+  if (!is.null(plan$buffer_dropped)) {
+    safe_write_csv2(plan$buffer_dropped,
+                    file.path(run_dir, "fold_buffer_dropped.csv"))
+  }
+
+  comparison <- tibble::tibble()
+  for (j in seq_along(plan$folds)) {
+    idx <- plan$folds[[j]]
+    message("\n", strrep("=", 78))
+    message("FOLD ", j, "/", plan$n_folds, " -- ",
+            paste(sprintf("%s=%d", names(idx), lengths(idx)), collapse = " | "))
+    message(strrep("=", 78))
+
+    # Scaling is fitted on THIS fold's training rows. That is the whole reason
+    # the patches are stored raw: a fold whose scaling came from another fold's
+    # training set has already seen data it should not have.
+    fold <- build_fold_cache(store, points, type_table, idx, windows_needed)
+    safe_write_csv2(fold$scaling,
+                    file.path(run_dir, sprintf("scaling_fold%02d.csv", j)))
+
+    if (release_store && j == length(plan$folds)) {
+      store$windows <- NULL
+      invisible(gc(verbose = FALSE))
+    }
+
+    res <- run_cnn_tuning(
+      tune_grid    = tune_grid,
+      n_channels   = store$n_channels,
+      cache        = fold$cache,
+      points_valid = fold_points_valid(store, idx),
+      transform    = transform,
+      output_dir   = output_dir,
+      device       = device,
+      run_id       = run_id,
+      base_seed    = base_seed,
+      n_seeds      = n_seeds,
+      fold         = j,
+      resume       = resume,
+      ...
+    )
+    comparison <- res$comparison
+
+    # Free this fold's tensors before the next one is built: two folds of
+    # scaled patches in memory at once is the one thing that does not fit.
+    rm(fold); invisible(gc(verbose = FALSE))
+  }
+
+  by_config <- summarise_resamples(comparison)
+  list(comparison = comparison, by_config = by_config,
+       run_dir = run_dir, plan = plan)
 }
 
-#' Build the four DataLoaders for one config from a prebuilt tensor cache.
+# ── DataLoader builders (internal) ────────────────────────────────────────────
+
+#' Build the four DataLoaders for one config from a prebuilt fold cache.
 #'
 #' tensor_dataset only references the cached tensors (no copy); dataloaders are
 #' cheap to (re)create per config, so only batch_size-dependent objects are
 #' rebuilt here.
+#'
+#' Window keys come from patch_window_key(), the same helper the patch store
+#' uses for its filenames – one naming rule, so a window can never be looked
+#' up under a name nothing ever wrote.
 .make_loaders_from_cache <- function(cache, cfg) {
   ws       <- cfg$window_sizes[[1]]
   bs_train <- cfg$batch_size
   bs_eval  <- min(bs_train * 4L, 2048L)
+  keys     <- patch_window_key(ws)
 
-  make_ds <- function(split) {
-    arrays <- lapply(ws, function(w) cache[[split]][[paste0("x_", w, "x", w, "_array")]])
-    do.call(torch::tensor_dataset, c(arrays, list(cache[[split]]$y)))
+  make_ds <- function(role) {
+    arrays <- lapply(keys, function(k) cache[[role]][[k]])
+    gone   <- vapply(arrays, is.null, logical(1))
+    if (any(gone)) {
+      stop("Cache for role '", role, "' is missing window(s): ",
+           paste(keys[gone], collapse = ", "), call. = FALSE)
+    }
+    do.call(torch::tensor_dataset, c(arrays, list(cache[[role]]$y)))
   }
 
   train_ds <- make_ds("train")
@@ -703,19 +985,12 @@ run_cnn_tuning <- function(
 
   # drop_last = TRUE on the training loader: prevents a final batch of size 1,
   # which would make BatchNorm fail (variance of a single sample). Eval loaders
-  # keep all samples (no BatchNorm update in eval mode).
+  # keep every sample and never shuffle – predict_loader() depends on that,
+  # since it pairs loader row i with metadata row i.
   list(
     train      = torch::dataloader(train_ds, batch_size = bs_train, shuffle = TRUE, drop_last = TRUE),
     train_eval = torch::dataloader(train_ds, batch_size = bs_eval,  shuffle = FALSE),
     validation = torch::dataloader(val_ds,   batch_size = bs_eval,  shuffle = FALSE),
     test       = torch::dataloader(test_ds,  batch_size = bs_eval,  shuffle = FALSE)
   )
-}
-
-#' Convenience wrapper: build loaders for a single config directly from patches.
-#' Used by the final-model script (single config). Caches only the windows that
-#' config needs. `device` is kept for backward compatibility (tensors are CPU).
-.make_loaders <- function(patches, cfg, device = NULL) {
-  cache <- .build_tensor_cache(patches, cfg$window_sizes[[1]])
-  .make_loaders_from_cache(cache, cfg)
 }

@@ -1,0 +1,263 @@
+# Pipeline diagnostics
+#
+# Checks that answer questions the rest of the pipeline cannot answer about
+# itself. Three of the four exist because a failure they would have caught
+# actually happened here.
+#
+# The unit tests (tests/) prove the CODE is right, on synthetic data, in
+# seconds. These prove THIS RUN is right, on the real data. Different
+# questions, both cheap, and neither substitutes for the other.
+
+# ── 1. cross-check: patch centres against the point table ─────────────────────
+#
+# The strongest check in this file, and the one nothing was doing.
+#
+# The centre cell of every patch MUST equal the value the point table holds for
+# that predictor at that point -- they are the same cell of the same raster,
+# reached by two completely independent routes:
+#
+#   point table : terra::extract() on a SpatVector of coordinates
+#   patch store : cellFromXY() -> row/col -> patch_cell_index() -> array
+#
+# A CRS mismatch, a row/col swap, an off-by-one, a channel reordering, a stale
+# raster directory -- any of them breaks this equality. Synthetic tests prove
+# the index algebra is correct; this proves the algebra was applied to the
+# right place in the real raster.
+#
+# Cost: reads the SMALLEST window only (3x3 is ~0.5 GB), since the centre is
+# the same cell in every window.
+
+#' Compare patch centres with the point-table values.
+#'
+#' @param patch_dir  Patch store directory.
+#' @param points     Point table, already aligned to the store's meta (see
+#'   align_points_to_meta()).
+#' @param predictors Channel names, in channel order.
+#' @param window     Which window to read (default: the smallest available).
+#' @param tol        Absolute tolerance. Both routes are double precision doing
+#'   the same arithmetic, so agreement should be exact; the tolerance exists
+#'   only to absorb CSV round-tripping of the point table.
+#' @return list(ok, n_points, n_channels, n_mismatch, worst, by_channel)
+check_patch_centres <- function(patch_dir, points, predictors,
+                                window = NULL, tol = 1e-6) {
+
+  manifest <- readRDS(file.path(patch_dir, "patch_manifest.rds"))
+  available <- as.integer(trimws(strsplit(manifest$windows_extracted[1], ",")[[1]]))
+  if (is.null(window)) window <- min(available)
+
+  arr <- readRDS(patch_window_path(patch_dir, window))
+  d   <- dim(arr)
+  if (d[1] != nrow(points)) {
+    stop("Patch store has ", d[1], " points but the point table has ",
+         nrow(points), " -- align them first.", call. = FALSE)
+  }
+  if (d[2] != length(predictors)) {
+    stop("Patch store has ", d[2], " channels but ", length(predictors),
+         " predictor names were given.", call. = FALSE)
+  }
+
+  centre <- (window + 1L) %/% 2L
+  got    <- arr[, , centre, centre, drop = TRUE]   # [n_points, n_channels]
+  rm(arr); gc(verbose = FALSE)
+
+  want <- as.matrix(points[, predictors, drop = FALSE])
+
+  diff_abs <- abs(got - want)
+  diff_abs[is.na(got) & is.na(want)] <- 0          # NA on both sides agrees
+  bad <- !is.na(diff_abs) & diff_abs > tol
+  bad[is.na(got) != is.na(want)] <- TRUE           # NA on one side only
+
+  by_channel <- tibble::tibble(
+    predictor  = predictors,
+    n_mismatch = as.integer(colSums(bad)),
+    worst_diff = apply(diff_abs, 2, function(z) if (all(is.na(z))) NA_real_
+                       else max(z, na.rm = TRUE))
+  ) %>%
+    dplyr::filter(n_mismatch > 0L) %>%
+    dplyr::arrange(dplyr::desc(n_mismatch))
+
+  list(
+    ok         = sum(bad) == 0L,
+    window     = window,
+    n_points   = d[1],
+    n_channels = d[2],
+    n_cells    = prod(dim(bad)),
+    n_mismatch = sum(bad),
+    worst      = suppressWarnings(max(diff_abs, na.rm = TRUE)),
+    by_channel = by_channel
+  )
+}
+
+# ── 2. spatial overlap between splits ─────────────────────────────────────────
+#
+# Makes visible, every run, the finding that invalidated the first round of
+# results: a random split over spatially clustered profiles puts 33% of the
+# test set in the SAME 250 m pixel as a training profile. Those test points
+# share their input patch with training data, bit for bit.
+#
+# Computed on raster row/col, so it costs one pass and no extra package:
+#   • same cell          -> identical 3x3 patch, the unambiguous case
+#   • within half a window -> patches physically overlap
+#
+# Reported, never failed on. A random split is a legitimate choice as long as
+# it is a CHOSEN one -- what is not acceptable is not knowing.
+
+#' Quantify how much of one split shares raster cells with another.
+#'
+#' @param row_ids,col_ids Integer raster row/col of every point.
+#' @param split           Character vector of split labels, same length.
+#' @param windows         Window sizes to report overlap for.
+#' @param reference       Split whose points count as "seen in training".
+#' @return A tibble: one row per (split, criterion).
+spatial_overlap_report <- function(row_ids, col_ids, split,
+                                   windows = c(3L, 9L, 15L),
+                                   reference = "train") {
+  stopifnot(length(row_ids) == length(col_ids),
+            length(row_ids) == length(split))
+
+  is_ref <- split == reference
+  if (!any(is_ref)) {
+    stop("No points in the reference split '", reference, "'.", call. = FALSE)
+  }
+
+  # Exact-cell collision: a hash of (row, col) is enough and is O(n).
+  ref_cell <- unique(paste(row_ids[is_ref], col_ids[is_ref], sep = "_"))
+
+  out <- list()
+  for (s in setdiff(unique(split), reference)) {
+    sel <- split == s
+    n_s <- sum(sel)
+
+    same <- sum(paste(row_ids[sel], col_ids[sel], sep = "_") %in% ref_cell)
+    out[[length(out) + 1L]] <- tibble::tibble(
+      split = s, criterion = "same raster cell", window = NA_integer_,
+      n = same, pct = round(100 * same / n_s, 2), n_split = n_s)
+
+    # Window overlap, still O(n): bucket by half-window and test the 9
+    # neighbouring buckets. Slightly conservative (a bucket is a square, not a
+    # disc), which is the right direction for a leakage warning.
+    for (w in windows) {
+      hw <- max(1L, (w - 1L) %/% 2L)
+      rb <- row_ids %/% hw
+      cb <- col_ids %/% hw
+      ref_bucket <- unique(paste(rb[is_ref], cb[is_ref], sep = "_"))
+
+      hit <- rep(FALSE, n_s)
+      for (dr in -1:1) for (dc in -1:1) {
+        hit <- hit | paste(rb[sel] + dr, cb[sel] + dc, sep = "_") %in% ref_bucket
+      }
+      out[[length(out) + 1L]] <- tibble::tibble(
+        split = s, criterion = paste0("patches overlap (", w, "x", w, ")"),
+        window = w, n = sum(hit), pct = round(100 * sum(hit) / n_s, 2),
+        n_split = n_s)
+    }
+  }
+  dplyr::bind_rows(out)
+}
+
+# ── 3. run snapshots: what changed since last time? ───────────────────────────
+#
+# In a refactor the question asked after every run is "did anything move?", and
+# answering it meant scrolling back through old output by hand. A snapshot per
+# run turns that into a diff.
+#
+# "Everything identical" is the result you usually want, and it is the one that
+# is hardest to confirm by eye.
+
+#' Record a named set of scalar values for this run.
+#'
+#' @param values  Named list/vector of scalars (numeric or character).
+#' @param dir     Where snapshots live.
+#' @param label   Snapshot name; defaults to a timestamp.
+write_run_snapshot <- function(values, dir, label = NULL) {
+  dir.create(dir, recursive = TRUE, showWarnings = FALSE)
+  if (is.null(label)) label <- format(Sys.time(), "%Y%m%d_%H%M%S")
+
+  snap <- tibble::tibble(
+    key   = names(values),
+    value = vapply(values, function(z) as.character(z[1]), character(1))
+  )
+  f <- file.path(dir, paste0("snapshot_", label, ".csv"))
+  readr::write_csv2(snap, f)
+  invisible(f)
+}
+
+# Snapshots sao comparados como TEXTO, entao a leitura tem que devolver texto.
+#
+# Sem isto, read_csv2() adivinha o tipo: com locale ";"/"," ele le o PONTO de
+# "31.190645" como separador de MILHAR e devolve 31190645. O valor gravado e o
+# relido passam a diferir por formatacao, e o diff acusa mudanca onde nada
+# mudou -- exatamente o ruido que este mecanismo existe para eliminar.
+.read_snapshot <- function(path) {
+  suppressMessages(
+    readr::read_csv2(path,
+                     col_types = readr::cols(.default = readr::col_character()))
+  )
+}
+
+#' Compare this run's values with the most recent earlier snapshot.
+#'
+#' @return list(has_previous, previous_file, diff) where `diff` is a tibble of
+#'   every key with old value, new value and a status: `=`, `changed`, `new`,
+#'   `gone`.
+compare_run_snapshot <- function(values, dir, exclude = character(0)) {
+  prev_files <- sort(list.files(dir, pattern = "^snapshot_.*\\.csv$",
+                                full.names = TRUE), decreasing = TRUE)
+  now <- tibble::tibble(
+    key = names(values),
+    new = vapply(values, function(z) as.character(z[1]), character(1))
+  )
+
+  if (length(prev_files) == 0L) {
+    return(list(has_previous = FALSE, previous_file = NA_character_,
+                diff = dplyr::mutate(now, old = NA_character_,
+                                     status = "new")))
+  }
+
+  prev <- .read_snapshot(prev_files[1])
+  d <- dplyr::full_join(
+    dplyr::rename(prev, old = value), now, by = "key"
+  ) %>%
+    dplyr::mutate(
+      status = dplyr::case_when(
+        is.na(old)  ~ "new",
+        is.na(new)  ~ "gone",
+        old == new  ~ "=",
+        TRUE        ~ "changed"
+      )
+    ) %>%
+    dplyr::filter(!key %in% exclude) %>%
+    dplyr::select(key, old, new, status)
+
+  list(has_previous = TRUE, previous_file = basename(prev_files[1]), diff = d)
+}
+
+#' Print a snapshot comparison, changes first.
+# cat(), nao message(): message() escreve em stderr e print() em stdout, e no
+# console do RStudio os dois se juntam na MESMA linha ("...mudaram:# A tibble").
+# Saida de relatorio tem que sair toda pelo mesmo canal para manter a ordem.
+print_snapshot_diff <- function(cmp, n_show = 40L) {
+  if (!cmp$has_previous) {
+    cat("  Sem snapshot anterior -- este vira a referencia.
+")
+    return(invisible(NULL))
+  }
+  cat("  Comparando com: ", cmp$previous_file, "
+", sep = "")
+
+  changed <- dplyr::filter(cmp$diff, status != "=")
+  if (nrow(changed) == 0L) {
+    cat("  TUDO IDENTICO ao run anterior (", nrow(cmp$diff), " valores).
+",
+        sep = "")
+  } else {
+    cat("  ", nrow(changed), " de ", nrow(cmp$diff), " valores mudaram:
+",
+        sep = "")
+    print(dplyr::slice_head(changed, n = n_show), n = Inf, width = Inf)
+    unchanged <- sum(cmp$diff$status == "=")
+    if (unchanged > 0L) cat("  (", unchanged, " inalterado(s))
+", sep = "")
+  }
+  invisible(changed)
+}

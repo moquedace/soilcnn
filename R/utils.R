@@ -18,6 +18,17 @@ safe_write_csv2 <- function(data, path) {
 }
 
 #' Save an R object as RDS safely.
+# Par de leitura do safe_write_csv2.
+#
+# read_csv2() emite "Using ',' as decimal and '.' as grouping mark" a CADA
+# chamada. Num script que le 22 arquivos isso vira 22 linhas de ruido
+# intercaladas no meio do relatorio -- o aviso e sobre o locale que NOS
+# escolhemos, entao nao informa nada. Silenciado aqui, uma vez, em vez de
+# repetir suppressMessages() em cada chamada do pipeline.
+safe_read_csv2 <- function(path, ...) {
+  suppressMessages(readr::read_csv2(path, show_col_types = FALSE, ...))
+}
+
 safe_save_rds <- function(object, path, compress = FALSE) {
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   if (file.exists(path)) {
@@ -31,7 +42,39 @@ safe_save_rds <- function(object, path, compress = FALSE) {
 }
 
 #' Save a torch state dict or model safely.
+#'
+#' Guards against a real and nasty failure mode: torch_save() in R torch 0.17.0
+#' breaks above 2^31 bytes. Measured here -- 2,147,479,648 bytes writes fine,
+#' 2,147,487,648 bytes kills the session, and in one case it produced a file of
+#' the CORRECT SIZE whose tail was 4.3 GB of zeros. Silent corruption that
+#' passes a "no non-finite values" check, because zero is finite.
+#'
+#' Model state dicts are far below this (tens of MB), so the guard should never
+#' fire in normal use -- but if it ever does, it must be loud, because the
+#' alternative is a plausible-looking wrong result. For anything large, store
+#' plain R arrays with saveRDS (see save_patch_window() in R/dataset.R).
 safe_torch_save <- function(object, path) {
+  .torch_save_limit <- 2^31
+
+  n_bytes <- tryCatch({
+    sizes <- vapply(
+      if (inherits(object, "torch_tensor")) list(object) else as.list(object),
+      function(z) if (inherits(z, "torch_tensor"))
+        prod(as.numeric(z$shape)) * 4 else 0,
+      numeric(1)
+    )
+    max(sizes, 0)
+  }, error = function(e) 0)
+
+  if (n_bytes >= .torch_save_limit) {
+    stop("Refusing to torch_save(): a tensor of ",
+         format(n_bytes, big.mark = ","), " bytes exceeds the 2^31 limit of ",
+         "torch_save() in this torch build, which corrupts silently rather ",
+         "than erroring.
+Use saveRDS on a plain R array instead.",
+         call. = FALSE)
+  }
+
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   if (file.exists(path)) {
     removed <- try(file.remove(path), silent = TRUE)
@@ -51,6 +94,48 @@ safe_torch_save <- function(object, path) {
       "_", format(Sys.time(), "%Y%m%d_%H%M%S"),
       ".", ext
     )
+  )
+}
+
+# ── the point table contract ───────────────────────────────────────────────
+#
+# The framework expects a fixed set of column names rather than an argument per
+# column. Eight `*_col =` arguments would spread the same complexity across
+# every signature in the package; one documented, validated contract keeps it
+# in one place. What must never happen is a user DISCOVERING the contract from
+# a cryptic error deep inside a training loop -- hence check_point_contract().
+#
+# It lives HERE, in the foundation file every entry point loads first, because
+# predict_loader() (train_cnn.R) and the patch store (dataset.R) both need it.
+# Putting it in either of those made the other fail to find it under source().
+#
+# Rename your columns to these before calling. They are the only names the
+# framework hardcodes about your data.
+
+.point_contract <- c(
+  profile_id       = "stable identifier of the observation (a site, a profile)",
+  sample_id        = "integer row key, used to align tables to each other",
+  target_native    = "target in its native units -- what metrics are reported in",
+  target_transform = "target in training space (e.g. log1p of the above)"
+)
+
+#' Check a table against the point contract, with an actionable error.
+#'
+#' @param x    A data frame / tibble.
+#' @param need Which contract columns are required here.
+#' @param what Label used in the error message.
+check_point_contract <- function(x, need = names(.point_contract),
+                                 what = "points") {
+  need <- intersect(need, names(.point_contract))
+  gone <- need[!need %in% names(x)]
+  if (length(gone) == 0L) return(invisible(TRUE))
+
+  stop(
+    what, " is missing required column(s): ", paste(gone, collapse = ", "),
+    "\n\nThis framework expects fixed column names:\n",
+    paste(sprintf("  %-17s %s", need, .point_contract[need]), collapse = "\n"),
+    "\n\nRename the columns in your table to match before calling.",
+    call. = FALSE
   )
 }
 
