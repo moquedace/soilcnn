@@ -27,6 +27,7 @@ project_root <- "D:/usuario_armazenamento/cassio/R/deep_learning_caret"
 setwd(project_root)
 
 source(file.path(project_root, "R", "utils.R"))
+source(file.path(project_root, "R", "patches.R"))
 source(file.path(project_root, "R", "metrics.R"))
 source(file.path(project_root, "R", "cnn_architecture.R"))
 source(file.path(project_root, "R", "tune_grid.R"))
@@ -415,13 +416,12 @@ models <- purrr::map(seq_len(n_seeds), function(i) {
 # build_patches_multi recebe center_col LOCAL (1-based dentro da strip de leitura),
 # nao a coluna global. strip_values tem strip_ncol colunas (nao r_ncol).
 #
-# A versao anterior indexava strip_values[cells, ] DUAS vezes por branch de
-# janela: uma vez (para todo o chunk) so para checar is.finite, e de novo
-# (para o subconjunto valido) para montar o array final. Essa reindexacao era
-# o maior custo de RAM/CPU do chunk. Agora a indexacao acontece uma unica vez
-# por branch e o resultado (vals_full) e reaproveitado tanto para a checagem
-# de validade quanto para montar o array final (so reshape/slice, sem copiar
-# de strip_values de novo).
+# A geometria (indexacao de celula e montagem do array) vive em R/patches.R,
+# compartilhada com a extracao de treino do 02 -- e a unica implementacao, para
+# que os dois caminhos nao possam divergir em silencio. A regra de custo segue
+# valendo: strip_values e indexado UMA vez por branch de janela, e o resultado
+# alimenta tanto a checagem de validade quanto a montagem final (so reshape e
+# slice, sem recopiar de strip_values).
 build_patches_multi <- function(center_row, center_col_local, strip_values,
                                 read_row_start, strip_ncol_arg, n_ch, window_sizes) {
   n         <- length(center_row)
@@ -430,46 +430,23 @@ build_patches_multi <- function(center_row, center_col_local, strip_values,
   per_win      <- vector("list", length(window_sizes))
   valid_common <- rep(TRUE, n)
 
+  # Stage 1: gather each window ONCE. patch_gather() indexes strip_values a
+  # single time and reports validity from that same pass, so the array is
+  # built later by reshape/slice only -- never by re-indexing the strip.
   for (k in seq_along(window_sizes)) {
-    w    <- window_sizes[k]
-    half <- (w - 1L) %/% 2L
-    offsets <- expand.grid(dr = (-half):half, dc = (-half):half)
-    n_pos   <- nrow(offsets)
-
-    cell_mat <- matrix(0L, nrow = n, ncol = n_pos)
-    for (j in seq_len(n_pos)) {
-      cell_mat[, j] <- (row_local + offsets$dr[j] - 1L) * strip_ncol_arg +
-                       (center_col_local + offsets$dc[j])
-    }
-
-    vals_full <- strip_values[as.vector(t(cell_mat)), , drop = FALSE]
-    row_finite <- rowSums(!is.finite(vals_full)) == 0
-    valid_w      <- colSums(matrix(row_finite, nrow = n_pos, ncol = n)) == n_pos
-    valid_common <- valid_common & valid_w
-
-    # Reshape para (n_pos, n, n_ch) sem reindexar strip_values -- so muda o
-    # atributo dim (barato). Ordem de as.vector(t(cell_mat)) ja e point-major
-    # em blocos de n_pos, entao bate exatamente com esse layout.
-    dim(vals_full) <- c(n_pos, n, n_ch)
-    per_win[[k]] <- list(w = w, n_pos = n_pos, vals_full = vals_full)
+    cm <- patch_cell_index(row_local, center_col_local, strip_ncol_arg,
+                           window_sizes[k])
+    g  <- patch_gather(strip_values, cm, n_ch)
+    valid_common <- valid_common & g$valid
+    per_win[[k]] <- g$values
   }
 
-  arrays <- vector("list", length(window_sizes))
-  if (!any(valid_common)) {
-    for (k in seq_along(window_sizes)) {
-      arrays[[k]] <- array(0, dim = c(0L, n_ch, per_win[[k]]$w, per_win[[k]]$w))
-    }
-    return(list(arrays = arrays, valid = valid_common))
-  }
-
+  # Stage 2: only now, with validity intersected across ALL windows, cut the
+  # arrays to the surviving centres.
   valid_pos <- which(valid_common)
-  for (k in seq_along(window_sizes)) {
-    w     <- per_win[[k]]$w
-    n_pos <- per_win[[k]]$n_pos
-    step1 <- per_win[[k]]$vals_full[, valid_pos, , drop = FALSE]
-    step2 <- aperm(step1, c(2L, 3L, 1L))
-    arrays[[k]] <- array(step2, dim = c(length(valid_pos), n_ch, w, w))
-  }
+  arrays <- lapply(seq_along(window_sizes), function(k) {
+    patch_finish(per_win[[k]], valid_pos, n_ch, window_sizes[k])
+  })
 
   list(arrays = arrays, valid = valid_common)
 }

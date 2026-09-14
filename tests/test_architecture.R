@@ -7,14 +7,38 @@
 #   4. build_cnn_from_config reads embed_pool from a config row
 #   5. backward compatibility: a config WITHOUT embed_pool defaults to "flatten"
 #
-# Run: Rscript tests/test_architecture.R    (no GPU needed; runs on CPU)
+# Run: source("tests/test_architecture.R")   (no GPU needed; runs on CPU)
 
 suppressMessages(library(torch))
 
-args      <- commandArgs(trailingOnly = FALSE)
-file_arg  <- sub("^--file=", "", args[grep("^--file=", args)])
-script_dir <- if (length(file_arg)) dirname(normalizePath(file_arg)) else getwd()
-root      <- normalizePath(file.path(script_dir, ".."))
+# -- project root: works under source() in the console AND under Rscript ------
+# commandArgs("--file=") is empty when the file is source()d, so fall back to
+# the frame that source() sets up, then to getwd(). Anchored on a file that
+# only exists at the project root, so a wrong guess fails loudly here instead
+# of silently sourcing nothing.
+
+root <- (function() {
+  cand <- character(0)
+  a <- commandArgs(trailingOnly = FALSE)
+  f <- sub("^--file=", "", a[grep("^--file=", a)])
+  if (length(f)) cand <- c(cand, dirname(normalizePath(f[1], mustWork = FALSE)))
+  for (i in seq_len(sys.nframe())) {
+    of <- sys.frame(i)$ofile
+    if (!is.null(of) && is.character(of)) {
+      cand <- c(cand, dirname(normalizePath(of, mustWork = FALSE)))
+    }
+  }
+  cand <- c(cand, getwd())
+  for (d in cand) {
+    for (up in c(".", "..")) {
+      r <- normalizePath(file.path(d, up), winslash = "/", mustWork = FALSE)
+      if (file.exists(file.path(r, "R", "cnn_architecture.R"))) return(r)
+    }
+  }
+  stop("Project root not found. setwd() to the deep_learning_caret root, ",
+       "or source() this file with its full path.", call. = FALSE)
+})()
+source(file.path(root, "tests", "helper.R"))
 source(file.path(root, "R", "utils.R"))
 source(file.path(root, "R", "cnn_architecture.R"))
 source(file.path(root, "R", "tune_grid.R"))
@@ -74,8 +98,4 @@ results <- c(
   build_cnn_reads_pool   = ok_cfg,
   backcompat_flatten     = ok_backcompat
 )
-for (nm in names(results)) cat(sprintf("  [%s] %s\n", if (results[nm]) "PASS" else "FAIL", nm))
-
-if (all(results)) { cat("test_architecture: ALL PASS\n") } else {
-  cat("test_architecture: FAILURES\n"); quit(status = 1L)
-}
+.report(results, "test_architecture")

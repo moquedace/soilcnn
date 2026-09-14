@@ -7,14 +7,38 @@
 #   4. BOTH branches receive the SAME symmetry per sample (dual-branch consistency)
 #   5. symmetries are drawn PER SAMPLE (not one per batch)
 #
-# Run: Rscript tests/test_augmentation.R    (no GPU needed; runs on CPU)
+# Run: source("tests/test_augmentation.R")   (no GPU needed; runs on CPU)
 
 suppressMessages(library(torch))
 
-args      <- commandArgs(trailingOnly = FALSE)
-file_arg  <- sub("^--file=", "", args[grep("^--file=", args)])
-script_dir <- if (length(file_arg)) dirname(normalizePath(file_arg)) else getwd()
-root      <- normalizePath(file.path(script_dir, ".."))
+# -- project root: works under source() in the console AND under Rscript ------
+# commandArgs("--file=") is empty when the file is source()d, so fall back to
+# the frame that source() sets up, then to getwd(). Anchored on a file that
+# only exists at the project root, so a wrong guess fails loudly here instead
+# of silently sourcing nothing.
+
+root <- (function() {
+  cand <- character(0)
+  a <- commandArgs(trailingOnly = FALSE)
+  f <- sub("^--file=", "", a[grep("^--file=", a)])
+  if (length(f)) cand <- c(cand, dirname(normalizePath(f[1], mustWork = FALSE)))
+  for (i in seq_len(sys.nframe())) {
+    of <- sys.frame(i)$ofile
+    if (!is.null(of) && is.character(of)) {
+      cand <- c(cand, dirname(normalizePath(of, mustWork = FALSE)))
+    }
+  }
+  cand <- c(cand, getwd())
+  for (d in cand) {
+    for (up in c(".", "..")) {
+      r <- normalizePath(file.path(d, up), winslash = "/", mustWork = FALSE)
+      if (file.exists(file.path(r, "R", "cnn_architecture.R"))) return(r)
+    }
+  }
+  stop("Project root not found. setwd() to the deep_learning_caret root, ",
+       "or source() this file with its full path.", call. = FALSE)
+})()
+source(file.path(root, "tests", "helper.R"))
 source(file.path(root, "R", "utils.R"))
 
 set.seed(1); torch_manual_seed(1)
@@ -61,9 +85,5 @@ results <- c(
   cross_branch_same_k = ok_cross,
   per_sample_sampling = n_distinct_k > 1
 )
-for (nm in names(results)) cat(sprintf("  [%s] %s\n", if (results[nm]) "PASS" else "FAIL", nm))
 cat(sprintf("  (%d distinct symmetries across %d samples)\n", n_distinct_k, N))
-
-if (all(results)) { cat("test_augmentation: ALL PASS\n") } else {
-  cat("test_augmentation: FAILURES\n"); quit(status = 1L)
-}
+.report(results, "test_augmentation")

@@ -22,7 +22,7 @@ target_label <- "soc_stock_0_5cm"
 target_col <- "soc_stock_ton_ha_0_5cm"
 target_unit <- "ton_ha"
 
-target_file <- "./outputs/soc_stock_layers_qc/wosis_profile_soc_stock_spline_clean_p999_zero_spike.gpkg"
+target_file <- "./data/raw/soc_stock_layers_qc/wosis_profile_soc_stock_spline_clean_p999_zero_spike.gpkg"
 predictor_dir <- "../predictors_resolution_20000m"
 
 train_fraction <- 0.70

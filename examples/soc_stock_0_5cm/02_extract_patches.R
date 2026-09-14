@@ -22,6 +22,7 @@ project_root <- "D:/usuario_armazenamento/cassio/R/deep_learning_caret"
 setwd(project_root)
 
 source(file.path(project_root, "R", "utils.R"))
+source(file.path(project_root, "R", "patches.R"))
 
 # ── Settings ──────────────────────────────────────────────────────────────────
 
@@ -244,26 +245,11 @@ if (patch_array_gb > 25) {
   vec
 }
 
-# ── Helper: build cell-index matrix for a window ──────────────────────────────
+# ── Helper: cell indexing ─────────────────────────────────────────────────────
 #
-# Returns an (n_profiles × n_pos) integer matrix of LINEAR cell indices within
-# a band strip (row-major, local coordinates).
-# local_rows: 1-based row positions within the strip.
-# col_ids:    global (unchanged across strips).
-
-.cell_index_mat <- function(local_rows, col_ids, n_cols_rast, w) {
-  half_w  <- (w - 1L) / 2L
-  n       <- length(local_rows)
-  offsets <- expand.grid(dr = (-half_w):half_w, dc = (-half_w):half_w)
-  n_pos   <- nrow(offsets)
-
-  cm <- matrix(0L, nrow = n, ncol = n_pos)
-  for (j in seq_len(n_pos)) {
-    cm[, j] <- (local_rows + offsets$dr[j] - 1L) * n_cols_rast +
-                col_ids + offsets$dc[j]
-  }
-  cm
-}
+# patch_cell_index() lives in R/patches.R — the single implementation shared
+# with the prediction side (05). Do not re-derive it here: the two paths
+# drifting apart is exactly the failure tests/test_patch_geometry.R guards.
 
 # ── Process one split (band-by-band chunked) ───────────────────────────────────
 #
@@ -345,10 +331,9 @@ process_split <- function(scaled_df, role,
     chunk_cols <- col_ids[chunk_idx]
 
     # Pre-compute cell index matrices once per spatial chunk (reused for every band)
-    cell_mats <- lapply(window_sizes, .cell_index_mat,
-                        local_rows = local_rows,
-                        col_ids    = chunk_cols,
-                        n_cols_rast = n_cols_rast)
+    cell_mats <- lapply(window_sizes, function(w) {
+      patch_cell_index(local_rows, chunk_cols, n_cols_rast, w)
+    })
     names(cell_mats) <- paste0("x_", window_sizes, "x", window_sizes, "_array")
 
     # ── Band loop: read one band at a time ────────────────────────────────────
@@ -363,31 +348,24 @@ process_split <- function(scaled_df, role,
       band_vec <- .scale_band_vec(band_vec, i, predictor_scaling,
                                    temperature_min_valid_celsius)
 
-      # For each window: vectorised NA check + patch storage
+      # For each window: one gather per (band, window). patch_band_assemble()
+      # returns the [n_in, w, w] array AND the per-profile validity from the
+      # same indexing pass — splitting them would double the cost of the
+      # hottest loop in the pipeline.
       for (wi in seq_along(window_sizes)) {
-        w    <- window_sizes[wi]
-        key  <- paste0("x_", w, "x", w, "_array")
-        cm   <- cell_mats[[key]]      # n_in × n_pos
-        n_pos <- w * w
+        w   <- window_sizes[wi]
+        key <- paste0("x_", w, "x", w, "_array")
 
-        all_idx  <- as.vector(t(cm))          # n_in × n_pos → flat
-        vals_vec <- band_vec[all_idx]         # extract all patch cells at once
+        pb <- patch_band_assemble(band_vec, cell_mats[[key]], w)
 
-        # NA check: mark profiles with any non-finite cell as invalid
-        if (anyNA(vals_vec) || !all(is.finite(vals_vec))) {
-          bad <- colSums(!is.finite(
-            matrix(vals_vec, nrow = n_pos, ncol = n_in)
-          )) > 0L
-          valid_common[chunk_idx[bad]] <- FALSE
+        # Mark profiles with any non-finite cell in this band as invalid
+        if (!all(pb$valid)) {
+          valid_common[chunk_idx[!pb$valid]] <- FALSE
         }
 
         # Store band i for all profiles in chunk.
         # Profiles later found invalid will be trimmed in Phase 4.
-        # Reshape: flat n_in*n_pos → [w, w, n_in] → permute → [n_in, w, w]
-        patch_list[[key]][chunk_idx, i, , ] <- aperm(
-          array(vals_vec, dim = c(w, w, n_in)),
-          c(3L, 1L, 2L)
-        )
+        patch_list[[key]][chunk_idx, i, , ] <- pb$array
       }
 
       rm(band_vec)

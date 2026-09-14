@@ -19,6 +19,27 @@
 #   cnn_branch          – full branch: stack of blocks → SE → flatten → embedding
 #   dual_branch_cnn     – two branches + gate + regression head
 
+# ── valid option sets ─────────────────────────────────────────────────────────
+# Checked at CONSTRUCTION, not at forward time. An unknown gate_type used to
+# fall through switch() to NULL, skip building gate_net, and only blow up in
+# forward() -- after the model was built and, in a grid, minutes of training
+# later. An unknown embed_pool was worse: identical(embed_pool, "gap") sent
+# every typo silently down the "flatten" path.
+
+.valid_gate_types  <- c("vector_featurewise", "scalar_per_sample",
+                        "no_gate_concat")
+.valid_embed_pools <- c("flatten", "gap")
+
+.check_choice <- function(value, choices, what) {
+  if (length(value) != 1L || is.na(value) || !value %in% choices) {
+    stop(what, " must be one of: ", paste(choices, collapse = ", "),
+         " -- got ", if (length(value) == 1L) paste0("'", value, "'") else
+                     paste0("length ", length(value)),
+         call. = FALSE)
+  }
+  as.character(value)
+}
+
 # ── conv_block ────────────────────────────────────────────────────────────────
 # A plain convolutional block: Conv2d → BatchNorm → Activation.
 # kernel_size = 3, padding = 1 preserves spatial dimensions.
@@ -109,6 +130,8 @@ cnn_branch <- torch::nn_module(
                         spatial_dropout = 0.03,
                         embed_dropout   = 0.0,
                         embed_pool      = "flatten") {
+
+    embed_pool <- .check_choice(embed_pool, .valid_embed_pools, "embed_pool")
 
     n_blocks   <- length(conv_channels)
     block_fn   <- if (use_residual) residual_conv_block else conv_block
@@ -219,6 +242,14 @@ dual_branch_cnn <- torch::nn_module(
 
     n_branches <- length(window_sizes)
     if (!n_branches %in% c(1L, 2L)) stop("window_sizes must have length 1 or 2.")
+
+    embed_pool <- .check_choice(embed_pool, .valid_embed_pools, "embed_pool")
+    # gate_type is ignored for a single branch, so only validate when it is
+    # actually going to be used -- an old single-window config may carry any
+    # placeholder there.
+    if (n_branches == 2L) {
+      gate_type <- .check_choice(gate_type, .valid_gate_types, "gate_type")
+    }
 
     self$n_branches <- n_branches
     self$gate_type  <- gate_type
@@ -342,11 +373,15 @@ dual_branch_cnn <- torch::nn_module(
 
 build_cnn_from_config <- function(cfg, n_channels) {
   # embed_pool is a newer field; tolerate older grids/configs that lack it
-  # (a model trained before this option existed used "flatten").
-  embed_pool <- if (is.null(cfg$embed_pool) || is.na(cfg$embed_pool[1])) {
+  # (a model trained before this option existed used "flatten"). Use [[ ]] and
+  # a names() check rather than $: on a tibble, cfg$missing_col returns NULL
+  # *and* emits "Unknown or uninitialised column", which is noise on a path
+  # that is deliberately optional.
+  ep <- if ("embed_pool" %in% names(cfg)) cfg[["embed_pool"]] else NULL
+  embed_pool <- if (is.null(ep) || length(ep) == 0L || is.na(ep[1])) {
     "flatten"
   } else {
-    as.character(cfg$embed_pool[1])
+    as.character(ep[1])
   }
   dual_branch_cnn(
     n_channels      = n_channels,

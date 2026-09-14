@@ -17,8 +17,17 @@
 #' @param transform    Inverse transform function applied to predictions.
 #'   Default: identity (no transform). For log1p training use expm1.
 #' @param device       torch_device.
+#' @param clamp        Length-2 numeric, the plausible range of the target in
+#'   NATIVE units, applied after `transform`. Default c(0, Inf) suits a stock
+#'   or concentration, which cannot be negative. Pass c(-Inf, Inf) for a target
+#'   that legitimately goes negative (a centred variable, a log-ratio, a
+#'   temperature) -- clamping one of those at zero destroys half the
+#'   predictions silently, and the metrics still come out looking plausible.
 predict_loader <- function(model, data_loader, points_valid, dataset_role,
-                           transform = identity, device) {
+                           transform = identity, device, clamp = c(0, Inf)) {
+  if (length(clamp) != 2L || anyNA(clamp) || clamp[1] > clamp[2]) {
+    stop("clamp must be c(lower, upper) with lower <= upper, no NA.")
+  }
   model$eval()
   pred_raw <- numeric(0)
   torch::with_no_grad({
@@ -28,7 +37,9 @@ predict_loader <- function(model, data_loader, points_valid, dataset_role,
       pred_raw <- c(pred_raw, as.numeric(out$to(device = "cpu")))
     })
   })
-  pred_native <- pmax(transform(pred_raw), 0)
+  pred_native <- transform(pred_raw)
+  if (is.finite(clamp[1])) pred_native <- pmax(pred_native, clamp[1])
+  if (is.finite(clamp[2])) pred_native <- pmin(pred_native, clamp[2])
   obs_native  <- as.numeric(points_valid$target_native)
   if (length(pred_native) != nrow(points_valid)) {
     stop("Prediction length != metadata rows for split: ", dataset_role)
@@ -160,9 +171,13 @@ extract_gate_analysis <- function(model, data_loader, points_valid,
 #' @param augment        Apply D4 (rotation/flip) augmentation during training.
 #'   Patches are rotation/mirror invariant for a centre-point target, so this
 #'   is a label-preserving regulariser. Applied to training batches only.
+#' @param clamp          Plausible range of the target in native units, passed
+#'   to predict_loader(). See there: c(0, Inf) by default.
 #'
 #' @return A list with: history, pred_all, perf_all, perf_quantile,
-#'   gate, best_epoch, runtime, config.
+#'   gate, best_epoch, runtime, config. The trained model is NOT returned --
+#'   only `best_state` is, so the caller cannot accidentally keep a whole
+#'   model alive across grid iterations.
 train_one_cnn <- function(
   cfg,
   n_channels,
@@ -181,7 +196,8 @@ train_one_cnn <- function(
   gradient_clip      = 1.0,
   print_every        = 5L,
   model_name         = "cnn",
-  augment            = TRUE
+  augment            = TRUE,
+  clamp              = c(0, Inf)
 ) {
   base_lr       <- cfg$base_lr
   batch_size    <- cfg$batch_size
@@ -259,7 +275,7 @@ train_one_cnn <- function(
     # GPU pass (compute_loader_loss is not called per epoch).
     pred_val <- predict_loader(model, loaders$validation,
                                points_valid$validation, "validation",
-                               transform, device)
+                               transform, device, clamp)
     val_loss <- transform_space_loss(pred_val$pred_transform,
                                      pred_val$obs_transform, cfg$loss_fn)
     perf_val <- make_performance_table(
@@ -333,11 +349,14 @@ train_one_cnn <- function(
 
   # --- Final evaluation on all splits ---
   pred_train <- predict_loader(model, loaders$train_eval,
-                               points_valid$train, "train", transform, device)
+                               points_valid$train, "train", transform, device,
+                               clamp)
   pred_val2  <- predict_loader(model, loaders$validation,
-                               points_valid$validation, "validation", transform, device)
+                               points_valid$validation, "validation", transform,
+                               device, clamp)
   pred_test  <- predict_loader(model, loaders$test,
-                               points_valid$test, "test", transform, device)
+                               points_valid$test, "test", transform, device,
+                               clamp)
 
   pred_all <- dplyr::mutate(
     dplyr::bind_rows(pred_train, pred_val2, pred_test),
@@ -350,8 +369,10 @@ train_one_cnn <- function(
   gate <- extract_gate_analysis(model, loaders$test, points_valid$test,
                                  "test", device)
 
+  # `model` is deliberately NOT returned. Nothing consumed it, and because the
+  # caller only overwrites `result` on the next iteration, returning it kept a
+  # whole trained model alive through the following config's training.
   list(
-    model         = model,
     best_state    = best_state,
     history       = history,
     pred_all      = pred_all,
@@ -501,6 +522,7 @@ run_cnn_tuning <- function(
     # Build DataLoaders for this config's window sizes from the shared cache
     loaders <- .make_loaders_from_cache(tensor_cache, cfg)
 
+    err_msg <- NA_character_
     result <- tryCatch(
       train_one_cnn(
         cfg          = cfg,
@@ -513,11 +535,37 @@ run_cnn_tuning <- function(
         ...
       ),
       error = function(e) {
-        message("  ERROR in config ", cfg$config_id, ": ", e$message)
+        message("  ERROR in config ", cfg$config_id, ": ", conditionMessage(e))
+        err_msg <<- conditionMessage(e)
         NULL
       }
     )
-    if (is.null(result)) next
+
+    # A config that never reaches the comparison table is indistinguishable
+    # from one that was never run -- and `resume` filters on status ==
+    # "success", which implied a "failed" was meant to exist. Write it.
+    if (nrow(comparison) > 0L) {
+      comparison <- dplyr::filter(comparison, config_id != cfg$config_id)
+    }
+
+    if (is.null(result)) {
+      comparison <- dplyr::bind_rows(comparison, dplyr::bind_cols(
+        tibble::tibble(
+          config_id     = cfg$config_id,
+          best_epoch    = NA_integer_,
+          runtime_min   = NA_real_,
+          best_val_loss = NA_real_,
+          window_sizes  = paste(cfg$window_sizes[[1]], collapse = "x"),
+          conv_channels = paste(cfg$conv_channels[[1]], collapse = "_"),
+          status        = "failed",
+          error_message = err_msg
+        ),
+        dplyr::select(cfg, -config_id, -window_sizes, -conv_channels)
+      ))
+      safe_write_csv2(comparison, comparison_path)
+      rm(result); gc()
+      next
+    }
 
     # Save outputs
     cid <- cfg$config_id
@@ -555,30 +603,49 @@ run_cnn_tuning <- function(
         best_val_loss  = round(result$best_val_loss, 6),
         window_sizes   = paste(cfg$window_sizes[[1]], collapse = "x"),
         conv_channels  = paste(cfg$conv_channels[[1]], collapse = "_"),
-        status         = "success"
+        status         = "success",
+        error_message  = NA_character_
       ),
       dplyr::select(cfg, -config_id, -window_sizes, -conv_channels),
       val_metrics,
       test_metrics
     )
     comparison <- dplyr::bind_rows(comparison, row)
-    safe_write_csv2(comparison,
-                    file.path(run_dir, "comparison", "comparison_all.csv"))
+    safe_write_csv2(comparison, comparison_path)
 
-    gc()
+    rm(result); gc()
   }
 
   # Rank by VALIDATION metrics only — test set is read-only diagnostic
+  n_ok <- sum(comparison$status == "success", na.rm = TRUE)
   if (nrow(comparison) > 0) {
+    # Failed configs sort last (val_ccc is NA) and get no rank -- they are
+    # listed so the run is auditable, not ranked as if they had competed.
     comparison <- comparison %>%
       dplyr::arrange(dplyr::desc(val_ccc), val_mae) %>%
-      dplyr::mutate(rank = dplyr::row_number())
+      dplyr::mutate(
+        rank = dplyr::if_else(status == "success",
+                              cumsum(status == "success"),
+                              NA_integer_)
+      )
     safe_write_csv2(comparison,
                     file.path(run_dir, "comparison", "comparison_ranked.csv"))
+
+    n_bad <- nrow(comparison) - n_ok
+    if (n_bad > 0L) {
+      message("\n", n_bad, " config(s) FAILED -- see status/error_message in ",
+              "comparison_ranked.csv: ",
+              paste(comparison$config_id[comparison$status != "success"],
+                    collapse = ", "))
+    }
+  }
+  if (n_ok > 0L) {
     message("\n── Best config: ", comparison$config_id[1],
             " | val_CCC=", round(comparison$val_ccc[1], 3),
             " | val_MAE=", round(comparison$val_mae[1], 3),
             " | test_CCC=", round(comparison$test_ccc[1], 3), " (diagnostic only) ──")
+  } else {
+    message("\n── No config completed successfully. ──")
   }
 
   invisible(list(comparison = comparison, run_dir = run_dir))

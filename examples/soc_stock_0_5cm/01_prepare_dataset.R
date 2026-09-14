@@ -41,7 +41,7 @@ split_n_bins        <- 10
 
 soc_gpkg_file <- file.path(
   project_root,
-  "data", "processed", "soc_stock_modeling", "full_data",
+  "data", "raw",
   "wosis_profile_soc_stock_spline_clean_preSpline.gpkg"
 )
 
