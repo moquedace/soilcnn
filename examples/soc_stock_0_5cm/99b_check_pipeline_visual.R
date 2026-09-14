@@ -33,7 +33,7 @@ setwd(project_root)
 #   PARTE 3 (leve, segundos): etapa 04 (modelo final) — curvas de treino por
 #     seed, estabilidade entre seeds, e obs x predito no TEST (o ensemble
 #     final, o número que de fato vai pro mapa).
-#   PARTE 4 (pesada, minutos): carrega patches_all_splits.rds INTEIRO (~17 GB)
+#   PARTE 4 (pesada, minutos): carrega os tensores de patches (~8.6 GB)
 #     na memoria so pra tirar uns 6 patches de exemplo. E o unico jeito de
 #     acessar o arquivo (RDS nao suporta leitura parcial) — rode quando nao
 #     estiver com pouca RAM sobrando. Comente a PARTE 4 se nao quiser esperar.
@@ -329,7 +329,7 @@ if (is.null(final_run_id)) {
 # PARTE 4 — Patches reais ao redor de perfis (pesada — carrega ~17 GB)
 # ══════════════════════════════════════════════════════════════════════════════
 
-message("\n-- Parte 4: patches reais (carregando patches_all_splits.rds, pode demorar) --\n")
+message("\n-- Parte 4: patches reais (carregando o patch store, pode demorar) --\n")
 
 manifest <- readRDS(file.path(patch_dir, "patch_manifest.rds"))
 # predictor_cols_final e salvo como string unica separada por ";" (mesmo
@@ -359,23 +359,29 @@ names(channel_idx) <- names(channels_to_show)
 message("Canais escolhidos e seus índices: ")
 print(tibble::tibble(nome = names(channel_idx), predictor = channels_to_show, indice = channel_idx))
 
+# O store guarda os patches CRUS (sem escalonamento) -- que e exatamente o
+# que esta parte quer mostrar: o dado como saiu do raster, antes de qualquer
+# transformacao estatistica.
+source(file.path(project_root, "R", "preprocess.R"))
+source(file.path(project_root, "R", "dataset.R"))
+
 t0 <- Sys.time()
-patches <- readRDS(file.path(patch_dir, "patches_all_splits.rds"))
-message("patches_all_splits.rds carregado em ",
+store <- load_patch_store(patch_dir)
+message("patch store carregado em ",
         round(difftime(Sys.time(), t0, units = "mins"), 1), " min")
 
 set.seed(42)
 n_examples <- 6
-n_train <- nrow(patches$train$meta)
+n_train <- nrow(store$meta[store$meta$dataset_role == "train", ])
 example_idx <- sample.int(n_train, n_examples)
 
 window_arrays <- list(
-  `3x3`   = patches$train$x_3x3_array,
-  `9x9`   = patches$train$x_9x9_array,
-  `15x15` = patches$train$x_15x15_array
+  `3x3`   = store$windows$w03,
+  `9x9`   = store$windows$w09,
+  `15x15` = store$windows$w15
 )
 
-meta_examples <- patches$train$meta[example_idx, ] %>%
+meta_examples <- store$meta[store$meta$dataset_role == "train", ][example_idx, ] %>%
   dplyr::mutate(example_id = paste0("perfil ", dplyr::row_number(),
                                     "\nSOC=", round(target_native, 1), " t/ha"))
 

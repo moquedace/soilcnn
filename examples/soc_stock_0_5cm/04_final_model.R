@@ -26,6 +26,9 @@ project_root <- "D:/usuario_armazenamento/cassio/R/deep_learning_caret"
 setwd(project_root)
 
 source(file.path(project_root, "R", "utils.R"))
+source(file.path(project_root, "R", "patches.R"))
+source(file.path(project_root, "R", "preprocess.R"))
+source(file.path(project_root, "R", "dataset.R"))
 source(file.path(project_root, "R", "metrics.R"))
 source(file.path(project_root, "R", "cnn_architecture.R"))
 source(file.path(project_root, "R", "tune_grid.R"))
@@ -78,9 +81,12 @@ training_args <- list(
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
-patch_file        <- file.path(project_root, "outputs", "patches",
-                                "soc_stock_modeling", target_label,
-                                "patches_all_splits.rds")
+patch_dir         <- file.path(project_root, "outputs", "patches",
+                                "soc_stock_modeling", target_label)
+data_dir          <- file.path(project_root, "data", "processed",
+                                "soc_stock_modeling", target_label)
+metadata_dir      <- file.path(project_root, "outputs", "metadata",
+                                "soc_stock_modeling", target_label)
 
 output_tuning_dir <- file.path(project_root, "outputs", "tuning",
                                 "soc_stock_modeling", target_label)
@@ -96,6 +102,12 @@ if (identical(tuning_run_id, "latest")) {
 
 tuning_dir   <- file.path(output_tuning_dir, tuning_run_id)
 ranking_file <- file.path(tuning_dir, "comparison", "comparison_ranked.csv")
+# A tabela POR CONFIG (media +/- sd sobre as repeticoes) e a que decide. A
+# comparison_ranked.csv tem uma linha por UNIDADE (config x fold x semente) --
+# ler o rank dela deixaria uma semente sortuda de uma config mediocre passar na
+# frente da media firme de uma boa. Runs antigos (1 semente, 1 fold) nao tem
+# este arquivo, e ai as duas tabelas coincidem de qualquer forma.
+byconfig_file <- file.path(tuning_dir, "comparison", "comparison_by_config.csv")
 tune_grid_file <- file.path(tuning_dir, "tune_grid.rds")
 
 run_id     <- paste0("final_", format(Sys.time(), "%Y%m%d_%H%M%S"))
@@ -106,37 +118,44 @@ create_output_dirs(c(output_dir, file.path(output_dir, "comparison")))
 
 # ── Validações ────────────────────────────────────────────────────────────────
 
-if (!file.exists(patch_file))    stop("Patches não encontrados: ", patch_file)
+if (!dir.exists(patch_dir))      stop("Patches não encontrados: ", patch_dir)
 if (!file.exists(ranking_file))  stop("Ranking não encontrado: ",  ranking_file)
 if (!file.exists(tune_grid_file)) stop("tune_grid.rds não encontrado: ", tune_grid_file)
-
-# ── Carregar patches ──────────────────────────────────────────────────────────
-
-message("Carregando patches...")
-patches <- readRDS(patch_file)
-
-# Channel count from the first available patch array (robust to window choice).
-.first_array_key <- grep("_array$", names(patches$train), value = TRUE)[1]
-n_channels <- dim(patches$train[[.first_array_key]])[2]
-
-points_valid <- list(
-  train      = patches$train$meta,
-  validation = patches$validation$meta,
-  test       = patches$test$meta
-)
-
-message("Canais: ", n_channels,
-        " | Train: ", nrow(patches$train$meta),
-        " | Val: ", nrow(patches$validation$meta),
-        " | Test: ", nrow(patches$test$meta))
 
 # ── Selecionar configs ────────────────────────────────────────────────────────
 
 ranking        <- readr::read_csv2(ranking_file, show_col_types = FALSE)
 tune_grid_full <- readRDS(tune_grid_file)
 
+by_config <- if (file.exists(byconfig_file)) {
+  readr::read_csv2(byconfig_file, show_col_types = FALSE)
+} else {
+  NULL
+}
+
 if (is.null(selected_config_ids)) {
-  selected_config_ids <- dplyr::filter(ranking, rank == 1L)$config_id
+  selected_config_ids <- if (!is.null(by_config)) {
+    dplyr::filter(by_config, rank == 1L)$config_id
+  } else {
+    dplyr::filter(ranking, rank == 1L)$config_id
+  }
+}
+
+# Se a vantagem do vencedor for menor que o ruido de semente, dizer isso em voz
+# alta AQUI, onde a escolha esta sendo feita -- e nao deixar o numero passar
+# como se fosse um resultado. Selecionar mesmo assim e legitimo; nao saber nao.
+if (!is.null(by_config) && nrow(by_config) > 1L &&
+    "val_ccc_sd" %in% names(by_config)) {
+  top2 <- dplyr::arrange(by_config, rank)[1:2, ]
+  gap  <- top2$val_ccc_mean[1] - top2$val_ccc_mean[2]
+  noise <- stats::median(by_config$val_ccc_sd, na.rm = TRUE)
+  if (is.finite(gap) && is.finite(noise) && gap < noise) {
+    message("\n  ATENCAO: a vantagem do 1o sobre o 2o (", round(gap, 4),
+            ") e MENOR que o sd tipico entre sementes (", round(noise, 4), ").")
+    message("  As duas configs sao indistinguiveis com o numero de repeticoes ",
+            "deste run.")
+    message("  Rode mais sementes, ou selecione pela mais simples (one_se).")
+  }
 }
 
 missing_cfgs <- setdiff(selected_config_ids, tune_grid_full$config_id)
@@ -148,22 +167,60 @@ selected_cfgs <- dplyr::filter(tune_grid_full, config_id %in% selected_config_id
 
 message("\n── Configs selecionados para o modelo final ──────────────────────")
 for (cid in selected_config_ids) {
-  r <- dplyr::filter(ranking, config_id == cid)
+  # slice(1): com repeticoes ha varias linhas por config no ranking, e os
+  # campos de ARQUITETURA sao identicos entre elas (e a mesma config) -- a
+  # primeira serve. As METRICAS vem da tabela por config, com o desvio junto.
+  r <- dplyr::slice(dplyr::filter(ranking, config_id == cid), 1)
+  b <- if (!is.null(by_config)) {
+    dplyr::filter(by_config, config_id == cid)
+  } else {
+    NULL
+  }
+  metric_txt <- if (!is.null(b) && nrow(b) == 1L) {
+    sprintf("val_CCC %.4f +/- %.4f (n=%d)", b$val_ccc_mean, b$val_ccc_sd,
+            b$n_units)
+  } else {
+    sprintf("val_CCC %.4f", r$val_ccc)
+  }
   message("  ", cid,
           " | janela ", r$window_sizes,
           " | ", r$conv_channels,
           " | embed ", r$embedding_dim,
           " | ", r$gate_type,
-          " | val_CCC ", round(r$val_ccc, 4),
-          " | test_CCC ", round(r$test_ccc, 4), " (diag)")
+          " | ", metric_txt)
 }
 
-# ── Cache de tensores (cobre a união das janelas de todos os configs) ─────────
+# ── Carregar patches e montar o cache do fold ─────────────────────────────────
+# Carregado só agora porque só agora se sabe quais janelas os configs
+# selecionados usam -- o patch store guarda um arquivo por janela, então
+# carregar tudo pagaria RAM por janela que nenhum config vai usar.
 
 windows_needed <- sort(unique(unlist(selected_cfgs$window_sizes)))
-message("\nConstruindo cache de tensores para janelas: ",
-        paste(windows_needed, collapse = ", "))
-tensor_cache <- .build_tensor_cache(patches, windows_needed)
+message("\nJanelas necessárias: ", paste(windows_needed, collapse = ", "))
+
+store      <- load_patch_store(patch_dir, windows_needed)
+n_channels <- store$n_channels
+
+points <- readr::read_csv2(file.path(data_dir, "full_modeling_dataset_raw.csv"),
+                           show_col_types = FALSE)
+type_table <- readr::read_csv2(file.path(metadata_dir, "predictor_type_table.csv"),
+                               show_col_types = FALSE)
+points <- align_points_to_meta(points, store$meta)
+
+index        <- split_index_from_meta(store$meta)
+fold         <- build_fold_cache(store, points, type_table, index, windows_needed)
+points_valid <- fold_points_valid(store, index)
+tensor_cache <- fold$cache
+
+# Mesma lição do 03: as sementes todas compartilham UM cache. O escalonamento
+# é do fold, não da semente, então refazê-lo por semente seria só desperdício.
+store$windows <- NULL
+invisible(gc())
+
+message("Canais: ", n_channels,
+        " | Train: ", length(index$train),
+        " | Val: ",   length(index$validation),
+        " | Test: ",  length(index$test))
 
 # ── Função: treinar um config com todas as seeds ──────────────────────────────
 

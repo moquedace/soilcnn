@@ -8,6 +8,14 @@ pkg <- c("processx")
 install_load_pkg(pkg)
 
 # ══════════════════════════════════════════════════════════════════════════════
+# SCRATCH 1km — copia de 05a_test.R apontando pro worker 1km
+# (05_predict_spatial_1km.R). NAO faz parte do pipeline principal, NAO sera
+# comitado. n_row_shards/n_col_shards ja ajustados pra escala 1 km (ver
+# 05a_run_parallel_1km.R para o raciocinio -- grade 1/16 das celulas da
+# 250 m, n_col_shards=1 e suficiente).
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ══════════════════════════════════════════════════════════════════════════════
 # 05a_test — Teste do pipeline 2D antes de rodar o job completo
 #
 # Roda apenas test_n_shards shards escolhidos do grid n_row_shards x n_col_shards.
@@ -28,12 +36,13 @@ install_load_pkg(pkg)
 # Estes valores devem ser os MESMOS que você planeja usar no 05a real.
 # Só test_n_shards e max_concurrent podem ser menores no teste.
 
-n_row_shards <- 250      # igual ao que usará no 05a real
-n_col_shards <- 4        # igual ao que usará no 05a real
+n_row_shards <- 40       # igual ao que usará no 05a_run_parallel_1km.R
+n_col_shards <- 1        # igual ao que usará no 05a_run_parallel_1km.R
 
-# Quantos shards rodar no teste. 4 = 1 por coluna (testa toda a largura).
-# Aumente para 8 se quiser testar 2 linhas de shards.
-test_n_shards <- 4
+# Quantos shards rodar no teste. Com n_col_shards=1 so ha 1 tile por linha,
+# entao 2 ja cobre o essencial: 1 shard esparso (linha 1, polar) + 1 shard
+# denso (linha do meio, tropical) pra throughput real.
+test_n_shards <- 2
 
 # Quais shards rodar. "auto" = distribui pelos 4 tiles de coluna na linha 1
 # (testa geometria em todas as colunas). Ou defina manualmente, ex:
@@ -46,10 +55,10 @@ poll_interval_s <- 15
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 
-script_dir    <- file.path(project_root, "examples", "soc_stock_0_5cm")
-worker_script <- file.path(script_dir, "05_predict_spatial.R")
+scratch_dir   <- file.path(project_root, "_scratch_1km_test")
+worker_script <- file.path(scratch_dir, "05_predict_spatial_1km.R")
 
-log_dir <- file.path(project_root, "outputs", "spatial_prediction", "_worker_logs",
+log_dir <- file.path(scratch_dir, "spatial_prediction", "_worker_logs",
                      paste0(format(Sys.time(), "%Y%m%d_%H%M%S"), "_TEST2D"))
 dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
 
@@ -59,25 +68,17 @@ if (!file.exists(rscript_bin)) stop("Rscript.exe not found: ", rscript_bin)
 # ── Montar lista de shards de teste ──────────────────────────────────────────
 
 if (identical(test_shards, "auto")) {
-  # Bug corrigido: a versao anterior so adicionava uma amostra da linha do
-  # meio (mais densa/tropical -- o que realmente calibra throughput/RAM real)
-  # quando test_n_shards > n_col_shards. Com os valores padrao deste arquivo
-  # (ambos 4) essa condicao NUNCA era TRUE, entao o teste so via a linha 1
-  # (quase toda oceano/gelo polar, exceto onde cruza terra) e a recomendacao
-  # de max_concurrent/ETA saia de uma media distorcida (shards quase vazios
-  # com RSS~1.7 GB e predict~2s, escondendo o unico shard real com RSS~12.7 GB
-  # e predict~550s -- media = numero sem sentido, perigoso se usado pra
-  # RAM: max_concurrent tao alto que shards densos concorrentes estourariam
-  # a RAM da maquina).
-  # Agora SEMPRE reserva pelo menos 1 shard da linha do meio, mesmo que
-  # precise reduzir a cobertura de largura da linha 1.
-  n_row1 <- max(1L, min(test_n_shards - 1L, n_col_shards))
-  n_mid  <- max(1L, test_n_shards - n_row1)
-  mid_row <- ceiling(n_row_shards / 2)
-  test_shards <- c(
-    lapply(seq_len(n_row1), function(cs) c(1L, cs)),
-    lapply(seq_len(min(n_mid, n_col_shards)), function(cs) c(mid_row, cs))
-  )
+  # 1 shard por tile de coluna, todos na linha 1 — testa a geometria completa
+  # da largura do raster com poucos blocos (linha 1 = latitudes mais altas = geralmente menos pixels validos = rapido)
+  test_shards <- lapply(seq_len(n_col_shards), function(cs) c(1L, cs))
+  if (test_n_shards > n_col_shards) {
+    # adiciona shards da linha do meio (mais densos, melhor teste de throughput)
+    mid_row <- ceiling(n_row_shards / 2)
+    extra <- lapply(seq_len(min(test_n_shards - n_col_shards, n_col_shards)),
+                    function(cs) c(mid_row, cs))
+    test_shards <- c(test_shards, extra)
+  }
+  test_shards <- test_shards[seq_len(min(test_n_shards, length(test_shards)))]
 }
 
 n_test <- length(test_shards)
@@ -188,11 +189,7 @@ parse_worker_log <- function(idx) {
     if (length(m) > 0) output_block_rows <- as.integer(sub("= ", "", m))
   }
 
-  # RSS máximo
-  # Bug corrigido: a versao anterior deixava o sufixo " MB" no valor extraido
-  # (sub() so removia o prefixo "RSS "), entao as.numeric("12345 MB") sempre
-  # dava NA -- rss_peak_mb ficava sempre NA e a recomendacao de max_concurrent
-  # caia pra -Inf/absurda. Lookbehind/lookahead evita capturar o texto.
+  # RSS máximo (bug corrigido: ver comentario em examples/soc_stock_0_5cm/05a_test.R)
   rss_lines <- lines[grepl("RSS [0-9]+(?:\\.[0-9]+)? MB", lines, perl = TRUE)]
   rss_vals  <- as.numeric(regmatches(rss_lines,
     regexpr("(?<=RSS )[0-9]+(?:\\.[0-9]+)?(?= MB)", rss_lines, perl = TRUE)))
@@ -200,8 +197,8 @@ parse_worker_log <- function(idx) {
 
   # s/bloco (predict)
   block_lines <- lines[grepl("predict [0-9]+\\.[0-9]+s", lines)]
-  predict_times <- as.numeric(unlist(regmatches(block_lines,
-    gregexpr("[0-9]+\\.[0-9]+(?=s \\| RSS)", block_lines, perl = TRUE))))
+  predict_times <- as.numeric(regmatches(block_lines,
+    gregexpr("[0-9]+\\.[0-9]+(?=s \\| RSS)", block_lines, perl = TRUE)) |> unlist())
   median_predict_s <- if (length(predict_times) > 0) median(predict_times) else NA_real_
 
   # n_valid total (ultima linha de Block)
@@ -247,9 +244,6 @@ message(strrep("-", 85))
 message("\n── Verificação de geometria dos tiles ──────────────────────────────")
 target_label <- "soc_stock_0_5cm"
 
-output_dir <- file.path(project_root, "outputs", "spatial_prediction",
-                        "soc_stock_modeling", target_label)
-parts_dir  <- file.path(output_dir, "raster", "parts_2d")
 config_id  <- "auto"
 
 if (identical(config_id, "auto")) {
@@ -267,15 +261,17 @@ if (identical(config_id, "auto")) {
   }
 }
 
+# parts_dir precisa do config_id resolvido -- so pode ser montado aqui
+# (o 05_predict_spatial_1km.R grava em .../spatial_prediction/<config_id>/raster/parts_2d).
+parts_dir <- file.path(scratch_dir, "spatial_prediction", config_id, "raster", "parts_2d")
+
 test_tiles <- list.files(parts_dir,
   pattern = paste0("^", target_label, "_", config_id,
                    "_ensemble_median.*_r[0-9]+of[0-9]+_c[0-9]+of[0-9]+\\.tif$"),
   full.names = TRUE)
 
 if (length(test_tiles) > 0) {
-  metadata_dir  <- file.path(project_root, "outputs", "metadata",
-                             "soc_stock_modeling", target_label)
-  raster_table  <- readr::read_csv2(file.path(metadata_dir, "raster_table_used.csv"),
+  raster_table  <- readr::read_csv2(file.path(scratch_dir, "raster_table_used_1km.csv"),
                                     show_col_types = FALSE)
   full_template <- terra::rast(raster_table$raster_file[1])
 
@@ -326,7 +322,7 @@ if (length(ok_results) > 0) {
                   n_row_shards, n_col_shards, n_row_shards * n_col_shards,
                   eta_h, eta_h / 24))
 
-  message(sprintf("\n  -> Edite 05a_run_parallel.R: max_concurrent <- %d", safe_concurrent))
+  message(sprintf("\n  -> Edite 05a_run_parallel_1km.R: max_concurrent <- %d", safe_concurrent))
 } else {
   message("  Nenhum shard completou com sucesso — verifique os logs em: ", log_dir)
 }

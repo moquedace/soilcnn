@@ -25,6 +25,7 @@ project_root <- "D:/usuario_armazenamento/cassio/R/deep_learning_caret"
 setwd(project_root)
 
 source(file.path(project_root, "R", "utils.R"))
+source(file.path(project_root, "R", "preprocess.R"))
 
 set.seed(123)
 
@@ -47,8 +48,28 @@ soc_gpkg_file <- file.path(
 
 predictor_raster_dir <- "D:/usuario_armazenamento/cassio/R/predictors_resolution_250m"
 
-# Predictors to drop manually (leave empty to use all)
-manual_predictor_drop <- character(0)
+# Predictors to drop manually (leave empty to use all).
+#
+# These six are CONSTANT (all zero) at every one of the ~37k profiles, so they
+# carry no information for training -- but they are NOT constant over the map:
+# they switch on over glaciers, small islands, soil-map no-data and deep ocean
+# floor. That asymmetry is the problem. Because their input is always 0 during
+# training, their gradient is always 0, so with weight_decay = 0 their weights
+# stay at random initialisation for ever. Each one then applies an arbitrary,
+# seed-dependent bias to exactly the pixels that lie outside anything the
+# network ever saw. Dropping them costs nothing and removes that.
+#
+# Detected automatically by the "Channel risk" report further down -- if that
+# report flags a constant channel that is NOT listed here, decide about it
+# deliberately rather than letting it through.
+manual_predictor_drop <- c(
+  "geology_ice_and_glaciers",
+  "soil_class_fao_islands",
+  "soil_class_fao_no_data",
+  "terrestrial_habitat_deep_ocean_floor",
+  "pnv_moss_and_lichen",
+  "pnv_open_forest_deciduous_needleleaf"
+)
 
 # Temperature QC: values below this threshold are set to NA
 temperature_min_valid_celsius <- -100
@@ -61,12 +82,15 @@ percentage_predictor_patterns <- c(
   "^peatland_extent$"
 )
 
-# Predictors that look like dummies (only 0/1 values) but should be
-# treated as continuous/percentage — override the auto-detection
-force_as_percentage <- janitor::make_clean_names(c(
-  "pnv_moss_and_lichen",
-  "pnv_open_forest_deciduous_needleleaf"
-))
+# Predictors that look like dummies (only 0/1 values) but should be treated as
+# continuous/percentage — overrides the auto-detection.
+#
+# Was c("pnv_moss_and_lichen", "pnv_open_forest_deciduous_needleleaf"). Both
+# are now dropped above as constant, and the override never did anything for
+# them anyway: a channel that is 0 at every profile has no type to get wrong.
+# Kept as a hook, because the auto-detection genuinely can misread a rare
+# percentage class as a dummy once profiles start hitting it.
+force_as_percentage <- janitor::make_clean_names(character(0))
 
 stopifnot(
   abs(train_fraction + validation_fraction + test_fraction - 1) < 1e-8
@@ -472,22 +496,95 @@ safe_write_csv2(
   file.path(output_data_dir, "full_modeling_dataset_raw.csv")
 )
 
-for (role in c("train", "validation", "test")) {
-  df <- dplyr::filter(dataset_model_split, dataset_role == role)
-  df_sc <- switch(role,
-    train      = train_scaled,
-    validation = validation_scaled,
-    test       = test_scaled
-  )
-  safe_write_csv2(
-    dplyr::select(df,    dplyr::all_of(export_cols)),
-    file.path(output_data_dir, paste0(role, "_raw.csv"))
-  )
-  safe_write_csv2(
-    dplyr::select(df_sc, dplyr::all_of(export_cols)),
-    file.path(output_data_dir, paste0(role, "_scaled.csv"))
-  )
+# The per-split CSVs (train/validation/test x raw/scaled) are NOT written any
+# more. The *_raw ones were a filter() of full_modeling_dataset_raw.csv, and
+# nothing ever read the *_scaled ones -- script 02 explicitly read the raw
+# files because the pre-scaled columns "would just be ignored". More
+# importantly, once scaling is estimated per fold there IS no single "the
+# scaled dataset", so writing one would be a file asserting something that
+# stopped being true. The split now travels as an index (split_metadata.csv).
+
+# ── Channel risk report ───────────────────────────────────────────────────────
+# Three families of channel have shipped a broken map before, and none of them
+# shows up as an error or a bad metric -- they only appear at the very end, as
+# holes in the raster or as extrapolation nobody asked for. So they are named
+# here, loudly, while it is still cheap to act on them.
+#
+#   constant       zero information at the profiles, but NOT constant over the
+#                  world. `geology_ice_and_glaciers` is 0 at every profile and
+#                  1 over ice: at prediction time the network meets a channel
+#                  combination it never saw in training. The degenerate-sd
+#                  filter below cannot catch these, because dummy channels get
+#                  sd = 1 and percentage channels sd = 100 by definition, never
+#                  an estimated sd.
+#   near_constant  almost no variation -- same risk, smaller.
+#   has_na         NA at the profiles. A channel with sparse NA is the one that
+#                  emptied the 250 m map once already: the full-window rule
+#                  turns each NA pixel into a hole of up to 15x15 around it.
+
+channel_risk <- predictor_type_table %>%
+  dplyr::mutate(
+    n_na_at_points = purrr::map_int(predictor,
+                                    ~ sum(!is.finite(dataset_model_raw[[.x]]))),
+    pct_na         = round(100 * n_na_at_points / nrow(dataset_model_raw), 3),
+    type           = dplyr::case_when(is_dummy ~ "dummy",
+                                      is_percentage ~ "percentage",
+                                      TRUE ~ "continuous"),
+    risk = dplyr::case_when(
+      n_unique <= 1L                  ~ "constant",
+      n_unique <= 2L & !is_dummy      ~ "near_constant",
+      n_na_at_points > 0L             ~ "has_na",
+      TRUE                            ~ ""
+    )
+  ) %>%
+  dplyr::select(predictor, type, n_unique, min_value, max_value,
+                n_na_at_points, pct_na, risk)
+
+flagged <- dplyr::filter(channel_risk, risk != "")
+
+message("
+── Channel risk ─────────────────────────────")
+if (nrow(flagged) == 0L) {
+  message("  No channel flagged.")
+} else {
+  message("  ", nrow(flagged), " channel(s) flagged — these are the ones that ",
+          "have historically broken the MAP, not the metrics:")
+  print(dplyr::arrange(flagged, risk, dplyr::desc(pct_na)), n = Inf, width = Inf)
+  n_const <- sum(flagged$risk == "constant")
+  if (n_const > 0L) {
+    message("
+  WARNING: ", n_const, " constant channel(s) SURVIVED the drop ",
+            "list: zero information here,")
+    message("  but non-zero somewhere on the map. Their weights never get a ",
+            "gradient, so they stay at")
+    message("  random init and apply a seed-dependent bias exactly where the ",
+            "network is extrapolating.")
+    message("  Add them to manual_predictor_drop at the top of this script, ",
+            "or keep them deliberately.")
+  } else {
+    message("
+  No constant channel survived the drop list.")
+  }
 }
+
+safe_write_csv2(channel_risk, file.path(output_metadata_dir, "channel_risk.csv"))
+
+# ── QC rules, exported so 02 applies EXACTLY these ────────────────────────────
+# Previously the rules lived as literals inside both 01 and 02 and had to be
+# kept in sync by hand. Now 01 decides and 02 obeys.
+
+qc_table <- make_qc_table(
+  predictors   = predictor_cols_final,
+  na_below     = setNames(temperature_min_valid_celsius,
+                          "surface_temperature_celsius$"),
+  clamp_range  = predictor_cols_percentage,
+  clamp_limits = c(0, 100)
+)
+safe_write_csv2(qc_table, file.path(output_metadata_dir, "qc_table.csv"))
+
+message("
+QC rules: ", sum(!is.na(qc_table$na_below)), " channel(s) with an NA floor, ",
+        sum(!is.na(qc_table$clamp_lower)), " clamped into [0, 100].")
 
 # Metadata
 safe_write_csv2(qc_summary,            file.path(output_metadata_dir, "qc_summary.csv"))
