@@ -456,7 +456,7 @@ train_one_cnn <- function(
 #'   Set FALSE to force retraining every config (e.g. after changing code that
 #'   affects already-trained configs).
 #' @param ...          Passed to train_one_cnn() (n_epochs, patience, etc.).
-# Le um comparison_all.csv de um run gravado ANTES do RDS existir.
+# Reads a comparison_all.csv from a run written BEFORE the RDS existed.
 #
 # For those only; new runs read the RDS and never come through here. No column
 # type is guessed or listed by hand: it comes from `tune_grid`, which is the
@@ -487,7 +487,7 @@ train_one_cnn <- function(
       cmp[[nm]])
   }
 
-  # O que sobra e metrica: numerica, e um texto aqui significa que o locale
+  # What is left is metrics: numeric, and text here means the locale
   # failed to parse some value (scientific notation, for instance).
   known <- unique(c(as_chr, as_int, names(tune_grid)))
   for (nm in setdiff(names(cmp), known)) {
@@ -583,19 +583,19 @@ run_cnn_tuning <- function(
     # The CSV is for humans; it does not preserve type. read_csv2() guesses,
     # and guessed wrong in two ways that have each killed a run here:
     #
-    #   window_sizes  "3"      (config de janela unica) -> lido como NUMERO
-    #   weight_decay  "1e-04"  (notacao cientifica)     -> com decimal virgula
+    #   window_sizes  "3"      (a single-window config) -> read as a NUMBER
+    #   weight_decay  "1e-04"  (scientific notation)    -> with a decimal comma,
     #                                                     unparseable -> TEXT
     #
-    # Em qualquer dos casos o bind_rows aborta com "Can't combine <double> and
-    # <character>" -- DEPOIS de treinar, perdendo o trabalho da unidade.
+    # Either way bind_rows aborts with "Can't combine <double> and
+    # <character>" -- AFTER training, losing that unit's work.
     #
     # The first attempt forced a LIST of columns to character. Wrong
     # strategy: the list is never complete, and every new column is another
     # chance to repeat it. The RDS keeps the tibble as it is -- no column to
     # remember, no type to guess.
     #
-    # O fallback para o CSV existe so para runs gravados antes deste RDS.
+    # The CSV fallback exists only for runs written before this RDS did.
     comparison <- if (file.exists(comparison_rds)) {
       readRDS(comparison_rds)
     } else {
@@ -626,7 +626,7 @@ run_cnn_tuning <- function(
   n_units <- nrow(units)
 
   if (length(done_ids) > 0L) {
-    # `done_ids` conta as unidades prontas do RUN INTEIRO (todos os folds);
+    # `done_ids` counts the finished units of the WHOLE RUN (every fold);
     # `n_units` is what THIS call will train (one fold). Mixing the two
     # produced lines like "Resume: 18/9", which means nothing. Report this
     # fold's fraction and the run's total separately.
@@ -634,7 +634,7 @@ run_cnn_tuning <- function(
                                       rep(tune_grid$config_id, each = n_seeds),
                                       fold, seq_len(n_seeds)))
     message(sprintf(
-      "Resume: %d/%d unidades deste fold ja treinadas (%d no run inteiro)",
+      "Resume: %d/%d units of this fold already trained (%d in the whole run)",
       mine, n_units, length(done_ids)))
   }
 
@@ -824,8 +824,8 @@ run_cnn_tuning <- function(
       safe_write_csv2(by_config,
                       file.path(run_dir, "comparison", "comparison_by_config.csv"))
       if (max(by_config$n_units) > 1L) {
-        message("\n-- Por config (media +/- sd sobre ", max(by_config$n_units),
-                " repeticao(oes)) --")
+        message("\n-- Per config (mean +/- sd over ", max(by_config$n_units),
+                " repetition(s)) --")
         print_wide(dplyr::slice_head(
           dplyr::select(by_config, rank, config_id, n_units, n_folds, n_seeds,
                         dplyr::starts_with("val_ccc"),

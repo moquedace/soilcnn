@@ -280,20 +280,21 @@ compare_run_snapshot <- function(values, dir, exclude = character(0)) {
 # tibble"). Report output has to leave through one channel to keep its order.
 print_snapshot_diff <- function(cmp, n_show = 40L) {
   if (!cmp$has_previous) {
-    cat("  Sem snapshot anterior -- este vira a referencia.
+    cat("  No previous snapshot -- this run becomes the reference.
 ")
     return(invisible(NULL))
   }
-  cat("  Comparando com: ", cmp$previous_file, "
+  cat("  Comparing with: ", cmp$previous_file, "
 ", sep = "")
 
   changed <- dplyr::filter(cmp$diff, status != "=")
   if (nrow(changed) == 0L) {
-    cat("  TUDO IDENTICO ao run anterior (", nrow(cmp$diff), " valores).
+    cat("  EVERYTHING IDENTICAL to the previous run (", nrow(cmp$diff),
+        " values).
 ",
         sep = "")
   } else {
-    cat("  ", nrow(changed), " de ", nrow(cmp$diff), " valores mudaram:
+    cat("  ", nrow(changed), " of ", nrow(cmp$diff), " values changed:
 ",
         sep = "")
     print_wide(dplyr::slice_head(changed, n = n_show), n = Inf)
