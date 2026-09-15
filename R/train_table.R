@@ -85,6 +85,7 @@ run_table_resample <- function(model, tune_grid = NULL, store, points,
                                tune_length = 6L,
                                device      = NULL,
                                resume      = TRUE,
+                               evaluate_test = FALSE,
                                clamp       = c(0, Inf),
                                ...) {
 
@@ -296,7 +297,20 @@ run_table_resample <- function(model, tune_grid = NULL, store, points,
         }
 
         val_perf  <- dplyr::filter(perf_all, .data$dataset_role == "validation")
+    # ── The test set is NOT scored during tuning (evaluate_test) ──────────────
+        #
+        # A frozen test set is frozen only while nothing reads it. Scoring it on
+        # every unit puts test_ccc in the comparison table beside val_ccc, and from
+        # there it takes one glance to prefer the config that "also does well on
+        # test" -- which is selection on the test set, done by a human instead of
+        # an argmax, and it inflates the final number by exactly as much.
+        #
+        # The columns still EXIST, holding NA, so the table keeps one shape whether
+        # the test was scored or not and every reader downstream is unchanged.
+        # Stage 04 scores the test once, on the chosen config, which is the only
+        # moment the number means what it is reported to mean.
         test_perf <- dplyr::filter(perf_all, .data$dataset_role == "test")
+        if (!isTRUE(evaluate_test)) test_perf <- test_perf[0, , drop = FALSE]
         if (nrow(test_perf) == 0L) {
           # No test role in this plan: the columns still exist, holding NA, so
           # the table has ONE shape whatever the plan was.

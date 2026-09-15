@@ -54,6 +54,13 @@ tuning_run_id <- "latest"
 # paired by seed rather than a comparison of who drew the luckier start.
 selected_config_ids <- NULL
 
+# How to choose when selected_config_ids is NULL.
+#   "one_se" -- the simplest config within one standard error of the best
+#   "rank1"  -- the best mean, whatever its spread
+# See the long note at the selection itself for why one_se is the default.
+selection_rule   <- "one_se"
+selection_metric <- "val_ccc"
+
 # Seeds. Each one is an independent training run from scratch, and the spread
 # between them estimates how STABLE the training is -- not how good the model
 # is. A publishable result should have a low spread (ideally under ~5% of the
@@ -139,8 +146,45 @@ by_config <- if (file.exists(byconfig_file)) {
   NULL
 }
 
+# ── Which config goes to the final model ──────────────────────────────────────
+#
+# THE BEST MEAN IS OFTEN THE LUCKIEST DRAW.
+#
+# The tuning run reports a mean over repetitions and the standard error of that
+# mean. When several configs sit inside one standard error of the winner, the
+# ranking has not separated them -- it has ordered noise. Taking rank 1 anyway
+# is a choice to carry the largest model in the tie, because complexity and
+# luck correlate: more parameters means more ways to fit the validation fold.
+#
+# one_se() takes the SIMPLEST config whose mean is within one standard error of
+# the best. It is the rule caret has had since the beginning (`oneSE`), it is
+# Breiman's original 1-SE rule, and it exists here because this project's own
+# noise floor showed the ranking does not separate: 0.038 CCC between seeds
+# against gaps of 0.008 between families.
+#
+# When nothing ties, it returns the winner -- so it costs nothing when the
+# ranking IS decisive, which is the property that makes it safe as a default.
+#
+# selection_rule = "rank1" restores the old behaviour for someone who wants it.
 if (is.null(selected_config_ids)) {
-  selected_config_ids <- if (!is.null(by_config)) {
+  selected_config_ids <- if (!is.null(by_config) &&
+                             identical(selection_rule, "one_se") &&
+                             paste0(selection_metric, "_se") %in% names(by_config) &&
+                             "n_params" %in% names(by_config)) {
+    pick <- one_se(by_config, metric = selection_metric, complexity = "n_params")
+    print_one_se(pick, metric = selection_metric)
+    pick$config_id
+  } else if (!is.null(by_config)) {
+    if (identical(selection_rule, "one_se")) {
+      # SAY WHY THE RULE DID NOT APPLY. Falling back silently to rank 1 while
+      # the header says the run uses one_se is worse than not having the rule:
+      # the report would describe a selection that never happened.
+      missing <- setdiff(c(paste0(selection_metric, "_se"), "n_params"),
+                         names(by_config))
+      message("\n  NOTE: one_se() needs ", paste(missing, collapse = " and "),
+              ", which this tuning run did not record. Falling back to rank 1.",
+              "\n  (n_params is recorded by tuning runs from 2026-09 onward.)")
+    }
     dplyr::filter(by_config, rank == 1L)$config_id
   } else {
     dplyr::filter(ranking, rank == 1L)$config_id

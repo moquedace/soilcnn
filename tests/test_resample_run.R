@@ -198,6 +198,31 @@ per_cfg <- tapply(cmp1$seed, cmp1$config_id, function(z) paste(sort(z), collapse
 ok["seed_set_shared_across_configs"] <- length(unique(per_cfg)) == 1L
 ok["two_distinct_seeds"] <- dplyr::n_distinct(cmp1$seed) == 2L
 
+# ── The test set is not scored during tuning ─────────────────────────────────
+#
+# THIS PLAN HAS A TEST SET (test_frac = 0.2) and the columns must still be NA.
+# That is the whole point: a frozen test set stops being frozen once its score
+# sits in the tuning table beside the validation score, because a human reading
+# the table selects on it without any argmax being involved. Stage 04 scores it
+# once, on the config chosen without it.
+#
+# The distinction this checks is the one the previous assertion could NOT: the
+# older test verified NA when the plan HAD NO TEST ROLE, which would pass just
+# as well if evaluate_test did nothing at all.
+ok["test_columns_exist_when_not_scored"] <- "test_ccc" %in% names(cmp1)
+ok["test_is_not_scored_by_default"]      <- all(is.na(cmp1$test_ccc))
+ok["the_plan_really_had_a_test_set"]     <- length(res1$plan$folds[[1]]$test) > 0L
+ok["validation_is_still_scored"]         <- all(is.finite(cmp1$val_ccc))
+
+# n_params must reach the comparison table, or one_se() has no notion of
+# "simplest" on a CNN run. It is a config property, so it is constant within
+# a config and positive for every unit.
+ok["cnn_records_n_params"] <- "n_params" %in% names(cmp1) &&
+  all(is.finite(cmp1$n_params)) && all(cmp1$n_params > 0)
+ok["n_params_constant_within_config"] <-
+  all(tapply(cmp1$n_params, cmp1$config_id, dplyr::n_distinct) == 1L)
+ok["n_params_survives_to_by_config"] <- "n_params" %in% names(res1$by_config)
+
 # 5. every unit has the checkpoint the 99 looks for
 ckpt <- file.path(res1$run_dir, "models", paste0(cmp1$unit_id, "_best.pt"))
 ok["every_unit_has_checkpoint"] <- all(file.exists(ckpt))

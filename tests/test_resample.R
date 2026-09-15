@@ -873,4 +873,84 @@ cat(sprintf("  paired vs unpaired SE    : %.5f vs %.5f on a 0.02 shift under 0.3
 ",
             pt$se, pt$se_unpaired))
 
+
+# =============================================================================
+# summarise_resamples() must carry the per-config constants
+#
+# one_se() needs a "simplest" column beside the means. n_params is a property
+# of the config, identical across its folds and seeds -- so it must survive the
+# group_by rather than be averaged away. It did not, and one_se() therefore
+# failed on a table that obviously had what it needed.
+# =============================================================================
+
+cmp_np <- tibble::tibble(
+  unit_id = sprintf("cfg_%03d_f%d_s%d", rep(1:2, each = 4),
+                    rep(rep(1:2, each = 2), 2), rep(1:2, 4)),
+  config_id = rep(c("cfg_001", "cfg_002"), each = 4),
+  fold = rep(rep(1:2, each = 2), 2), seed = rep(1:2, 4),
+  status = "success",
+  n_params = rep(c(1e6, 9e6), each = 4),
+  n_features = 181L,
+  # THE MEANS MUST ACTUALLY TIE, or this fixture tests nothing.
+  #
+  # The first version used 0.505 against 0.535 -- a gap of 0.030 against a
+  # standard error of 0.0065, nearly five SE apart. one_se() correctly returned
+  # the winner and the test called it a failure. The rule only has work to do
+  # when the gap is INSIDE the winner's own standard error, so the fixture has
+  # to build that, not assume it.
+  #
+  #   cfg_001: mean 0.530, se 0.0041, 1M parameters
+  #   cfg_002: mean 0.535, se 0.0065, 9M parameters   <- best mean
+  #   band   : 0.535 - 0.0065 = 0.5285, and 0.530 is above it
+  val_ccc = c(0.53, 0.54, 0.52, 0.53,  0.53, 0.55, 0.52, 0.54),
+  val_mae = 10)
+
+bc <- summarise_resamples(cmp_np)
+ok["summarise_keeps_n_params"]  <- "n_params" %in% names(bc)
+ok["summarise_keeps_it_intact"] <- {
+  identical(sort(bc$n_params), c(1e6, 9e6))
+}
+ok["summarise_did_not_average_it"] <-
+  !any(grepl("^n_params_(mean|sd)$", names(bc)))
+
+# ...and one_se() must now work on that table end to end, which is the whole
+# point: the best mean is cfg_002 (0.535) but cfg_001 is within one SE and is
+# nine times smaller, so the rule must take the small one.
+pick <- one_se(bc, metric = "val_ccc", complexity = "n_params")
+ok["one_se_runs_on_summarise_output"] <- nrow(pick) == 1L
+ok["one_se_prefers_the_simpler_tie"]  <- pick$config_id == "cfg_001"
+ok["one_se_reports_the_tie_size"]     <- attr(pick, "within_one_se") == 2L
+ok["one_se_flags_that_it_moved"]      <- isTRUE(attr(pick, "simpler_than_best"))
+
+# When the ranking DOES separate, the rule must return the winner -- this is
+# what makes it safe as a default rather than a bias toward small models.
+bc_clear <- bc
+bc_clear$val_ccc_mean <- c(0.90, 0.50)[match(bc_clear$config_id,
+                                             c("cfg_002", "cfg_001"))]
+bc_clear$val_ccc_se   <- 0.001
+ok["one_se_keeps_a_decisive_winner"] <- {
+  p <- one_se(bc_clear, metric = "val_ccc", complexity = "n_params")
+  p$config_id == "cfg_002" && isFALSE(attr(p, "simpler_than_best"))
+}
+
+# A family chosen by the caller must not be re-chosen per metric: see the note
+# in paired_family_test(). The label is reported either way, and a config the
+# caller did NOT pass is marked so the reader can see it was picked here.
+ok["paired_marks_a_config_it_chose"] <- {
+  p <- paired_family_test(A, B, metric = "val_ccc")
+  grepl("chosen here", p$chosen_a)
+}
+ok["paired_does_not_mark_a_given_config"] <- {
+  p <- paired_family_test(A, B, metric = "val_ccc",
+                          config_a = "cfg_001", config_b = "rf_001")
+  identical(p$chosen_a, "caller") && identical(p$chosen_b, "caller")
+}
+# The same config on both metrics when the caller says so -- the defect this
+# fixed was rf_001 on CCC and rf_002 on MAE inside one report.
+ok["paired_honours_the_config_on_every_metric"] <- {
+  p1 <- paired_family_test(AA, B, metric = "val_ccc", config_a = "cfg_002")
+  p2 <- paired_family_test(AA, B, metric = "val_mae", config_a = "cfg_002")
+  p1$label_a == "cfg_002" && p2$label_a == "cfg_002"
+}
+
 .report(ok, "test_resample")

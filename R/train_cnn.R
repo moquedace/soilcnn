@@ -520,6 +520,7 @@ run_cnn_tuning <- function(
   n_seeds     = 1L,
   fold        = 1L,
   resume      = TRUE,
+  evaluate_test = FALSE,
   ...
 ) {
   n_seeds <- as.integer(n_seeds)
@@ -765,7 +766,20 @@ run_cnn_tuning <- function(
 
     # Append to comparison table
     val_perf  <- dplyr::filter(result$perf_all, dataset_role == "validation")
+    # ── The test set is NOT scored during tuning (evaluate_test) ──────────────
+    #
+    # A frozen test set is frozen only while nothing reads it. Scoring it on
+    # every unit puts test_ccc in the comparison table beside val_ccc, and from
+    # there it takes one glance to prefer the config that "also does well on
+    # test" -- which is selection on the test set, done by a human instead of
+    # an argmax, and it inflates the final number by exactly as much.
+    #
+    # The columns still EXIST, holding NA, so the table keeps one shape whether
+    # the test was scored or not and every reader downstream is unchanged.
+    # Stage 04 scores the test once, on the chosen config, which is the only
+    # moment the number means what it is reported to mean.
     test_perf <- dplyr::filter(result$perf_all, dataset_role == "test")
+    if (!isTRUE(evaluate_test)) test_perf <- test_perf[0, , drop = FALSE]
     if (nrow(test_perf) == 0L) {
       # No test set in this plan: the columns still exist, holding NA, so the
       # table has one shape whatever the plan was.
@@ -886,6 +900,11 @@ run_cnn_tuning <- function(
 #' @param release_store When TRUE (default) the raw patch tensors are dropped
 #'   after the LAST fold's cache is built. They are needed until then, since
 #'   each fold rescales them from raw.
+#' @param evaluate_test Score the held-out test set on every unit? FALSE, and
+#'   deliberately so: a frozen test set stops being frozen the moment its score
+#'   sits in the tuning table next to the validation score. Stage 04 scores it
+#'   once, on the config that was chosen without it. Set TRUE only to study the
+#'   optimism itself -- never to choose anything.
 #' @param ...          Passed through to run_cnn_tuning() and train_one_cnn().
 #' @return list(comparison, by_config, run_dir, plan)
 run_cnn_resample <- function(tune_grid, store, points, type_table, plan,
@@ -896,6 +915,7 @@ run_cnn_resample <- function(tune_grid, store, points, type_table, plan,
                              base_seed  = 42L,
                              n_seeds    = 1L,
                              resume     = TRUE,
+                             evaluate_test = FALSE,
                              release_store = TRUE,
                              ...) {
   stopifnot(inherits(plan, "fold_plan"))
@@ -906,6 +926,28 @@ run_cnn_resample <- function(tune_grid, store, points, type_table, plan,
   fold_sizes <- check_fold_plan(plan, meta = store$meta)
   message("\n-- Resampling plan --")
   print(plan)
+
+  # -- The size of each config, ONCE -----------------------------------------
+  #
+  # one_se() picks the SIMPLEST config within one standard error of the best,
+  # and "simplest" has to be a number in the table or the framework is inventing
+  # an ordering. The tabular runner already records n_params from the fitted
+  # model; the CNN runner did not, so one_se() failed on a CNN tuning run with
+  # a message about a missing column -- on a run that had just cost hours.
+  #
+  # Computed per CONFIG, not per unit: it depends only on the architecture, and
+  # a run repeats each config once per fold and per seed. Building the module to
+  # count its parameters is cheap beside training it, but nine times over is
+  # still eight times too many.
+  #
+  # It rides in the grid, so it reaches the comparison table through the same
+  # bind_cols() as every other config field -- no second path to keep in sync.
+  if (!"n_params" %in% names(tune_grid)) {
+    tune_grid$n_params <- vapply(seq_len(nrow(tune_grid)), function(i) {
+      tryCatch(as.numeric(count_model_params(tune_grid[i, ], store$n_channels)),
+               error = function(e) NA_real_)
+    }, numeric(1))
+  }
 
   windows_needed <- sort(unique(unlist(tune_grid$window_sizes)))
   run_dir <- file.path(output_dir, run_id)
@@ -958,6 +1000,7 @@ run_cnn_resample <- function(tune_grid, store, points, type_table, plan,
       n_seeds      = n_seeds,
       fold         = j,
       resume       = resume,
+      evaluate_test = evaluate_test,
       ...
     )
     comparison <- res$comparison

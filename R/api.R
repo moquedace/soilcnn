@@ -296,7 +296,8 @@ dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
                       output_dir = "./outputs/tuning",
                       run_id = format(Sys.time(), "%Y%m%d_%H%M%S"),
                       base_seed = 42L, device = NULL, test_ids = NULL,
-                      resume = TRUE, verbose = TRUE, ...) {
+                      resume = TRUE, evaluate_test = FALSE,
+                      verbose = TRUE, ...) {
 
   stopifnot(inherits(data, "dsm_data"))
   if (is.character(model)) model <- get_model(model)
@@ -342,14 +343,16 @@ dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
       tune_grid = tune_grid, store = data$store, points = data$points,
       type_table = data$type_table, plan = plan, transform = transform,
       output_dir = output_dir, device = device, run_id = run_id,
-      base_seed = base_seed, n_seeds = n_seeds, resume = resume, ...)
+      base_seed = base_seed, n_seeds = n_seeds, resume = resume,
+      evaluate_test = evaluate_test, ...)
   } else {
     res <- run_table_resample(
       model = model, tune_grid = tune_grid, store = data$store,
       points = data$points, type_table = data$type_table, plan = plan,
       features = features, transform = transform, output_dir = output_dir,
       run_id = run_id, base_seed = base_seed, n_seeds = n_seeds,
-      tune_length = tune_length, device = device, resume = resume, ...)
+      tune_length = tune_length, device = device, resume = resume,
+      evaluate_test = evaluate_test, ...)
   }
 
   res$model <- model$name

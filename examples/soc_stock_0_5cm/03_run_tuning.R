@@ -372,14 +372,20 @@ message("Results saved to: ", file.path(output_tuning_dir, run_id))
 # repetitions), not from the per-unit one: a lucky seed of a mediocre config
 # outranks the steady mean of a good one whenever rows are what get ranked.
 if (nrow(results$by_config) > 0) {
-  message("\nTop 5 configs by mean VALIDATION CCC (the selection metric; ",
-          "test_* is diagnostic only):")
+  # test_* is NOT shown, and the columns are NA anyway (evaluate_test = FALSE).
+  #
+  # It used to be printed "for diagnosis". There is no such thing: a test score
+  # on screen next to the selection metric IS selection on the test set, done
+  # by the person reading rather than by an argmax, and it inflates the final
+  # number by the same amount. The test is scored once, in stage 04, on the
+  # config chosen without it.
+  message("\nTop 5 configs by mean VALIDATION CCC (the selection metric):")
   print_wide(
     dplyr::select(
       results$by_config,
       rank, config_id, n_units, n_folds, n_seeds,
       dplyr::starts_with("val_ccc"), dplyr::starts_with("val_mae"),
-      dplyr::starts_with("test_ccc"), n_failed
+      dplyr::any_of("n_params"), n_failed
     ),
     n = 5
   )

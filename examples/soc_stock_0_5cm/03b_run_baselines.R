@@ -289,6 +289,21 @@ message(strrep("=", 78))
 
 cnn_cmp <- if (file.exists(cnn_comparison)) readRDS(cnn_comparison) else NULL
 
+# ONE CONFIG PER FAMILY, CHOSEN ONCE.
+#
+# paired_family_test() will otherwise pick the best config for whichever metric
+# it is given, and the first run of this block did exactly that: the CCC
+# comparison used rf_001 and the MAE comparison used rf_002. Both choices are
+# defensible on their own, but together they mean "rf_context" names a
+# different model on each line of the same report -- and the reader has no way
+# to see it.
+#
+# A family is represented by the configuration someone would DEPLOY, and that
+# decision is made once, on the selection metric, before any comparison. The
+# board above already made it; this reuses it rather than re-deciding.
+board_cfg <- stats::setNames(board$config_id, board$family)
+cfg_of <- function(fam) if (fam %in% names(board_cfg)) unname(board_cfg[fam]) else NULL
+
 pairs_to_test <- list(
   # The headline: structure vs the same neighbourhood with structure removed.
   list(a = cnn_cmp,                  b = results$rf_context,
@@ -307,6 +322,7 @@ for (metric in c("val_ccc", "val_mae")) {
     if (is.null(p$a) || is.null(p$b)) next
     res <- tryCatch(
       paired_family_test(p$a, p$b, metric = metric,
+                         config_a = cfg_of(p$la), config_b = cfg_of(p$lb),
                          label_a = p$la, label_b = p$lb),
       error = function(e) {
         message("  ", p$la, " vs ", p$lb, " (", metric, "): ",

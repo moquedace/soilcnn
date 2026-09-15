@@ -1077,6 +1077,25 @@ summarise_resamples <- function(comparison,
       .groups = "drop"
     )
 
+  # COMPLEXITY TRAVELS WITH THE SUMMARY.
+  #
+  # one_se() needs a measure of "simplest" in the same table as the means, and
+  # n_params is a property of the CONFIG, not of the unit -- it is identical
+  # across the folds and seeds of one config, so it summarises by taking the
+  # first value rather than by averaging.
+  #
+  # Without this the column exists per unit and vanishes at the group_by, and
+  # one_se() then fails on a table that "obviously" has what it needs. Any
+  # future per-config constant belongs in this vector, not in a second join.
+  const_cols <- intersect(c("n_params", "n_features", "model"), names(ok))
+  if (length(const_cols) > 0L) {
+    consts <- ok %>%
+      dplyr::group_by(dplyr::across(dplyr::all_of(by))) %>%
+      dplyr::summarise(dplyr::across(dplyr::all_of(const_cols),
+                                     ~ dplyr::first(.x)), .groups = "drop")
+    agg <- dplyr::left_join(agg, consts, by = by)
+  }
+
   # Standard error of the mean over repetitions: the number that says whether
   # two configs are actually distinguishable. With n_units = 1 it is NA, which
   # is the correct answer -- one run gives no estimate of its own spread.
@@ -1337,17 +1356,29 @@ paired_family_test <- function(a, b, metric = "val_ccc",
     }
     if ("status" %in% names(d)) d <- d[d$status == "success", , drop = FALSE]
     d <- d[is.finite(d[[metric]]), , drop = FALSE]
+    chosen_by <- "caller"
     if (is.null(cfg)) {
+      # A FALLBACK, NOT THE INTENDED PATH.
+      #
+      # Picking per metric makes each comparison internally optimal and the
+      # REPORT incoherent: run this for CCC and again for MAE and "rf_context"
+      # can name two different forests, with nothing on the page saying so. A
+      # family should be represented by the config someone would deploy, chosen
+      # once on the selection metric -- which is what the caller passes.
+      #
+      # When it does not, choose sensibly and SAY so: print.paired_comparison
+      # marks a config that was chosen here rather than handed in.
       m <- tapply(d[[metric]], d$config_id, mean, na.rm = TRUE)
       # Error metrics are better when small; everything else here is a score.
       cfg <- names(m)[if (.metric_is_error(metric)) which.min(m) else which.max(m)]
+      chosen_by <- paste0("chosen here: best ", metric)
     }
     d <- d[d$config_id == cfg, , drop = FALSE]
     if (nrow(d) == 0L) {
       stop("config '", cfg, "' has no successful units in `", who, "`.",
            call. = FALSE)
     }
-    list(cfg = cfg, d = d)
+    list(cfg = cfg, d = d, chosen_by = chosen_by)
   }
 
   A <- pick(a, config_a, "a"); B <- pick(b, config_b, "b")
@@ -1385,6 +1416,7 @@ paired_family_test <- function(a, b, metric = "val_ccc",
 
   structure(list(
     metric = metric, label_a = A$cfg, label_b = B$cfg,
+    chosen_a = A$chosen_by, chosen_b = B$chosen_by,
     name_a = label_a, name_b = label_b,
     n_pairs = n, dropped = dropped,
     mean_a = mean(va), mean_b = mean(vb),
@@ -1405,8 +1437,11 @@ paired_family_test <- function(a, b, metric = "val_ccc",
 print.paired_comparison <- function(x, ...) {
   cat("\nPaired comparison --", x$metric, "\n")
   cat(strrep("-", 62), "\n")
-  cat(sprintf("  %-14s %-10s mean = %.4f\n", x$name_a, x$label_a, x$mean_a))
-  cat(sprintf("  %-14s %-10s mean = %.4f\n", x$name_b, x$label_b, x$mean_b))
+  note <- function(by) if (identical(by, "caller")) "" else paste0("   [", by, "]")
+  cat(sprintf("  %-14s %-10s mean = %.4f%s\n", x$name_a, x$label_a,
+              x$mean_a, note(x$chosen_a)))
+  cat(sprintf("  %-14s %-10s mean = %.4f%s\n", x$name_b, x$label_b,
+              x$mean_b, note(x$chosen_b)))
   cat(sprintf("  paired on %d (fold, seed) unit(s)%s\n", x$n_pairs,
               if (x$dropped > 0) sprintf("; %d unpaired dropped", x$dropped) else ""))
   cat("\n")
