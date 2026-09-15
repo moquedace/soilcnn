@@ -78,7 +78,10 @@ device <- setup_torch_device(n_threads = 30, use_cuda = TRUE)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
-data_dir     <- file.path(project_root, "outputs", "data",
+# data/processed, NOT outputs/data. Stage 01 writes the point table there and
+# every other script reads it there; this one said outputs/data and would have
+# stopped on a file that exists, one directory away.
+data_dir     <- file.path(project_root, "data", "processed",
                           "soc_stock_modeling", target_label)
 metadata_dir <- file.path(project_root, "outputs", "metadata",
                           "soc_stock_modeling", target_label)
