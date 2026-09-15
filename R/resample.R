@@ -673,9 +673,11 @@ region_folds <- function(meta, group, k = NULL, test_frac = 0,
 #'   plan unchanged.
 #' @return The plan, with buffered training sets and a `buffer_dropped` tibble.
 apply_buffer <- function(plan, meta, buffer,
-                         metric = c("chebyshev", "euclidean")) {
+                         metric = c("chebyshev", "euclidean"),
+                         protect = c("validation", "test")) {
   stopifnot(inherits(plan, "fold_plan"))
-  metric <- match.arg(metric)
+  metric  <- match.arg(metric)
+  protect <- match.arg(protect, c("validation", "test"), several.ok = TRUE)
   if (is.null(buffer) || buffer <= 0) return(plan)
   if (!all(c("x", "y") %in% names(meta))) {
     stop("meta needs x and y columns to apply a buffer.", call. = FALSE)
@@ -683,25 +685,72 @@ apply_buffer <- function(plan, meta, buffer,
   x <- as.numeric(meta$x)
   y <- as.numeric(meta$y)
 
+  # ── THE TEST SET WAS NEVER BUFFERED ────────────────────────────────────────
+  #
+  # This function protected the VALIDATION set and nothing else. So the fold
+  # plan could report "0% leakage" -- truthfully, about validation -- while
+  # every training point next to a test block kept its place, and its 15x15
+  # patch kept overlapping test patches pixel for pixel.
+  #
+  # The number that was protected is the one used to CHOOSE. The number that
+  # was not is the one that goes in the paper.
+  #
+  # Validation is buffered against test too. It is the weaker of the two links
+  # -- the model never fits validation rows, it only decides WHEN TO STOP on
+  # them -- but early stopping is a decision made on data, and a stopping epoch
+  # chosen on rows that overlap the test set is a small read of the test set.
+  # It is cheap to close: the test is carved as whole blocks, so the points
+  # within one patch span of it are a thin rim.
+  #
+  # Reported by cause, because "5.1% dropped" hides which promise it paid for.
   dropped <- vector("list", length(plan$folds))
   for (j in seq_along(plan$folds)) {
-    f    <- plan$folds[[j]]
-    near <- .near_any(x[f$train], y[f$train], x[f$validation], y[f$validation],
-                      buffer, metric)
+    f      <- plan$folds[[j]]
     n_before <- length(f$train)
-    plan$folds[[j]]$train <- f$train[!near]
+    has_test <- length(f$test) > 0L
+
+    near_val  <- if ("validation" %in% protect && length(f$validation) > 0L) {
+      .near_any(x[f$train], y[f$train], x[f$validation], y[f$validation],
+                buffer, metric)
+    } else rep(FALSE, n_before)
+
+    near_test <- if ("test" %in% protect && has_test) {
+      .near_any(x[f$train], y[f$train], x[f$test], y[f$test], buffer, metric)
+    } else rep(FALSE, n_before)
+
+    plan$folds[[j]]$train <- f$train[!(near_val | near_test)]
     if (length(plan$folds[[j]]$train) == 0L) {
       stop("Fold ", j, ": the buffer removed every training point. The buffer ",
            "is large relative to the spacing of this data.", call. = FALSE)
     }
+
+    n_val_before <- length(f$validation)
+    n_val_drop   <- 0L
+    if ("test" %in% protect && has_test && n_val_before > 0L) {
+      nv <- .near_any(x[f$validation], y[f$validation], x[f$test], y[f$test],
+                      buffer, metric)
+      plan$folds[[j]]$validation <- f$validation[!nv]
+      n_val_drop <- sum(nv)
+      if (length(plan$folds[[j]]$validation) == 0L) {
+        stop("Fold ", j, ": the buffer removed every validation point. Early ",
+             "stopping has nothing left to watch.", call. = FALSE)
+      }
+    }
+
+    n_drop <- sum(near_val | near_test)
     dropped[[j]] <- tibble::tibble(
-      fold = j, n_train_before = n_before, n_dropped = sum(near),
-      pct_dropped = round(100 * sum(near) / n_before, 2))
+      fold = j, n_train_before = n_before, n_dropped = n_drop,
+      pct_dropped = round(100 * n_drop / n_before, 2),
+      # Causes overlap -- a point can be near both -- so these do not have to
+      # add up to n_dropped, and saying so here stops that reading as a bug.
+      n_near_validation = sum(near_val), n_near_test = sum(near_test),
+      n_validation_before = n_val_before, n_validation_dropped = n_val_drop)
   }
 
-  plan$params$buffer        <- buffer
-  plan$params$buffer_metric <- metric
-  plan$buffer_dropped       <- dplyr::bind_rows(dropped)
+  plan$params$buffer         <- buffer
+  plan$params$buffer_metric  <- metric
+  plan$params$buffer_protect <- paste(protect, collapse = "+")
+  plan$buffer_dropped        <- dplyr::bind_rows(dropped)
   plan
 }
 
@@ -1015,10 +1064,23 @@ print.fold_plan <- function(x, ...) {
   }
   print(check_fold_plan(x), n = Inf)
   if (!is.null(x$buffer_dropped)) {
-    cat("  buffer: ", format(sum(x$buffer_dropped$n_dropped), big.mark = ","),
+    bd <- x$buffer_dropped
+    cat("  buffer: ", format(sum(bd$n_dropped), big.mark = ","),
         " training point(s) dropped (",
-        sprintf("%.1f%%", mean(x$buffer_dropped$pct_dropped)),
+        sprintf("%.1f%%", mean(bd$pct_dropped)),
         " per fold on average)\n", sep = "")
+    # BY CAUSE. One number cannot say which promise was paid for, and the two
+    # promises are different claims: "validation is independent" decides the
+    # config, "test is independent" is the number that leaves the building.
+    if ("n_near_test" %in% names(bd)) {
+      cat("    near validation: ", format(sum(bd$n_near_validation), big.mark = ","),
+          " | near test: ", format(sum(bd$n_near_test), big.mark = ","),
+          " (a point can be both)\n", sep = "")
+      if (sum(bd$n_validation_dropped) > 0L) {
+        cat("    validation points dropped for being near test: ",
+            format(sum(bd$n_validation_dropped), big.mark = ","), "\n", sep = "")
+      }
+    }
   }
   invisible(x)
 }

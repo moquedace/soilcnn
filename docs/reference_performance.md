@@ -223,3 +223,13 @@ Three caveats, in order of how much they should change the reading:
 The result that is robust to all three: `mlp_centre` reaches 0.484 from the 181
 centre values alone, indistinguishable from the CNN on full patches. Whatever
 the neighbourhood is worth here, the evidence for it is not yet visible.
+
+---
+
+## Caveat on every test metric recorded above
+
+All of the runs above predate the fix to `apply_buffer()`, which protected the
+validation set only. Training points adjacent to test blocks were kept, and
+their patches overlapped test patches. **The test numbers above are optimistic
+by an unknown amount** and should not be quoted; the validation numbers, which
+are what every comparison on this page actually uses, are unaffected.

@@ -953,4 +953,82 @@ ok["paired_honours_the_config_on_every_metric"] <- {
   p1$label_a == "cfg_002" && p2$label_a == "cfg_002"
 }
 
+
+# =============================================================================
+# THE BUFFER MUST PROTECT THE TEST SET, NOT ONLY THE VALIDATION SET
+#
+# apply_buffer() used to measure distance from training points to VALIDATION
+# points and stop there. The plan then printed "0% leakage" -- true, and about
+# the wrong set. Every training point beside a test block kept its place, and
+# at 250 m a 15x15 patch reaches 1.7 km, so those patches overlapped test
+# patches pixel for pixel.
+#
+# The asymmetry is what makes it dangerous rather than merely wrong: the set
+# that was protected is the one used to CHOOSE, and the set that was not is the
+# one whose number is published.
+#
+# The fixture is built so the old behaviour cannot pass: training points are
+# placed near the test set and FAR from validation, so a validation-only buffer
+# drops nothing at all.
+# =============================================================================
+
+buf_meta <- tibble::tibble(
+  sample_id = 1:9,
+  #        test ....... | gap | train near test | far train | validation
+  x = c(0.0, 0.1, 0.2,          0.5, 0.6,         5.0, 5.1,   9.0, 9.1),
+  y = 0)
+buf_plan <- structure(list(
+  folds = list(list(train = 4:7, validation = 8:9, test = 1:3)),
+  n_folds = 1L, params = list(), meta_rows = 9L),
+  class = "fold_plan")
+
+# buffer 1.0 reaches from x = 0.5 to the test point at x = 0.2 (distance 0.3),
+# and nowhere near validation at x = 9.
+buf_both <- apply_buffer(buf_plan, buf_meta, buffer = 1.0)
+ok["buffer_drops_training_near_test"] <-
+  identical(buf_both$folds[[1]]$train, 6:7)
+ok["buffer_keeps_training_far_from_test"] <-
+  all(c(6L, 7L) %in% buf_both$folds[[1]]$train)
+ok["buffer_reports_the_test_cause"] <-
+  buf_both$buffer_dropped$n_near_test == 2L
+ok["buffer_reports_no_validation_cause"] <-
+  buf_both$buffer_dropped$n_near_validation == 0L
+
+# THE REGRESSION GUARD: with protect = "validation" only -- the old behaviour --
+# nothing is dropped. If this ever equals the line above, the fix is gone.
+buf_val <- apply_buffer(buf_plan, buf_meta, buffer = 1.0, protect = "validation")
+ok["validation_only_buffer_drops_nothing_here"] <-
+  identical(buf_val$folds[[1]]$train, 4:7)
+ok["the_two_settings_really_differ"] <-
+  !identical(buf_val$folds[[1]]$train, buf_both$folds[[1]]$train)
+
+# Validation near the test set goes too: early stopping is a decision made on
+# data, and a stopping epoch chosen on rows that overlap the test is a small
+# read of the test.
+buf_meta2 <- buf_meta; buf_meta2$x[8] <- 0.4   # validation point beside test
+buf_v2 <- apply_buffer(buf_plan, buf_meta2, buffer = 1.0)
+ok["buffer_drops_validation_near_test"] <-
+  identical(buf_v2$folds[[1]]$validation, 9L)
+ok["buffer_reports_validation_dropped"] <-
+  buf_v2$buffer_dropped$n_validation_dropped == 1L
+
+# ...and it must refuse rather than hand back an empty side.
+ok["buffer_refuses_to_empty_validation"] <- inherits(
+  try(apply_buffer(buf_plan, buf_meta, buffer = 20, protect = "test"),
+      silent = TRUE), "try-error")
+
+# A plan with no test set must be untouched by the test half of the rule.
+buf_plan_nt <- buf_plan
+buf_plan_nt$folds[[1]]$test <- integer(0)
+ok["no_test_set_no_test_buffer"] <- {
+  p <- apply_buffer(buf_plan_nt, buf_meta, buffer = 1.0)
+  p$buffer_dropped$n_near_test == 0L && identical(p$folds[[1]]$train, 4:7)
+}
+
+ok["buffer_records_what_it_protected"] <-
+  identical(buf_both$params$buffer_protect, "validation+test")
+
+cat("  buffer protects          : train and validation against the test set",
+    " (was validation only)\n", sep = "")
+
 .report(ok, "test_resample")

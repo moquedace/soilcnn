@@ -2309,3 +2309,54 @@ a confidence interval, on both CCC and MAE, because the first run ranked the
 families in opposite orders on the two metrics. The interval is the point: with
 9 pairs, "not significant" cannot distinguish "there is nothing" from "we could
 not see it", and the interval says how large an effect is still permitted.
+
+---
+
+## The buffer protected the validation set and left the test set exposed
+
+`apply_buffer()` measured the distance from every training point to the
+**validation** points and dropped what fell inside the buffer. It never looked
+at the test set. So a fold plan could print
+
+```
+buffer: 319 training point(s) dropped (5.1% per fold on average)
+```
+
+and the pipeline could report zero leakage — truthfully, about validation —
+while every training point beside a test block kept its place. At 250 m a 15×15
+patch spans 1.7 km, so those patches overlapped test patches pixel for pixel.
+
+The asymmetry is what makes this worse than a plain omission: **the set that was
+protected is the one used to choose, and the set that was not protected is the
+one whose number gets published.** Every test metric measured before this commit
+is optimistic by an unknown amount, and nothing in the output said so.
+
+It is the same shape as §A0 of the September review (the buffer measuring a
+circle where the patch is a square): a guarantee that is written down, believed,
+and not delivered. Both were found the same way — by asking what the code
+actually computes rather than what its name claims.
+
+**Fix.** `apply_buffer(protect = c("validation", "test"))`. Training points are
+now dropped for being near validation *or* near test, and the two causes are
+reported separately, because one number cannot say which promise it paid for.
+
+Validation points near the test set are dropped too. That link is weaker — the
+model never fits validation rows, it only decides *when to stop* on them — but a
+stopping epoch chosen on rows that overlap the test set is a small read of the
+test set, and closing it is cheap: the test is carved as whole blocks, so the
+affected points are a thin rim.
+
+*Discarded:* buffering only train-against-test and leaving validation alone. It
+is defensible, and it is the kind of "defensible" that is impossible to explain
+in a methods section without sounding like a caveat. The cost of being strict
+here is a few dozen points.
+
+The regression test is built so the old behaviour **cannot** pass: the fixture
+places training points next to the test set and far from validation, so a
+validation-only buffer drops nothing, and `protect = "validation"` is asserted
+to differ from the default.
+
+**Consequence for results already recorded.** `docs/reference_performance.md`
+reports test metrics from runs made under the old buffer. They are not wrong as
+records of what happened; they answer a weaker question than their names imply,
+and are marked accordingly.
