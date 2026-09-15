@@ -212,6 +212,114 @@ load_patch_store <- function(patch_dir, window_sizes = NULL, verbose = TRUE) {
 # by a fold plan (R/resample.R) in seconds. That is what stops a change of
 # split strategy from costing a re-extraction.
 
+# ── the store's spec, and refusing a configuration it cannot serve ────────────
+#
+# Three things force a re-extraction: the PREDICTORS, the WINDOWS and the
+# TARGET. Everything else about a run -- the split, the folds, the buffer, the
+# seeds, the grid -- is decided downstream and costs seconds to change.
+#
+# So those three are recorded in the manifest when the store is built, and
+# compared against what the current configuration asks for before any of it is
+# used. A package user who changes a window gets a clear failure in seconds,
+# naming the fix, rather than a silently wrong result or an extraction they
+# discover was wasted.
+
+#' What a patch store was built under.
+#'
+#' @param store From load_patch_store().
+#' @return list(predictors, windows, target_col, target_transform, cell_size),
+#'   with NA for anything a store written before this was recorded.
+store_spec <- function(store) {
+  m <- store$manifest
+  get1 <- function(nm) if (nm %in% names(m)) m[[nm]][1] else NA
+  list(
+    predictors       = store$predictors,
+    # What the STORE HOLDS, not the subset this session loaded: store$window_sizes
+    # is the `window_sizes =` argument, so asking the store what it has through
+    # that field would only ever echo the question back.
+    windows          = as.integer(trimws(
+      strsplit(as.character(m$windows_extracted[1]), ",")[[1]])),
+    target_col       = get1("target_col"),
+    target_transform = get1("target_transform"),
+    cell_size        = suppressWarnings(as.numeric(get1("cell_size")))
+  )
+}
+
+#' Refuse a configuration the store cannot serve.
+#'
+#' Reports EVERY mismatch it finds, not just the first: discovering one, fixing
+#' it, re-running and discovering the next is the slow way to learn there were
+#' three.
+#'
+#' @param store       From load_patch_store().
+#' @param predictors  Channel names the current configuration expects.
+#' @param windows     Window sizes the current grid needs.
+#' @param target_col  Target column name, or NULL to skip.
+#' @param cell_size   Raster resolution now, or NULL to skip.
+#' @param strict      TRUE (default) stops; FALSE returns the messages, which
+#'   is what a reporting script wants.
+check_store_spec <- function(store, predictors = NULL, windows = NULL,
+                             target_col = NULL, cell_size = NULL,
+                             strict = TRUE) {
+  spec <- store_spec(store)
+  bad  <- character(0)
+
+  if (!is.null(predictors)) {
+    gone  <- setdiff(predictors, spec$predictors)
+    extra <- setdiff(spec$predictors, predictors)
+    if (length(gone) || length(extra)) {
+      bad <- c(bad, sprintf(
+        paste0("PREDICTORS differ: the store holds %d, this configuration ",
+               "expects %d.%s%s\n  -> re-extract (stage 02), or restore the ",
+               "predictor set this store was built with."),
+        length(spec$predictors), length(predictors),
+        if (length(gone))  sprintf("\n  missing from the store: %s",
+                                   paste(utils::head(gone, 6), collapse = ", ")) else "",
+        if (length(extra)) sprintf("\n  in the store but not expected: %s",
+                                   paste(utils::head(extra, 6), collapse = ", ")) else ""))
+    } else if (!identical(as.character(predictors), as.character(spec$predictors))) {
+      bad <- c(bad, paste0(
+        "PREDICTOR ORDER differs from the store's. The order is the contract ",
+        "that ties channels to bands -- feeding the network one channel while ",
+        "the map is built from another produces no error at all.",
+        "\n  -> rebuild predictor_type_table.csv from the same source."))
+    }
+  }
+
+  if (!is.null(windows)) {
+    miss <- setdiff(as.integer(windows), as.integer(spec$windows))
+    if (length(miss)) {
+      bad <- c(bad, sprintf(
+        paste0("WINDOWS %s are not in this store, which holds %s.",
+               "\n  -> re-extract (stage 02) with the wider set, or change ",
+               "the grid to stay inside it."),
+        paste(miss, collapse = ", "), paste(spec$windows, collapse = ", ")))
+    }
+  }
+
+  if (!is.null(target_col) && !is.na(spec$target_col) &&
+      !identical(as.character(target_col), as.character(spec$target_col))) {
+    bad <- c(bad, sprintf(
+      "TARGET differs: the store was built for '%s', this run wants '%s'.%s",
+      spec$target_col, target_col,
+      "\n  -> re-extract (stage 02): the patches are the same, but the stored targets are not."))
+  }
+
+  if (!is.null(cell_size) && !is.na(spec$cell_size) &&
+      abs(cell_size - spec$cell_size) > 1e-9) {
+    bad <- c(bad, sprintf(
+      paste0("RESOLUTION differs: the store was built at %.8f, the rasters ",
+             "now read %.8f.\n  -> the predictor directory changed. Every ",
+             "window, buffer and block size is in these units."),
+      spec$cell_size, cell_size))
+  }
+
+  if (length(bad) == 0L) return(invisible(character(0)))
+  msg <- paste0("This patch store cannot serve this configuration:\n\n",
+                paste0("  * ", bad, collapse = "\n\n"))
+  if (strict) stop(msg, call. = FALSE) else return(bad)
+}
+
 # ── aligning point values to the store ────────────────────────────────────────
 
 #' Line up the point-value table with the patch store, row for row.

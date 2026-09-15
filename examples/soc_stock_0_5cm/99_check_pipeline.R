@@ -283,7 +283,7 @@ if (n_02_presentes == 0L) {
   if (!all_02_exist) {
     .say("  WARNING: stage 02 ran PARTIALLY (", n_02_presentes, " of ",
             length(files_02), " files). An incomplete store is worse than ",
-            "nenhum -- rode o 02 of novo.")
+            "none at all -- run 02 again.")
   }
 }
 
@@ -333,11 +333,52 @@ if (all_02_exist) {
               "stage 01 incomplete -- nothing to compare against")
   }
 
-  expected_windows <- "3, 9, 15"
-  ok_windows <- identical(trimws(manifest$windows_extracted[1]), expected_windows)
-  add_check("02", "windows_extracted == '3, 9, 15'",
+  # WINDOWS: what is checked is the SHAPE, not a frozen list.
+  #
+  # This used to assert the literal "3, 9, 15", which made the checker wrong
+  # for anyone who changed the grid -- and the grid is meant to be changed.
+  # What must hold for ANY store is structural: windows are odd (a patch has a
+  # centre pixel, and an even side has none) and strictly ascending. Whether
+  # THIS run's grid can be served by THIS store is a different question, and
+  # check_store_spec() answers it in stage 03 where the grid exists.
+  w_store <- suppressWarnings(as.integer(trimws(
+    strsplit(as.character(manifest$windows_extracted[1]), ",")[[1]])))
+  ok_windows <- length(w_store) > 0L && !anyNA(w_store) &&
+                all(w_store %% 2L == 1L) && all(diff(w_store) > 0L)
+  add_check("02", "windows_extracted: odd and ascending",
             if (ok_windows) "PASS" else "FAIL",
-            paste("valor:", manifest$windows_extracted[1]))
+            paste("value:", manifest$windows_extracted[1]))
+
+  # THE STORE SPEC -- what 02 recorded, against what 01 decided and what the
+  # rasters say today.
+  #
+  # A store carries no visible mark of the target it was built for or the
+  # resolution it was cut at. Both have silently changed between runs of this
+  # project before, and neither produced an error: the wrong one trains, fits
+  # and maps just as well as the right one. These two checks are the whole
+  # reason the manifest records a spec at all.
+  if (exists("tconfig") && "target_col" %in% names(manifest)) {
+    check_equal("02", "target_col: manifest vs target_config",
+                as.character(manifest$target_col[1]),
+                as.character(tconfig$target_col[1]), "manifest", "01")
+  } else if (!"target_col" %in% names(manifest)) {
+    add_check("02", "target_col recorded in the manifest", "WARN",
+              "store written before the spec was recorded -- re-extract to lock it")
+  }
+
+  # requireNamespace, because this is the only place the checker touches terra
+  # and a fast structural check should not fail to run over a missing optional.
+  if ("cell_size" %in% names(manifest) && file.exists(f_rtable) &&
+      requireNamespace("terra", quietly = TRUE)) {
+    .cs_store <- suppressWarnings(as.numeric(manifest$cell_size[1]))
+    .r1 <- safe_read_csv2(f_rtable)$raster_file[1]
+    if (!is.na(.cs_store) && !is.na(.r1) && file.exists(.r1)) {
+      .cs_now <- terra::res(terra::rast(.r1))[1]
+      add_check("02", "cell_size: manifest vs the rasters now",
+                if (abs(.cs_now - .cs_store) < 1e-9) "PASS" else "FAIL",
+                sprintf("store %.8f | rasters %.8f", .cs_store, .cs_now))
+    }
+  }
 
   # The manifest's n_points_valid matches the real rows of patch_meta.csv
   n_patch_meta <- nrow(safe_read_csv2(f_patch_meta,

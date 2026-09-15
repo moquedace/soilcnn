@@ -1103,6 +1103,106 @@ Nenhum muda resultado; todos faziam o pipeline dizer uma coisa por outra:
 
 ---
 
+## Phase 2 — the store lock (2026-09-14)
+
+Written while stage 01 was running in dev mode, because nothing in phases 2-4
+touches stage 01.
+
+### The problem it solves
+
+A patch store carries no visible mark of the predictor set, the target or the
+resolution it was built under. Read it with a script expecting something else
+and **nothing errors**: the network trains, converges, and produces a map of
+the wrong variable. This is the shape of every restart this project has had --
+the defect lived upstream of where it was found.
+
+### What changed
+
+**`02_extract_patches.R`** records the spec in the manifest: `target_col`,
+`target_transform`, `cell_size`. It now reads `target_config.csv` for the
+target name -- the only reason it reads that file at all.
+
+The predictor LIST is recorded, not a hash of it. Comparing lists costs the
+same and lets the error name *which* predictors differ. A hash can only say
+"different".
+
+**`R/dataset.R`** gained `store_spec()` and `check_store_spec()`.
+`store_spec()` reads the windows from `manifest$windows_extracted`, **not**
+from `store$window_sizes` -- the latter is the `window_sizes =` argument, so
+asking the store what it holds through that field only echoes the question
+back. This was a real bug in the first draft.
+
+`check_store_spec()` reports **every** mismatch, not the first: discovering
+one, fixing it, re-running and discovering the next is the slow way to learn
+there were three. `strict = FALSE` returns the messages instead of stopping,
+which is what a reporting script wants.
+
+It also refuses a **reordered** predictor set whose members are identical. The
+order is the contract tying channel *i* to band *i*; scrambled, the network is
+fed one predictor while the map is built from another, with no error and
+plausible metrics.
+
+A store written before the spec existed records `NA` and is **tolerated**, not
+failed -- "cannot answer" is not "answered wrongly", and failing it would force
+a re-extraction to gain information the store already implies.
+
+**`03_run_tuning.R`** calls it right after `cell_size` is read, before anything
+expensive. One file read; refuses in seconds what would waste hours.
+
+**`99_check_pipeline.R`** compares the recorded target against `target_config`
+and the recorded `cell_size` against the rasters as they are *today*.
+
+### Discarded
+
+- **A hash of the whole configuration.** Cheap to compare, useless to read: it
+  can report a mismatch but never which field, and the field is the fix.
+- **Failing an old store.** Rejected above.
+- **Checking in `load_patch_store()`.** The loader does not know the grid, the
+  target or the resolution the *run* wants -- only stage 03 does. Putting the
+  check there would mean either passing all three into the loader, or checking
+  a weaker thing in a place that looks authoritative.
+
+### Also fixed, found on the way
+
+**The hardcoded `windows_extracted == "3, 9, 15"` in the 99.** An example value
+frozen into a checker a package user cannot change without editing the checker
+-- the exact opposite of the requirement. It now checks the *shape* (odd,
+ascending), which holds for any store, and leaves "can this store serve this
+grid" to `check_store_spec()`, in stage 03, where the grid exists.
+
+**A live bug in `05_predict_spatial.R`, mine, from the scaling refactor.**
+`predictor_scaling_file` was built from `final_run_dir` and `config_id` about
+fifteen lines *before* either was resolved -- both can be `"latest"`/`"auto"`.
+Moved to after the resolution.
+
+---
+
+## `05` can predict on another grid (2026-09-14)
+
+Not in the numbered plan, and the end-to-end dev run does not exist without it:
+predicting the 250 m grid is measured in days.
+
+`predict_raster_dir` (env var `SOC_PREDICT_RASTER_DIR`) remaps the raster paths
+by **file name**, keeping the training channel ORDER exactly -- the
+alphabetical order a directory listing returns is not the contract. A missing
+predictor aborts: the network has a weight for every one of them.
+
+**It does not resample, and that is stated loudly at runtime.** The window is
+counted in PIXELS, so the 15 x 15 patch that spans 3.75 km at 250 m spans
+300 km at 20 km. The network is shown a neighbourhood it was never trained on.
+Such a run proves the **wiring**; it never proves the map. The script compares
+the prediction resolution against the `cell_size` the store recorded -- the
+manifest lock paying for itself immediately -- and prints the ratio in a banner
+rather than leaving it to be noticed.
+
+### Tests
+
+`tests/test_store_spec.R`, 21 assertions, no torch, registered in `run_all.R`.
+Mostly refusals: a lock is worth only what it refuses, and a broken one takes
+exactly the shape of a lock that passes everything.
+
+---
+
 ## Pendente
 
 | etapa | o quê |

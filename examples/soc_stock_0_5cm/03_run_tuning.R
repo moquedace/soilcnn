@@ -155,7 +155,7 @@ type_table <- readr::read_csv2(file.path(metadata_dir, "predictor_type_table.csv
                                show_col_types = FALSE)
 points <- align_points_to_meta(points, store$meta)
 
-# -- Raster resolution, and the units the coordinates are in ----------------─────────────────────────────────────
+# -- Raster resolution, and the units the coordinates are in ------------------─────────────────
 #
 # Read from the RASTER ITSELF, never written by hand: block_size and buffer
 # are given in the SAME units as x/y, and here those are DEGREES (lon/lat --
@@ -168,6 +168,28 @@ r_ref     <- terra::rast(readr::read_csv2(
   show_col_types = FALSE)$raster_file[1])
 cell_size <- terra::res(r_ref)[1]
 rm(r_ref)
+
+# -- THE STORE LOCK ------------------------------------------------------------
+#
+# Everything from here on is expensive, and every expensive thing assumes the
+# store on disk was built under the configuration this script is running. That
+# assumption has been wrong before, and it never announced itself: a store
+# extracted with one predictor set, read by a script expecting another, trains
+# and converges and produces a map -- of the wrong variable.
+#
+# So it is checked, here, in milliseconds, against what 02 recorded. It costs
+# one file read and refuses in seconds what would otherwise waste hours.
+target_config <- readr::read_csv2(file.path(metadata_dir, "target_config.csv"),
+                                  show_col_types = FALSE)
+
+check_store_spec(
+  store      = store,
+  predictors = type_table$predictor,
+  windows    = windows_needed,
+  target_col = target_config$target_col[1],
+  cell_size  = cell_size
+)
+message("Store spec: OK (predictors, windows, target and resolution match).")
 
 message(sprintf("\nRaster resolution: %.8f per pixel (in x/y units)",
                 cell_size))

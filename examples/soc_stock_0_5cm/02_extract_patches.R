@@ -133,6 +133,14 @@ qc_table <- readr::read_csv2(
   show_col_types = FALSE
 )
 
+# Read only to record WHICH target this store was built for. Two stores that
+# differ by nothing but the target look identical on disk, and the patches
+# really are identical -- it is the stored targets that are not.
+target_config <- readr::read_csv2(
+  file.path(input_metadata_dir, "target_config.csv"),
+  show_col_types = FALSE
+)
+
 predictor_cols <- type_table$predictor
 n_channels     <- length(predictor_cols)
 n_points       <- nrow(points_all)
@@ -497,6 +505,21 @@ manifest <- tibble::tibble(
   qc_applied           = "qc_table.csv",
   chunk_nrows_used     = chunk_nrows,
   predictor_cols_final = paste(predictor_cols, collapse = ";"),
+
+  # THE SPEC THIS STORE WAS BUILT UNDER.
+  #
+  # Three things force a re-extraction, and only three: the predictors, the
+  # windows and the target. Recording them here lets check_store_spec() refuse,
+  # in seconds, a configuration the store cannot serve -- instead of the
+  # mismatch surfacing as a wrong result, or as five hours of work discovered
+  # to be for nothing.
+  #
+  # The predictor LIST is recorded, not a hash of it: comparing lists costs the
+  # same and lets the error name which predictors differ.
+  target_col           = target_config$target_col[1],
+  target_transform     = "log1p",
+  cell_size            = terra::res(rast_stack)[1],
+
   raster_nrow          = n_rows_rast,
   raster_ncol          = n_cols_rast,
   extracted_at         = as.character(Sys.time())

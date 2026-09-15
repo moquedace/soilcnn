@@ -37,8 +37,9 @@ test_files <- c(
   "test_validation.R",       # clamp contract + option-set validation
   "test_preprocess.R",       # QC vs scaling split, and order equivalence
   "test_patch_store_io.R",   # store round-trip + the torch_save 2^31 guard
-  "test_metrics_reporting.R",# as tres funcoes que mentem em silencio
+  "test_metrics_reporting.R",# the three functions that lie quietly
   "test_resample.R",         # fold plans: partition, leakage, seed
+  "test_store_spec.R",       # the store lock: what it REFUSES
   "test_architecture.R",     # embed_pool wiring
   "test_augmentation.R"      # D4 symmetries
 )

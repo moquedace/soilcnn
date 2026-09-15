@@ -98,6 +98,28 @@ stopifnot(
 n_total_shards <- n_row_shards * n_col_shards
 is_partitioned <- n_total_shards > 1L
 
+# ── WHICH RASTERS TO PREDICT ON ───────────────────────────────────────────────
+#
+# NULL (default) = the same rasters the patches were cut from, listed in
+# raster_table_used.csv. That is the only setting whose map is comparable to
+# the validation metrics.
+#
+# A directory = predict on THOSE rasters instead, matching predictors by file
+# name. The point is a cheap end-to-end pass: a coarse grid turns a prediction
+# measured in days into one measured in minutes, which is what makes it
+# possible to exercise stage 05 at all during development.
+#
+# WHAT IT DOES NOT DO IS RESAMPLE. The window is counted in PIXELS, so the same
+# 15 x 15 patch that spans 3.75 km at 250 m spans 300 km at 20 km: the network
+# is shown a neighbourhood it was never trained on, and the values it returns
+# are not the values it would return on the training grid. The wiring is what
+# such a run proves -- never the map. The block below says so out loud, records
+# the resolution it actually ran at, and refuses to be silent about it.
+predict_raster_dir <- NULL
+if (nzchar(Sys.getenv("SOC_PREDICT_RASTER_DIR"))) {
+  predict_raster_dir <- Sys.getenv("SOC_PREDICT_RASTER_DIR")
+}
+
 config_id    <- "auto"
 final_run_id <- "latest"
 # Resolvido logo abaixo, a partir de final_run_summary$seeds (a lista real de
@@ -145,13 +167,6 @@ final_model_base <- file.path(project_root, "outputs", "final_model",
                               "soc_stock_modeling", target_label)
 
 raster_table_file      <- file.path(metadata_dir, "raster_table_used.csv")
-# The scaling is part of the FITTED MODEL, written next to its weights by
-# stage 04. It used to be read from a global table written by stage 01 -- a
-# second copy of the same fact, free to drift, and it did: once patches were
-# stored raw and scaling became per-fold, the map was being built with one set
-# of constants while the network had been trained with another. Silently.
-predictor_scaling_file <- file.path(final_run_dir, config_id,
-                                    "predictor_scaling.csv")
 qc_table_file          <- file.path(metadata_dir, "qc_table.csv")
 patch_manifest_file    <- file.path(patch_dir, "patch_manifest.rds")
 
@@ -175,6 +190,19 @@ if (identical(config_id, "auto")) {
 
 model_dir    <- file.path(final_run_dir, config_id, "models")
 summary_file <- file.path(final_run_dir, "comparison", "final_run_summary.rds")
+
+# The scaling is part of the FITTED MODEL, written next to its weights by
+# stage 04. It used to be read from a global table written by stage 01 -- a
+# second copy of the same fact, free to drift, and it did: once patches were
+# stored raw and scaling became per-fold, the map was being built with one set
+# of constants while the network had been trained with another. Silently.
+#
+# It is built HERE, not with the other paths above, because it needs both
+# final_run_dir and config_id -- and both can be "latest"/"auto" and are only
+# resolved a few lines up. Built any earlier it referred to objects that did
+# not exist yet.
+predictor_scaling_file <- file.path(final_run_dir, config_id,
+                                    "predictor_scaling.csv")
 
 output_dir        <- file.path(project_root, "outputs", "spatial_prediction",
                                "soc_stock_modeling", target_label, config_id)
@@ -264,6 +292,29 @@ predictor_cols <- raster_table$predictor
 n_channels     <- length(predictor_cols)
 raster_files   <- raster_table$raster_file
 
+# -- predicting on a different grid -------------------------------------------
+#
+# Matching is by FILE NAME, and the predictor ORDER is the training order, kept
+# exactly: the channel order is the contract tying channel i to band i, and the
+# alphabetical order a directory listing returns is not that contract.
+if (!is.null(predict_raster_dir)) {
+  if (!dir.exists(predict_raster_dir)) {
+    stop("predict_raster_dir does not exist: ", predict_raster_dir)
+  }
+  avail <- list.files(predict_raster_dir, pattern = "\\.(tif|tiff)$",
+                      full.names = TRUE, ignore.case = TRUE)
+  remapped <- file.path(predict_raster_dir, basename(raster_files))
+  absent   <- raster_table$predictor[!remapped %in% avail]
+  if (length(absent) > 0) {
+    stop("predict_raster_dir is missing ", length(absent), " of the ",
+         n_channels, " predictors the model needs, among them: ",
+         paste(utils::head(absent, 8), collapse = ", "),
+         "\nPredicting without a channel is not possible: the network has a ",
+         "weight for every one of them.")
+  }
+  raster_files <- remapped
+}
+
 missing_rasters <- raster_files[!file.exists(raster_files)]
 if (length(missing_rasters) > 0) {
   print(missing_rasters)
@@ -302,6 +353,30 @@ if (file.exists(patch_manifest_file)) {
 
 rast_stack <- terra::rast(raster_files)
 names(rast_stack) <- predictor_cols
+
+# -- the scale the map is actually being built at -----------------------------
+#
+# Compared against the store's own record, not against a number written here:
+# a hardcoded expectation is wrong for everyone but this example.
+.res_now <- terra::res(rast_stack)[1]
+.res_trained <- if (file.exists(patch_manifest_file)) {
+  m <- readRDS(patch_manifest_file)
+  if ("cell_size" %in% names(m)) suppressWarnings(as.numeric(m$cell_size[1])) else NA_real_
+} else NA_real_
+
+message(sprintf("\nPrediction grid: %.8f per pixel", .res_now))
+if (!is.na(.res_trained) && abs(.res_now - .res_trained) > 1e-9) {
+  ratio <- .res_now / .res_trained
+  message(strrep("!", 78))
+  message(sprintf(
+    paste0("THE MODEL WAS TRAINED AT %.8f AND IS PREDICTING AT %.8f (%.1fx).\n",
+           "The window is counted in PIXELS, so a %d x %d patch now covers\n",
+           "%.1fx the ground it covered in training. This map exercises the\n",
+           "pipeline; it does NOT carry the accuracy the validation reported."),
+    .res_trained, .res_now, ratio,
+    max(window_sizes), max(window_sizes), ratio))
+  message(strrep("!", 78))
+}
 
 geom_ok <- purrr::map_lgl(
   seq_len(terra::nlyr(rast_stack)),
