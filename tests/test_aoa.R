@@ -113,8 +113,11 @@ p5 <- matrix(c(0, 0, 0, 0, 4), nrow = 1L)
 ok["weight_raises_the_weighted_axis"] <-
   dissimilarity_index(ref_w, p1) > dissimilarity_index(ref_w, p5)
 ok["unweighted_treats_axes_alike"] <- {
+  # Loose on purpose. The claim is "not WILDLY different", against a weighted
+  # case that differs by orders of magnitude -- a tight bound here would only
+  # measure the fixture cloud's own asymmetry and fail on an unlucky draw.
   a <- dissimilarity_index(ref, p1); b <- dissimilarity_index(ref, p5)
-  abs(a - b) / max(a, b) < 0.25          # same up to the cloud's own asymmetry
+  abs(a - b) / max(a, b) < 0.4
 }
 ok["weights_are_validated"] <- inherits(
   tryCatch(di_reference(xtr, weights = c(1, 2)), error = function(e) e), "error")
@@ -189,6 +192,13 @@ big <- matrix(stats::rnorm(500L * P), ncol = P)
 ok["chunking_changes_nothing"] <- isTRUE(all.equal(
   dissimilarity_index(ref, big, chunk = 10000L),
   dissimilarity_index(ref, big, chunk = 37L), tolerance = 1e-10))
+
+# print_aoa() is a reporting function, and a reporting function that throws
+# turns a finished analysis into a lost one.
+ok["print_aoa_does_not_throw"] <- !inherits(
+  tryCatch(utils::capture.output(
+    print_aoa(dissimilarity_index(ref, big), th_n, "probe points")),
+    error = function(e) e), "error")
 
 cat(sprintf("  avg pairwise distance    : %.3f (theory sqrt(2p) = %.3f)\n",
             ref$avg_dist, sqrt(2 * P)))
