@@ -61,15 +61,16 @@ source(file.path(project_root, "R", "train_cnn.R"))
 target_label <- "soc_stock_0_5cm"
 target_unit  <- "ton_ha"
 
-# ── Argumentos: CLI (Rscript) OU variáveis de ambiente (source() no console) ───
-# rm(list=ls()) acima apaga qualquer variável pré-definida antes do source(),
-# então a forma de passar parâmetros ao rodar via source() é por env var
-# (Sys.setenv() sobrevive ao rm(list=ls()), diferente de objetos no workspace).
+# -- Arguments: CLI (Rscript) OR environment variables (source() in a console) -
+#
+# The rm(list=ls()) above erases any variable set before the source(), so an
+# environment variable is the only way to pass a parameter into a source()d
+# run: Sys.setenv() survives rm(list=ls()), a workspace object does not.
 row_shard_id   <- 1L
 col_shard_id   <- 1L
 n_row_shards   <- 1L
 n_col_shards   <- 1L
-max_concurrent <- 1L   # usado para calcular threads_per_worker
+max_concurrent <- 1L   # only used to compute threads_per_worker
 
 .cli_args <- commandArgs(trailingOnly = TRUE)
 if (length(.cli_args) >= 4L) {
@@ -122,38 +123,45 @@ if (nzchar(Sys.getenv("SOC_PREDICT_RASTER_DIR"))) {
 
 config_id    <- "auto"
 final_run_id <- "latest"
-# Resolvido logo abaixo, a partir de final_run_summary$seeds (a lista real de
-# seeds treinadas no 04) -- nao fixar aqui: um valor hardcoded ficaria
-# defasado silenciosamente se o 04 mudar o numero/valor das seeds (ja
-# aconteceu: 04 passou de 5 para 10 seeds e este valor nao acompanhou).
+# Resolved below from final_run_summary$seeds -- the real list of seeds stage
+# 04 trained. NOT fixed here: a hardcoded value goes silently stale the moment
+# 04 changes how many seeds it uses, and it has. 04 went from 5 to 10 and this
+# value did not follow.
 seeds        <- NULL
 ensemble_center <- "median"
 
-# Parâmetros de streaming / RAM
-# Com tiling 2D, bytes_per_strip_row usa strip_ncol (colunas do tile + margens),
-# não r_ncol inteiro -> output_block_rows maior -> menos blocos -> menos overhead.
-max_strip_ram_gb  <- 4        # budget de RAM por strip, por shard
-output_block_rows <- 64L      # usado somente se max_strip_ram_gb for NULL
-# Cap de linhas por bloco independente do strip budget.
-# O RSS real por shard é dominado pelo acúmulo de patch arrays no heap do R
-# (vals_valid + step1 + step2 para branches 9x9 e 15x15) proporcional ao
-# n_valid/bloco. Com output_block_rows=52 e blocos densos (109k válidos/bloco)
-# o RSS atingiu 34 GB -- inviável com max_concurrent>1. Limitando em 16 linhas:
-# n_valid/bloco cai ~3x -> RSS esperado ~10-15 GB em shards densos.
-max_output_block_rows <- 16L  # cap: nunca mais que isso, mesmo com strip barato
-# batch_size domina o pico de RAM por chunk em build_patches_multi (a checagem
-# de validade da janela indexa strip_values para todo o chunk, criando uma
-# matriz temporaria de ~batch_size * n_pos_janela * n_channels * 8 bytes).
-# Isso e independente de output_block_rows -- reduzir batch_size e o que
-# realmente limita o pico de RSS por chunk. Com batch_size=4096 e janela 15x15
-# (225 posicoes) x 187 canais, o pico chegava a ~1.4 GB soh nessa checagem,
-# repetido a cada chunk -- e o que gerava os picos de 30-37 GB observados.
+# -- Streaming and RAM ---------------------------------------------------------
+#
+# With 2-D tiling, bytes_per_strip_row uses strip_ncol (the tile's columns plus
+# its margins) rather than the whole r_ncol -> a larger output_block_rows ->
+# fewer blocks -> less overhead.
+max_strip_ram_gb  <- 4        # RAM budget per strip, per shard
+output_block_rows <- 64L      # used only when max_strip_ram_gb is NULL
+
+# A CAP ON BLOCK ROWS, INDEPENDENT OF THE STRIP BUDGET.
+#
+# The real RSS per shard is dominated by patch arrays accumulating on R's heap
+# (vals_valid + step1 + step2 for the 9x9 and 15x15 branches), proportional to
+# the number of VALID pixels per block -- not to the strip. With
+# output_block_rows = 52 and dense blocks (109k valid per block) RSS reached
+# 34 GB, which makes max_concurrent > 1 impossible. Capping at 16 rows cuts
+# valid-per-block roughly threefold: ~10-15 GB expected on dense shards.
+max_output_block_rows <- 16L  # never more than this, however cheap the strip
+
+# batch_size dominates the RAM peak per CHUNK inside build_patches_multi: the
+# window-validity check indexes strip_values for the whole chunk, creating a
+# temporary matrix of ~batch_size * n_window_positions * n_channels * 8 bytes.
+#
+# That is independent of output_block_rows, so batch_size is the knob that
+# actually bounds the per-chunk peak. At batch_size = 4096 with a 15x15 window
+# (225 positions) over 187 channels, that check alone reached ~1.4 GB, repeated
+# every chunk -- which is what produced the observed 30-37 GB spikes.
 batch_size        <- 512L
 
 plausible_median_range <- c(1, 200)
 plausible_hard_max     <- 1000
 
-# Threads divididos por max_concurrent (passado via CLI pelo orquestrador)
+# Threads split by max_concurrent (passed on the CLI by the orchestrator)
 threads_per_worker <- max(1L, parallel::detectCores() %/% max_concurrent)
 device <- setup_torch_device(n_threads = threads_per_worker, use_cuda = TRUE)
 
@@ -183,7 +191,7 @@ final_run_dir <- file.path(final_model_base, final_run_id)
 if (identical(config_id, "auto")) {
   tmp_summary_path <- file.path(final_run_dir, "comparison", "final_run_summary.rds")
   if (!file.exists(tmp_summary_path))
-    stop("Nao foi possivel resolver config_id='auto': ", tmp_summary_path)
+    stop("Could not resolve config_id = 'auto': ", tmp_summary_path)
   config_id <- readRDS(tmp_summary_path)$selected_cfgs$config_id[1]
   message("config_id resolved to: ", config_id)
 }
@@ -395,10 +403,11 @@ n_cell <- terra::ncell(rast_stack)
 
 message("Raster grid: ", r_nrow, " rows x ", r_ncol, " cols x ", n_channels, " layers")
 
-# ── Partição 2D ───────────────────────────────────────────────────────────────
-# Cada worker cobre um retângulo [my_row_start:my_row_end, my_col_start:my_col_end].
-# A LEITURA inclui margens de half_w_max em todas as direções (para os patches
-# dos pixels de borda). Apenas o retângulo interno é ESCRITO no tile de saída.
+# -- 2-D partition -----------------------------------------------------------
+# Each worker covers a rectangle [my_row_start:my_row_end,
+# my_col_start:my_col_end]. READING includes a half_w_max margin on every side,
+# because the edge pixels' patches reach into it. Only the inner rectangle is
+# WRITTEN to the output tile -- the margin belongs to the neighbouring shard.
 
 row_bounds   <- floor(seq(1, r_nrow + 1, length.out = n_row_shards + 1L))
 my_row_start <- row_bounds[row_shard_id]
@@ -426,15 +435,15 @@ if (is_partitioned) {
     my_col_start, my_col_end, format(tile_ncol, big.mark = ",")))
 }
 
-# Colunas lidas pela strip: tile + margem (clamped às bordas do raster)
+# Columns the strip reads: the tile plus its margin, clamped to the raster
 read_col_start <- max(1L,      my_col_start - half_w_max)
 read_col_end   <- min(r_ncol,  my_col_end   + half_w_max)
 strip_ncol     <- read_col_end - read_col_start + 1L
 
-# ── output_block_rows do budget de RAM ────────────────────────────────────────
-# Com 2D: strip_ncol << r_ncol, entao bytes_per_strip_row e muito menor ->
-# output_block_rows maior -> menos overhead de I/O vs. um esquema 1D (linha
-# inteira por strip).
+# -- output_block_rows, from the RAM budget ----------------------------------
+# With 2-D tiling strip_ncol << r_ncol, so bytes_per_strip_row is far smaller
+# -> a larger output_block_rows -> less I/O overhead than a 1-D scheme that
+# reads a whole raster row per strip.
 
 bytes_per_strip_row <- as.numeric(strip_ncol) * n_channels * 8
 
@@ -443,11 +452,12 @@ if (!is.null(max_strip_ram_gb)) {
     floor(max_strip_ram_gb * 1e9 / bytes_per_strip_row) - 2L * half_w_max
   ))
 } else {
-  # sem auto-cálculo: usa o valor fixo acima
+  # no auto-sizing: the fixed value above is used as given
 }
-# Aplica o cap: independente do strip budget, nunca excede max_output_block_rows.
-# Impede que o RSS de predição (patch arrays × n_valid/bloco) exploda em
-# shards densos quando o strip seria barato o suficiente para blocos grandes.
+# Apply the cap: whatever the strip budget allows, never exceed
+# max_output_block_rows. This is what stops the prediction RSS (patch arrays x
+# valid pixels per block) from exploding on dense shards, where the strip would
+# be cheap enough to justify blocks the heap cannot afford.
 output_block_rows <- min(output_block_rows, max_output_block_rows)
 
 message(sprintf(
@@ -488,14 +498,14 @@ models <- purrr::map(seq_len(n_seeds), function(i) {
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 # build_patches_multi recebe center_col LOCAL (1-based dentro da strip de leitura),
-# nao a coluna global. strip_values tem strip_ncol colunas (nao r_ncol).
+# not the global column. strip_values has strip_ncol columns, not r_ncol.
 #
 # A geometria (indexacao de celula e montagem do array) vive em R/patches.R,
-# compartilhada com a extracao de treino do 02 -- e a unica implementacao, para
-# que os dois caminhos nao possam divergir em silencio. A regra de custo segue
-# valendo: strip_values e indexado UMA vez por branch de janela, e o resultado
-# alimenta tanto a checagem de validade quanto a montagem final (so reshape e
-# slice, sem recopiar de strip_values).
+# shared with stage 02's training extraction -- it is the ONLY implementation,
+# so the two paths cannot diverge in silence. The cost rule still holds:
+# strip_values is indexed ONCE per window branch, and that result feeds both the
+# validity check and the final assembly (reshape and slice only, never a second
+# copy out of strip_values).
 build_patches_multi <- function(center_row, center_col_local, strip_values,
                                 read_row_start, strip_ncol_arg, n_ch, window_sizes) {
   n         <- length(center_row)
@@ -543,12 +553,13 @@ predict_one_model <- function(model, arr_list, device, batch_size) {
 }
 
 # ── compute_block ─────────────────────────────────────────────────────────────
-# Prediz os pixels do retângulo do tile para um bloco de linhas.
+# Predict the tile rectangle's pixels for one block of rows.
 # Diferenças vs 05:
 #   - center_cols limitados a my_col_start:my_col_end
-#   - terra::values lê somente read_col_start:read_col_end (strip_ncol colunas)
-#   - center_col passado para build_patches_multi e quick_ok e LOCAL (strip)
-#   - cells_valid sao GLOBAIS (row-1)*r_ncol+col, convertidos para tile-local
+#   - terra::values reads only read_col_start:read_col_end (strip_ncol columns)
+#   - the center_col passed to build_patches_multi and quick_ok is LOCAL to the
+#     strip, never global -- the one index that has to be converted
+#   - cells_valid are GLOBAL, (row-1)*r_ncol+col, converted to tile-local later
 #     no loop principal (fora desta funcao)
 
 compute_block <- function(b_start) {
@@ -558,7 +569,7 @@ compute_block <- function(b_start) {
   center_rows <- intersect(b_start:out_row_end,
                            (half_w_max + 1L):(r_nrow - half_w_max))
 
-  # Colunas do tile clampadas pelas margens globais
+  # Tile columns, clamped by the global margins
   cc_start <- max(my_col_start, half_w_max + 1L)
   cc_end   <- min(my_col_end,   r_ncol - half_w_max)
 
@@ -575,7 +586,7 @@ compute_block <- function(b_start) {
   read_nrows     <- read_row_end - read_row_start + 1L
 
   .t_read_start <- Sys.time()
-  # Leitura da fatia 2D da strip (so as colunas deste tile + margem)
+  # Read the strip's 2-D slice: only this tile's columns, plus the margin
   strip_values <- terra::values(rast_stack,
                                 row   = read_row_start, nrows = read_nrows,
                                 col   = read_col_start, ncols = strip_ncol,
@@ -592,7 +603,7 @@ compute_block <- function(b_start) {
   grid  <- expand.grid(center_row = center_rows, center_col = center_cols)
   n_req <- nrow(grid)
 
-  # Índices GLOBAIS (para cells_all / cells_valid retornados ao caller)
+  # GLOBAL indices, for the cells_all / cells_valid returned to the caller
   cells_all <- (grid$center_row - 1L) * r_ncol + grid$center_col
   valid_all <- logical(n_req)
 
@@ -619,18 +630,18 @@ compute_block <- function(b_start) {
     }
 
     cr <- grid$center_row[ci]
-    cc <- grid$center_col[ci]   # colunas GLOBAIS
+    cc <- grid$center_col[ci]   # GLOBAL columns
 
-    # quick_ok: índices locais dentro da strip (strip_ncol colunas)
+    # quick_ok: indices local to the strip (strip_ncol columns)
     row_local_c <- cr - read_row_start + 1L
-    col_local_c <- cc - read_col_start + 1L   # coluna local na strip
+    col_local_c <- cc - read_col_start + 1L   # column local to the strip
     center_idx  <- (row_local_c - 1L) * strip_ncol + col_local_c
     quick_ok    <- rowSums(!is.finite(strip_values[center_idx, , drop = FALSE])) == 0
     n_quick_ok  <- n_quick_ok + sum(quick_ok)
 
     if (!any(quick_ok)) next
 
-    # build_patches_multi recebe coluna LOCAL na strip
+    # build_patches_multi takes the column LOCAL to the strip
     cc_local <- cc - read_col_start + 1L
     pb <- build_patches_multi(cr[quick_ok], cc_local[quick_ok], strip_values,
                               read_row_start, strip_ncol, n_channels, window_sizes)
@@ -748,7 +759,7 @@ for (b in seq_along(block_starts)) {
   bs <- block_starts[b]
   cb <- compute_block(bs)
 
-  # blk_len: linhas do bloco x colunas do TILE (nao do raster inteiro)
+  # blk_len: block rows x TILE columns, not the whole raster's columns
   blk_len    <- cb$out_nrows * tile_ncol
   blk_median <- rep(NA_real_, blk_len)
   blk_mean   <- rep(NA_real_, blk_len)
@@ -759,7 +770,7 @@ for (b in seq_along(block_starts)) {
   blk_mask   <- rep(0L, blk_len)
 
   if (cb$n_req > 0L) {
-    # Converte índices GLOBAIS (row-1)*r_ncol+col para índices no bloco do tile
+    # Convert GLOBAL indices (row-1)*r_ncol+col into tile-block indices
     g2tile <- function(cells) {
       row_g       <- (cells - 1L) %/% r_ncol + 1L
       col_g       <- (cells - 1L) %% r_ncol + 1L
@@ -797,7 +808,7 @@ for (b in seq_along(block_starts)) {
     }
   }
 
-  # Linha local no tile do worker (1-based)
+  # Row local to this worker's tile (1-based)
   bs_local <- bs - my_row_start + 1L
 
   terra::writeValues(w_median$rast, blk_median, bs_local, cb$out_nrows)
@@ -878,7 +889,7 @@ if (is.finite(global_max) && global_max > plausible_hard_max) {
   message(sprintf("  [WARN] Max %.0f > %g %s.", global_max, plausible_hard_max, target_unit))
 }
 if (is_partitioned && n_valid_total == 0L) {
-  message("  [INFO] Tile sem pixels validos (provavelmente oceano) — nao e erro.")
+  message("  [INFO] Tile has no valid pixels (ocean, most likely) -- not an error.")
 }
 if (!sanity_ok) {
   suppressWarnings(file.remove(written_files[file.exists(written_files)]))
@@ -956,7 +967,7 @@ message(sprintf("  Config / seeds   : %s / %d", config_id, n_seeds))
 message(sprintf("  Valid pixels     : %s", format(n_valid_total, big.mark = ",")))
 message(sprintf("  Runtime          : %.2f %s",
                 as.numeric(total_time), units(total_time)))
-message(sprintf("  strip_ncol       : %d (vs r_ncol %d -> RAM %.1fx menor)",
+message(sprintf("  strip_ncol       : %d (vs r_ncol %d -> %.1fx less RAM)",
                 strip_ncol, r_ncol, r_ncol / strip_ncol))
 
 rs_get <- function(layer, col) raster_summary[[col]][raster_summary$layer == layer]
