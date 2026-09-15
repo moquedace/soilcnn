@@ -74,15 +74,20 @@ ok <- c()
 # =============================================================================
 
 set.seed(4242)
-N <- 300L
-# 12 sites, 25 points each, sites 1 degree apart -- clustered enough that
-# blocking has something to do.
-site <- rep(seq_len(12L), each = 25L)
+# 48 sites of 8 points, one degree apart. Clustered enough that blocking has
+# something to do, and NUMEROUS enough that suggest_block_size() can satisfy
+# its own constraints -- with only a dozen sites every candidate size fails
+# `min_blocks_per_fold` and the function correctly falls back with a warning,
+# which would make this test assert against the fallback rather than the rule.
+N_SITE <- 48L
+PER    <- 8L
+N      <- N_SITE * PER
+site   <- rep(seq_len(N_SITE), each = PER)
 meta <- tibble::tibble(
   sample_id  = seq_len(N),
   profile_id = sprintf("p%04d", seq_len(N)),
-  x = (site %% 4L) * 1.0 + stats::runif(N, 0, 0.05),
-  y = (site %/% 4L) * 1.0 + stats::runif(N, 0, 0.05),
+  x = ((site - 1L) %% 7L) * 1.0 + stats::runif(N, 0, 0.05),
+  y = ((site - 1L) %/% 7L) * 1.0 + stats::runif(N, 0, 0.05),
   target_native    = stats::rlnorm(N, 3, 0.5),
   target_transform = log1p(stats::rlnorm(N, 3, 0.5))
 )
@@ -133,7 +138,7 @@ for (nm in c("p_spatial", "p_random", "p_hold", "p_region")) {
 }
 ok["spatial_has_the_folds_asked_for"] <- p_spatial$n_folds == 3L
 ok["holdout_has_one_fold"]            <- p_hold$n_folds == 1L
-ok["region_uses_every_region"]        <- p_region$n_folds == 12L
+ok["region_uses_every_region"]        <- p_region$n_folds == N_SITE
 
 # A test carved by the plan is held out of every fold, which is the property
 # that makes it a test set rather than a label.
@@ -195,7 +200,7 @@ ok["auto_block_size_is_recorded"] <- isTRUE(p_ab$params$block_size_auto) ||
 ok["a_plan_passes_through_unchanged"] <-
   identical(resolve_resampling(p_spatial, fake_data), p_spatial)
 
-frozen <- meta$sample_id[1:40]
+frozen <- meta$sample_id[1:40]   # five whole sites, so a block plan can hold them
 p_fr1 <- suppressMessages(resolve_resampling(
   spatial_cv(k = 3L, block_size = 1, buffer = NULL, test_frac = 0.2),
   fake_data, test_ids = frozen, verbose = FALSE))
