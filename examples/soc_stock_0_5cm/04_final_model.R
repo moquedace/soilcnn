@@ -45,7 +45,7 @@ target_unit  <- "ton_ha"
 tuning_run_id <- "latest"
 
 # Configs a treinar no modelo final. Cada um é treinado com TODAS as seeds.
-# NULL = usa automaticamente o rank 1 do ranking de validação — recomendado para
+# NULL = use rank 1 of the validation ranking automatically -- recommended for
 # a primeira corrida a 250 m (ainda não sabemos quem vence).
 # Para comparar o top-N pareado por seed: rode o 03, abra
 #   outputs/.../tuning/<run>/comparison/comparison_ranked.csv
@@ -166,7 +166,7 @@ if (length(missing_cfgs) > 0) {
 
 selected_cfgs <- dplyr::filter(tune_grid_full, config_id %in% selected_config_ids)
 
-message("\n── Configs selecionados para o modelo final ──────────────────────")
+message("\n── Configs selected for the final model ──────────────────────")
 for (cid in selected_config_ids) {
   # slice(1): com repeticoes ha varias linhas por config no ranking, e os
   # campos de ARQUITETURA sao identicos entre elas (e a mesma config) -- a
@@ -184,7 +184,7 @@ for (cid in selected_config_ids) {
     sprintf("val_CCC %.4f", r$val_ccc)
   }
   message("  ", cid,
-          " | janela ", r$window_sizes,
+          " | window ", r$window_sizes,
           " | ", r$conv_channels,
           " | embed ", r$embedding_dim,
           " | ", r$gate_type,
@@ -194,7 +194,7 @@ for (cid in selected_config_ids) {
 # ── Carregar patches e montar o cache do fold ─────────────────────────────────
 # Carregado só agora porque só agora se sabe quais janelas os configs
 # selecionados usam -- o patch store guarda um arquivo por janela, então
-# carregar tudo pagaria RAM por janela que nenhum config vai usar.
+# carregar tudo pagaria RAM por window que nenhum config vai usar.
 
 windows_needed <- sort(unique(unlist(selected_cfgs$window_sizes)))
 message("\nJanelas necessárias: ", paste(windows_needed, collapse = ", "))
@@ -228,7 +228,7 @@ tensor_cache <- fold$cache
 store$windows <- NULL
 invisible(gc())
 
-message("Canais: ", n_channels,
+message("Channels: ", n_channels,
         " | Train: ", length(index$train),
         " | Val: ",   length(index$validation),
         " | Test: ",  length(index$test))
@@ -274,7 +274,7 @@ train_config_all_seeds <- function(cfg, config_id) {
           training_args)
       ),
       error = function(e) {
-        message("  ERRO [", config_id, "] seed ", seed_val, ": ", e$message)
+        message("  ERROR [", config_id, "] seed ", seed_val, ": ", e$message)
         NULL
       }
     )

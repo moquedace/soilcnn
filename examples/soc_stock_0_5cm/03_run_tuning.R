@@ -10,7 +10,7 @@ pkg <- c(
   "tibble",
   "purrr",
   "DescTools",
-  "terra"       # so para ler a resolucao do raster no relatorio de vazamento
+  "terra"       # only to read the raster resolution for the leakage report
 )
 
 install_load_pkg(pkg)
@@ -155,22 +155,23 @@ type_table <- readr::read_csv2(file.path(metadata_dir, "predictor_type_table.csv
                                show_col_types = FALSE)
 points <- align_points_to_meta(points, store$meta)
 
-# ── Resolucao e unidades das coordenadas ──────────────────────────────────────
+# -- Raster resolution, and the units the coordinates are in ----------------─────────────────────────────────────
 #
-# Lida do PROPRIO raster, nunca escrita a mao: block_size e buffer sao dados
-# nas MESMAS unidades de x/y, e aqui elas sao GRAUS (lon/lat, extensao global
-# do WOSIS), nao metros. Um buffer escrito como "3750" pensando em metros
-# viraria 3750 graus e o plano abortaria -- e um block_size errado na direcao
-# oposta produziria um split que so PARECE espacial, sem abortar nada.
+# Read from the RASTER ITSELF, never written by hand: block_size and buffer
+# are given in the SAME units as x/y, and here those are DEGREES (lon/lat --
+# WOSIS is global), not metres. A buffer written as "3750" with metres in
+# mind would be 3750 degrees and the plan would abort; a block_size wrong in
+# the other direction would produce a split that only LOOKS spatial, aborting
+# nothing.
 r_ref     <- terra::rast(readr::read_csv2(
   file.path(metadata_dir, "raster_table_used.csv"),
   show_col_types = FALSE)$raster_file[1])
 cell_size <- terra::res(r_ref)[1]
 rm(r_ref)
 
-message(sprintf("\nResolucao do raster: %.8f por pixel (unidades de x/y)",
+message(sprintf("\nRaster resolution: %.8f per pixel (in x/y units)",
                 cell_size))
-message(sprintf("Piso do buffer (janela %d x resolucao): %.6f",
+message(sprintf("Buffer floor (window %d x resolution): %.6f",
                 max(windows_needed), max(windows_needed) * cell_size))
 
 # ── RESAMPLING PLAN ───────────────────────────────────────────────────────────
@@ -294,7 +295,7 @@ message("Channels: ", n_channels, " | Points: ", nrow(store$meta))
 #   Applied to predictions before computing CCC, MAE, etc.
 #   The model trains in log1p space; metrics are always in native units.
 
-# Para RETOMAR um run interrompido (crash, queda de luz, etc.): preencha
+# To RESUME an interrupted run (crash, power cut): fill
 # resume_run_id com o run_id exato da pasta em outputs/tuning/ que parou no
 # meio (ex: "soc_0_5cm_20260715_093000") e rode o script de novo. run_cnn_tuning
 # detecta sozinho quais config_id já têm checkpoint (models/{id}_best.pt) e
@@ -308,16 +309,17 @@ run_id <- if (is.null(resume_run_id)) {
   resume_run_id
 }
 
-# QUANTAS SEMENTES POR CONFIG
+# HOW MANY SEEDS PER CONFIG
 #
-# 3, nao 1. Com uma semente cada, "a config A ganhou da B" e uma afirmacao sem
-# barra de erro: se retreinar a MESMA config com outra semente move o CCC mais
-# do que a distancia entre A e B, o ranking e ranking de sorte. Tres repeticoes
-# sao o minimo que estima esse piso, e o run imprime ele no fim.
+# Three, not one. With one seed each, "config A beat config B" is a claim
+# with no error bar: if retraining the SAME config under a different seed
+# moves CCC more than the distance between A and B, the ranking is a ranking
+# of luck. Three repetitions are the minimum that estimates that floor, and
+# the run prints it at the end.
 #
-# Custo: 3x o tempo do grid. Aumentar depois e RETOMAVEL: as repeticoes que ja
-# estao em disco sao reconhecidas e so as novas treinam -- da para comecar com
-# 1, ver o grid de pe, e subir para 3 sem perder nada.
+# Cost: 3x the grid's time. Raising it later is RESUMABLE -- the repetitions
+# already on disk are recognised and only the new ones train, so it is fine
+# to start at 1, see the grid stand up, and go to 3 without losing anything.
 n_seeds <- 3L
 
 results <- do.call(
@@ -346,12 +348,12 @@ message("\n── Tuning complete ───────────────�
 message("Run ID: ", run_id)
 message("Results saved to: ", file.path(output_tuning_dir, run_id))
 
-# A decisao se le na tabela POR CONFIG (media +/- sd sobre as repeticoes), nao
-# na tabela por unidade: uma semente sortuda de uma config mediocre passa na
-# frente da media firme de uma boa se o ranking for por linha.
+# The decision is read from the PER-CONFIG table (mean +/- sd over the
+# repetitions), not from the per-unit one: a lucky seed of a mediocre config
+# outranks the steady mean of a good one whenever rows are what get ranked.
 if (nrow(results$by_config) > 0) {
-  message("\nTop 5 configs por CCC de VALIDACAO medio (metrica de selecao; ",
-          "test_* so diagnostico):")
+  message("\nTop 5 configs by mean VALIDATION CCC (the selection metric; ",
+          "test_* is diagnostic only):")
   print(
     dplyr::select(
       results$by_config,
@@ -362,12 +364,12 @@ if (nrow(results$by_config) > 0) {
     n = 5, width = Inf
   )
 
-  message("\nPiso de ruido -- so a semente muda:")
+  message("\nNoise floor -- only the seed changes:")
   print_noise_floor(seed_noise_floor(results$comparison))
 }
 
 if (nrow(results$comparison) > 0) {
-  message("\nTrilha de auditoria (toda unidade, como foi medida): ",
+  message("\nAudit trail (every unit, as it was measured): ",
           file.path(results$run_dir, "comparison", "comparison_ranked.csv"))
 }
 

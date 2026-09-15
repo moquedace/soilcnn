@@ -27,26 +27,28 @@ Rasters (TIF stack)                 Soil profiles (GPKG)
         └────────────┬───────────────────────┘
                      ▼
            01_prepare_dataset.R
-           Extract · QC · z-score/percentage scaling · stratified split
+           Extract · QC · predictor types.  Decides no roles.
                      │
                      ▼
            02_extract_patches.R
-           Spatial patch arrays  N × C × H × W  (scaled, channel-aligned)
+           Patch store  N × C × H × W, stored RAW, one file per window
                      │
                      ▼
            03_run_tuning.R
+           plan <- spatial_folds(meta, k, test_frac, block_size, buffer)
            make_tune_grid(tune_length = 30)  ←──  like caret's tuneLength
                      │
-            ┌────────┴────────┐
-            │  cfg_001 ... cfg_N  │   train → validate → test (read-only)
-            └────────┬────────┘
+            ┌────────┴──────────┐
+            │  config × fold × seed │   the unit of work
+            └────────┬──────────┘
                      ▼
-           validation_ranking.csv
-           Best architecture selected from validation metrics only
+           comparison_by_config.csv
+           mean ± sd over repetitions, next to the seed noise floor
                      │
                      ▼
            04_final_model.R
-           Top configs × N seeds  (paired comparison, same init per seed)
+           Refit on everything but the test set, by the tuning plan's own
+           criterion.  The scaling is written next to the weights.
                      │
                      ▼
            05_predict_spatial.R      ◄── single-tile worker, not run alone at scale
@@ -74,6 +76,41 @@ for the full script-by-script breakdown.
 
 ---
 
+## What the framework is careful about
+
+Three things cost this project real time before they were made structural.
+
+**The split is not stored with the data.** Stage 01 writes points, coordinates,
+the target and the predictor types — and nothing about who trains. A fold plan
+decides that in stage 03, from coordinates, in seconds:
+
+```r
+plan <- holdout(meta, validation_frac = 0.15, test_frac = 0.15)
+plan <- random_folds(meta, k = 5, test_frac = 0.15)
+plan <- spatial_folds(meta, k = 5, test_frac = 0.15, block_size = 2, buffer = 0.034)
+plan <- region_folds(meta, group = meta$biome, test_frac = 0.15)
+```
+
+One criterion carves the test set **and** the folds, so the two numbers a run
+reports answer the same question. Changing the strategy costs seconds; before,
+it cost a five-hour re-extraction.
+
+**A repetition is a seed, and the noise is measured.** The unit of work is
+`(config, fold, seed)`, and the seed is shared across configs on purpose, so
+two configs within a repetition start from the same draw. What the spread
+across repetitions then measures is luck — reported as a noise floor, because a
+gap between configs smaller than it is not evidence. `one_se()` is available
+for when it is not: among configs within one standard error of the best, take
+the simplest.
+
+**Identical inputs are a defect; nearby ones are not.** Two points in the same
+raster cell give the network the same patch, bit for bit, and one can be scored
+on what the other trained on — under any plan. Two *neighbouring* points
+sharing some surrounding pixels is not a defect: under a random split it is the
+condition being measured. The leakage report keeps the two apart.
+
+---
+
 ## The dual-branch idea
 
 Each soil profile is represented by **two spatial patches** extracted from a stack of raster layers:
@@ -85,7 +122,9 @@ Each soil profile is represented by **two spatial patches** extracted from a sta
 
 A window's physical extent is `window_size × raster resolution`, so pixel sizes are chosen per resolution. At the example's 250 m they span ~0.75 km (3 × 3) to ~3.75 km (15 × 15).
 
-Patches are **channel-wise scaled** before reaching the network (z-score for continuous predictors, /100 for proportions, identity for dummies) using statistics computed from the training split. This equalises gradient flow across channels with very different magnitudes — e.g. elevation (thousands) vs. vegetation indices (0–1).
+Patches are stored **raw** and scaled when a fold's tensors are built — z-score for continuous predictors, /100 for proportions, identity for dummies — from the training rows **of that fold**. This equalises gradient flow across channels of very different magnitude (elevation in thousands against vegetation indices in 0–1), and it is what lets one 16 GB patch store serve any number of folds: the alternative is one re-extraction per fold.
+
+The scaling therefore belongs to the **fitted model**, not to the dataset. Stage 04 writes it next to the weights, and prediction reads it from there.
 
 A learned **gate** fuses the two embeddings per sample — letting each location draw from whichever spatial scale is more informative for the target variable.
 
@@ -123,41 +162,66 @@ For the reasoning behind every architectural and training choice see [`docs/desi
 | File | Purpose |
 |------|---------|
 | [`R/utils.R`](R/utils.R) | Safe I/O helpers, torch device setup |
-| [`R/metrics.R`](R/metrics.R) | CCC · R² · MAE · NSE · RMSE · MQI per split and per quantile group |
+| [`R/metrics.R`](R/metrics.R) | `ccc()` · R² · MAE · NSE · RMSE · MQI, per split and per quantile group |
 | [`R/cnn_architecture.R`](R/cnn_architecture.R) | Conv blocks, residual connections, SE attention, gate types, full model |
 | [`R/tune_grid.R`](R/tune_grid.R) | `make_tune_grid()` · `make_manual_tune_grid()` with documented parameter ranges |
-| [`R/train_cnn.R`](R/train_cnn.R) | `train_one_cnn()` · `run_cnn_tuning()` — single config and full grid loop |
+| [`R/patches.R`](R/patches.R) | One patch-indexing path, shared by extraction and prediction |
+| [`R/preprocess.R`](R/preprocess.R) | QC (fold-independent) split from scaling (fold-dependent) |
+| [`R/dataset.R`](R/dataset.R) | The patch store: one file per window, the split as an index |
+| [`R/resample.R`](R/resample.R) | Fold plans · distance buffering · `summarise_resamples()` · `seed_noise_floor()` · `one_se()` |
+| [`R/diagnostics.R`](R/diagnostics.R) | Checks about THIS RUN on real data: patch centres, overlap between splits, run snapshots |
+| [`R/train_cnn.R`](R/train_cnn.R) | `train_one_cnn()` · `run_cnn_tuning()` · `run_cnn_resample()` |
 
 ---
 
 ## Quickstart
 
 ```r
-source("R/utils.R"); source("R/metrics.R")
-source("R/cnn_architecture.R")
-source("R/tune_grid.R"); source("R/train_cnn.R")
+for (m in c("utils", "patches", "preprocess", "dataset", "metrics",
+            "diagnostics", "cnn_architecture", "tune_grid", "resample",
+            "train_cnn")) source(file.path("R", paste0(m, ".R")))
 
-device <- setup_torch_device(n_threads = 8, use_cuda = TRUE)
-patches <- readRDS("outputs/patches/.../patches_all_splits.rds")
+device <- setup_torch_device(n_threads = 8, use_cuda = FALSE)
 
-# Random grid — like caret's tuneLength
+# The patch store is raw: one file per window, and only the windows the grid
+# asks for are read.
+store  <- load_patch_store("outputs/patches/.../", windows = c(3L, 9L, 15L))
+points <- align_points_to_meta(readr::read_csv2("…/dataset_raw.csv"), store$meta)
+
+# WHO TRAINS AND WHO SCORES -- one line, and one criterion for both the test
+# set and the folds.
+plan <- spatial_folds(store$meta, k = 5, test_frac = 0.15,
+                      block_size = 2,              # in the units of x/y
+                      buffer     = 15 * cell_size) # window x resolution
+print(plan)
+
+# Random grid -- like caret's tuneLength
 grid <- make_tune_grid(tune_length = 30, seed = 42,
                        fixed = list(loss_fn = "smooth_l1"))
 
-results <- run_cnn_tuning(
-  tune_grid    = grid,
-  n_channels   = 187,
-  patches      = patches,
-  points_valid = list(train      = patches$train$meta,
-                      validation = patches$validation$meta,
-                      test       = patches$test$meta),
-  transform    = expm1,        # inverse of log1p applied to target
-  output_dir   = "outputs/tuning",
-  device       = device,
-  n_epochs     = 500L,
-  patience     = 60L
+results <- run_cnn_resample(
+  tune_grid  = grid,
+  store      = store,
+  points     = points,
+  type_table = type_table,
+  plan       = plan,
+  n_seeds    = 3,              # a claim without repetitions has no error bar
+  transform  = expm1,          # inverse of the log1p applied to the target
+  output_dir = "outputs/tuning",
+  device     = device,
+  n_epochs   = 500L,
+  patience   = 60L
 )
+
+results$by_config                       # mean +/- sd, one row per config
+print_noise_floor(seed_noise_floor(results$comparison))
+print_one_se(one_se(results$by_config)) # optional: simplest within 1 SE
 ```
+
+The fold plan is the only line that changes to ask a different question. The
+loop order is fold outside, configs and seeds inside, because the per-fold
+cache — scaling fitted on that fold's training rows and broadcast over every
+patch — is the expensive object, while training one config is minutes.
 
 See the full worked example in [`examples/soc_stock_0_5cm/`](examples/soc_stock_0_5cm/).
 
@@ -236,14 +300,14 @@ A CUDA-capable GPU is strongly recommended. CPU training is supported but ~10–
 
 ## Applied example
 
-The [`examples/soc_stock_0_5cm/`](examples/soc_stock_0_5cm/) directory contains a complete end-to-end run predicting **soil organic carbon stock (0–5 cm, ton/ha)** from 187 global raster predictors and ~37 000 WOSIS profiles.
+The [`examples/soc_stock_0_5cm/`](examples/soc_stock_0_5cm/) directory contains a complete end-to-end run predicting **soil organic carbon stock (0–5 cm, ton/ha)** from 181 global raster predictors and ~37,000 WOSIS profiles.
 
 | Script | What it does |
 |--------|-------------|
-| [`01_prepare_dataset.R`](examples/soc_stock_0_5cm/01_prepare_dataset.R) | Read GPKG + rasters · QC · z-score/percentage scaling · stratified split |
-| [`02_extract_patches.R`](examples/soc_stock_0_5cm/02_extract_patches.R) | Extract 3×3, 9×9, 15×15 patch arrays (band-by-band) with consistent channel scaling |
-| [`03_run_tuning.R`](examples/soc_stock_0_5cm/03_run_tuning.R) | Generate grid · train all configs · rank by validation metrics |
-| [`04_final_model.R`](examples/soc_stock_0_5cm/04_final_model.R) | Re-train winning config(s) with N seeds · paired-by-seed comparison |
+| [`01_prepare_dataset.R`](examples/soc_stock_0_5cm/01_prepare_dataset.R) | Read GPKG + rasters · QC · predictor types. Decides no roles, and owns no scaling |
+| [`02_extract_patches.R`](examples/soc_stock_0_5cm/02_extract_patches.R) | Extract 3×3, 9×9, 15×15 patches band-by-band, stored RAW, one file per window |
+| [`03_run_tuning.R`](examples/soc_stock_0_5cm/03_run_tuning.R) | Choose a fold plan · generate the grid · train every (config, fold, seed) · report mean ± sd against the seed noise floor |
+| [`04_final_model.R`](examples/soc_stock_0_5cm/04_final_model.R) | Refit the selected config(s) on everything but the test set, by the tuning plan's own criterion · writes the scaling next to the weights |
 | [`05_predict_spatial.R`](examples/soc_stock_0_5cm/05_predict_spatial.R) | Worker: predicts **one** row × col tile · seed ensemble · median + uncertainty layers |
 | [`05a_test.R`](examples/soc_stock_0_5cm/05a_test.R) | Cheap dry-run on a handful of tiles — sanity-check geometry/RAM/throughput before committing to the full job |
 | [`05a_run_parallel.R`](examples/soc_stock_0_5cm/05a_run_parallel.R) | Orchestrator: splits the raster into a tile grid, runs many `05` workers concurrently, resumes on restart |

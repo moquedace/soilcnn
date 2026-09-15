@@ -15,9 +15,9 @@ options(width = 200)
 project_root <- "D:/usuario_armazenamento/cassio/R/deep_learning_caret"
 setwd(project_root)
 
-# As checagens genericas vivem em R/ (framework); este script e so o
-# orquestrador do exemplo -- quem usar o framework com outro dado ganha as
-# mesmas checagens sem copiar nada daqui.
+# The generic checks live in R/ (the framework); this script is only the
+# example's orchestrator -- anyone using the framework on other data gets the
+# same checks without copying anything from here.
 source(file.path(project_root, "R", "utils.R"))
 source(file.path(project_root, "R", "patches.R"))
 source(file.path(project_root, "R", "preprocess.R"))
@@ -26,23 +26,22 @@ source(file.path(project_root, "R", "diagnostics.R"))
 source(file.path(project_root, "R", "resample.R"))
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 99 — Checkpoint of qualidade do pipeline (check & recheck)
+# 99 - pipeline quality checkpoint (check & recheck)
 #
-# Roda checagens automáticas sobre o que já foi executado (01, 02, ...),
-# comparando contra limiares conhecidos e contra a consistência interna dos
-# próprios arquivos. Objetivo: pegar problemas ESTRUTURAIS (tipo o bug do
-# clip PNV, que silenciosamente descartou ~55% dos dados por ~2 meses de
-# processamento) no minuto em que a etapa termina, não semanas depois.
+# Runs automatic checks over whatever has already executed (01, 02, ...),
+# against known thresholds and against the internal consistency of the files
+# themselves. The aim is to catch STRUCTURAL problems -- the kind of the PNV
+# clip bug, which silently discarded ~55% of the data through two months of
+# processing -- in the minute a stage finishes, not weeks later.
 #
-# Como crescer isto: cada etapa (01, 02, 03, ...) tem sua própria seção
-# `check_0X_*()`. Ao terminar of rodar uma nova etapa do pipeline, adicione
-# uma seção nova aqui seguindo o mesmo padrão (ver `add_check()` abaixo) e
-# rode o script inteiro of novo — ele re-verifica tudo que já rodou, não só
-# o novo.
+# How to grow this: each stage has its own section. After adding a new stage to
+# the pipeline, add a section here following the same shape (see add_check()
+# below) and run the whole script again -- it re-verifies everything that has
+# run, not only the new part.
 #
-# Uso: source() direto, sem parâmetros. Roda em segundos (só lê CSVs
-# pequenos e metadados — NUNCA carrega os arrays of patches inteiros, que
-# têm dezenas of GB; usa só o manifest, que já tem os números agregados).
+# Usage: source() it directly, no parameters. Runs in seconds: it reads small
+# CSVs and metadata only, and NEVER loads the patch arrays, which are tens of
+# GB. The manifest already carries the aggregate numbers.
 # ══════════════════════════════════════════════════════════════════════════════
 
 target_label <- "soc_stock_0_5cm"
@@ -52,22 +51,22 @@ metadata_dir <- file.path(project_root, "outputs", "metadata", "soc_stock_modeli
 patch_dir    <- file.path(project_root, "outputs", "patches", "soc_stock_modeling", target_label)
 patch_meta_dir <- file.path(metadata_dir, "patches")
 
-# ── Infraestrutura of checagem ──────────────────────────────────────────────────
+# -- Checking infrastructure ---─────────────────────────────────────────────────
 
 .results <- tibble::tibble(
   stage = character(), check = character(), status = character(), detail = character()
 )
 
-# Todo o relatorio sai por UM canal.
+# The whole report leaves through ONE channel.
 #
-# message() escreve em stderr e print()/tibble em stdout; no console do RStudio
-# os dois se intercalam e linhas se colam ("channel_risk.csv  [OK] 01 | ..."),
-# porque cada canal e esvaziado na sua propria hora. Como este script alterna
-# linha of texto com print() of tibble o tempo todo, a ordem so e garantida se
-# tudo for pelo mesmo lugar -- e print() nao tem como ir para stderr, entao o
-# texto e que vai para stdout.
+# message() writes to stderr and print()/tibble to stdout; in the RStudio
+# console the two interleave and lines run together ("channel_risk.csv  [OK]
+# 01 | ..."), because each channel flushes on its own schedule. This script
+# alternates a line of text with a print()ed tibble throughout, so the order is
+# only guaranteed if everything leaves the same way -- and print() cannot be
+# sent to stderr, so it is the text that moves to stdout.
 #
-# .say() imita message(): cola os argumentos e acrescenta a quebra of linha.
+# .say() mimics message(): pastes its arguments and adds the line break.
 .say <- function(...) cat(paste0(...), "
 ", sep = "")
 
@@ -107,7 +106,7 @@ check_equal <- function(stage, label, a, b, name_a = "a", name_b = "b") {
 .say(strrep("=", 90), "\n")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ETAPA 01 — Preparo do dataset tabular
+# STAGE 01 - preparing the point table
 # ══════════════════════════════════════════════════════════════════════════════
 
 .say("\n-- Stage 01: dataset preparation --\n")
@@ -121,11 +120,11 @@ f_rtable  <- file.path(metadata_dir, "raster_table_used.csv")
 f_pmeta   <- file.path(metadata_dir, "point_metadata.csv")   # sample_id, x, y
 f_tconfig <- file.path(metadata_dir, "target_config.csv")
 
-# Os 6 CSVs por split (train/validation/test x raw/scaled) sairam: os *_scaled
-# nenhum codigo lia, e os *_raw eram um filter() do dataset unico. Com
-# escalonamento por fold, "o conjunto escalonado" deixou of existir como
-# objeto unico. Entraram no lugar: qc_table.csv (as regras que o 02 obedece)
-# e channel_risk.csv (os canais que historicamente quebraram o MAPA).
+# The six per-split CSVs are gone: no code read the *_scaled ones, and the
+# *_raw ones were a filter() of the single dataset. With per-fold scaling,
+# "the scaled dataset" stopped existing as one object. In their place:
+# qc_table.csv (the rules stage 02 obeys) and channel_risk.csv (the channels
+# that have historically broken the MAP).
 f_dataset <- file.path(data_dir, "full_modeling_dataset_raw.csv")
 f_qctable <- file.path(metadata_dir, "qc_table.csv")
 f_crisk   <- file.path(metadata_dir, "channel_risk.csv")
@@ -165,16 +164,15 @@ if (all_01_exist) {
   pmeta   <- safe_read_csv2(f_pmeta)
   tconfig <- safe_read_csv2(f_tconfig)
 
-  # A checagem mais importante: fracao of linhas descartadas por problema de
-  # PREDITOR (nao of alvo). Alvo com problema (spline ruim, NA, <=0) e normal
-  # e esperado; preditor com problema em excesso e a assinatura do tipo de
-  # bug que causou a perda of ~55% dos dados por 2 meses (clip vs NA).
+  # The most important check here: the share of rows dropped for a PREDICTOR
+  # problem (not a target one). A bad target -- poor spline, NA, <= 0 -- is
+  # normal and expected; too many predictor problems is the signature of the
+  # class of bug that cost ~55% of the data for two months (clip vs NA).
   pct_pred_problem <- 100 * qc$n_predictor_problem / qc$n_rows_extracted
   check_threshold("01", "% of rows with a PREDICTOR problem (not the target)",
                   pct_pred_problem, warn_above = 2, fail_above = 10)
 
-  # Contagem of predictors consistente entre TODOS os arquivos que deveriam
-  # concordar.
+  # Predictor count consistent across EVERY file that should agree.
   n_pred_rtable  <- nrow(rtable)
   n_pred_ptype   <- nrow(ptype)
   n_pred_scaling <- nrow(scaling)
@@ -190,41 +188,42 @@ if (all_01_exist) {
   check_equal("01", "n_predictors: raster_table vs target_config",
               n_pred_rtable, n_pred_tconfig, "raster_table", "target_config")
 
-  # dummy + percentage + continuous deve somar o total of predictors
+  # dummy + percentage + continuous must sum to the predictor total
   n_type_sum <- dscheck$n_dummy_predictors[1] + dscheck$n_percentage_predictors[1] +
     dscheck$n_continuous_predictors[1]
   check_equal("01", "dummy + percentage + continuous == total predictors",
               n_type_sum, n_pred_rtable, "soma_tipos", "total")
 
-  # Proporcao do split perto of 70/15/15 (tolerancia 2 p.p.)
+  # Split proportions near 70/15/15 (2 percentage-point tolerance)
   total_n <- sum(split$n)
   
-  # target_native e target_log1p sao consistentes (log1p(native) == log1p)
-  # -- checagem indireta via mediana ja calculada em dataset_check.csv
+  # target_native and target_log1p agree (log1p(native) == log1p) -- checked
+  # indirectly through the median already computed in dataset_check.csv
   implied_log1p <- log1p(dscheck$median_target[1])
   check_equal("01", "median_target_log1p == log1p(median_target)",
               round(dscheck$median_target_log1p[1], 4), round(implied_log1p, 4),
               "salvo", "recalculado")
 
-  # dataset unico bate com a soma dos splits (mesma linhagem).
-  # col_select=1 mantem a leitura rapida mesmo com 180+ colunas.
+  # The single dataset matches the sum of the splits (same lineage).
+  # col_select = 1 keeps the read fast even with 180+ columns.
   n_dataset <- nrow(safe_read_csv2(f_dataset,
                                      col_select = 1))
   check_equal("01", "dataset rows vs the sum of the splits",
               n_dataset, sum(split$n), "dataset", "split_check")
 
-  # qc_table tem uma regra por preditor, na mesma ordem do type_table --
-  # e essa ordem que o 02 usa pra saber qual regra aplicar em qual banda.
+  # qc_table holds one rule per predictor, in type_table's order -- and that
+  # order is what stage 02 uses to know which rule applies to which band.
   qctable <- safe_read_csv2(f_qctable)
   add_check("01", "qc_table.csv in the same order as predictor_type_table.csv",
             if (identical(qctable$predictor, ptype$predictor)) "PASS" else "FAIL",
             sprintf("%d rules / %d predictors", nrow(qctable), nrow(ptype)))
 
-  # PROTECAO: nenhum canal constante deve ter sobrevivido ao drop.
-  # Canal constante nos pontos nao e constante no MAPA -- acende sobre
-  # geleira, ilha, oceano -- e como seu gradiente e sempre zero, os pesos
-  # ficam na inicializacao aleatoria e aplicam vies exatamente onde a rede
-  # esta extrapolando. Se isso falhar, some o canal em manual_predictor_drop.
+  # GUARD: no constant channel may have survived the drop.
+  # A channel constant AT THE POINTS is not constant on the MAP -- it switches
+  # on over glaciers, islands, ocean -- and because its gradient is always
+  # zero, its weights stay at random initialisation and apply a bias exactly
+  # where the network is extrapolating. If this fails, add the channel to
+  # manual_predictor_drop.
   crisk    <- safe_read_csv2(f_crisk)
   n_const  <- sum(crisk$risk == "constant", na.rm = TRUE)
   n_withna <- sum(crisk$risk == "has_na",   na.rm = TRUE)
@@ -249,14 +248,14 @@ if (all_01_exist) {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ETAPA 02 — Extração of patches
+# STAGE 02 - patch extraction
 # ══════════════════════════════════════════════════════════════════════════════
 
 .say("\n-- Stage 02: patch extraction --\n")
 
-# O 02 agora escreve UM arquivo por janela (float32) em vez of um .rds unico
-# com os tres splits, e um patch_meta.csv unico em vez of tres meta_*.csv:
-# o split virou indice, nao propriedade do dado armazenado.
+# Stage 02 writes ONE file per window instead of a single .rds holding three
+# splits, and one patch_meta.csv instead of three meta_*.csv: the split became
+# an index, not a property of the stored data.
 f_manifest     <- file.path(patch_meta_dir, "patch_manifest.csv")
 f_pfiles       <- file.path(patch_meta_dir, "patch_files.csv")
 f_blame        <- file.path(patch_meta_dir, "channel_invalidation.csv")
@@ -265,15 +264,15 @@ f_manifest_rds <- file.path(patch_dir, "patch_manifest.rds")
 
 files_02 <- c(f_manifest, f_pfiles, f_blame, f_patch_meta, f_manifest_rds)
 
-# NAO INICIADA vs FALHOU: sao coisas diferentes e so uma merece FAIL.
+# NOT STARTED vs FAILED: different things, and only one deserves a FAIL.
 #
-# O fluxo aqui e "script 1 -> check, script 2 -> check", entao este script roda
-# varias vezes com as etapas seguintes ainda por fazer. Se etapa que nunca
-# rodou contasse como falha, todo run intermediario terminaria com FAIL e o
-# sinal perderia valor justamente no momento em que ele mais serve.
+# The workflow here is "script 1 -> check, script 2 -> check", so this script
+# runs many times with later stages still to come. If a stage that never ran
+# counted as a failure, every intermediate run would end in FAIL and the signal
+# would lose its value exactly when it is most useful.
 #
-# Regra: nenhum arquivo presente = ainda nao rodou (informativo). ALGUNS
-# presentes = rodou pela metade, e isso sim e problema.
+# The rule: no files present = has not run yet (informational). SOME files
+# present = ran half way, and that is a problem.
 n_02_presentes <- sum(file.exists(files_02))
 
 if (n_02_presentes == 0L) {
@@ -292,19 +291,19 @@ if (all_02_exist) {
 
   manifest <- safe_read_csv2(f_manifest)
 
-  # A CHECAGEM MAIS IMPORTANTE DESTE SCRIPT INTEIRO: fracao of perfis
-  # descartados na extracao of patches. Antes da correcao do clip PNV, isso
-  # rodava consistentemente em ~55%. Depois da correcao, esperado < 2%.
-  # Se isso voltar pra cima of 10%, ALGO REGREDIU -- pare e investigue antes
-  # of gastar dias/semanas of tuning/predicao em cima of dado quebrado.
-  # Agora e um numero so: o 02 extrai todos os pontos of uma vez.
+  # THE MOST IMPORTANT CHECK IN THIS WHOLE SCRIPT: the share of profiles
+  # dropped during patch extraction. Before the PNV clip fix this ran
+  # consistently around 55%; after it, under 2% is expected. If it climbs back
+  # above 10%, SOMETHING REGRESSED -- stop and investigate before spending days
+  # of tuning and prediction on broken data.
+  # It is one number now: stage 02 extracts every point in a single pass.
   check_threshold("02", "pct_removed (full window)",
                   manifest$pct_removed[1], warn_above = 2, fail_above = 10)
 
-  # COMPLEMENTO: o numero acima diz QUANTO se perdeu; este diz QUAL canal
-  # perdeu. valid_common e um AND sobre todos os canais, entao sozinho nunca
-  # pode apontar o culpado -- e sem culpado, um canal com NA esparso so se
-  # revela como buraco no mapa, semanas depois.
+  # COMPANION: the number above says HOW MUCH was lost; this one says WHICH
+  # channel lost it. valid_common is an AND over every channel, so on its own
+  # it can never name the culprit -- and without a culprit, a channel with
+  # sparse NA only shows up as a hole in the map, weeks later.
   blame <- safe_read_csv2(f_blame)
   worst <- if (nrow(blame) > 0) max(blame$pct_invalidated, na.rm = TRUE) else 0
   check_threshold("02", "worst channel, % of points invalidated",
@@ -316,16 +315,16 @@ if (all_02_exist) {
                       top$pct_invalidated[1]))
   }
 
-  # patches sem escalonamento: o 03 aplica o escalonamento do fold. Um store
-  # pre-escalonado esta amarrado a UM split e nao serve pra reamostragem.
+  # Patches stored unscaled: stage 03 applies the fold's scaling. A
+  # pre-scaled store is tied to ONE split and is useless for resampling.
   add_check("02", "patches stored WITHOUT scaling",
             if (isFALSE(manifest$scaling_applied[1])) "PASS" else "FAIL",
             paste("scaling_applied =", manifest$scaling_applied[1]))
 
-  # n_channels bate com o que o 01 preparou (nao um numero fixo: dropar um
-  # preditor problematico e uma acao legitima e nao deve quebrar o check).
-  # `ptype` vem do bloco da etapa 01 -- guardado porque aquele bloco so roda se
-  # os arquivos do 01 existirem, e a etapa 02 precisa sobreviver sem ele.
+  # n_channels matches what stage 01 prepared -- not a fixed number, because
+  # dropping a problematic predictor is a legitimate action and must not break
+  # the check. `ptype` comes from the stage 01 block, kept because that block
+  # only runs when 01's files exist and stage 02 has to survive without it.
   if (exists("ptype")) {
     check_equal("02", "n_channels: manifest vs predictor_type_table",
                 manifest$n_channels[1], nrow(ptype), "manifest", "01")
@@ -340,24 +339,24 @@ if (all_02_exist) {
             if (ok_windows) "PASS" else "FAIL",
             paste("valor:", manifest$windows_extracted[1]))
 
-  # n_points_valid do manifest bate com as linhas reais of patch_meta.csv
+  # The manifest's n_points_valid matches the real rows of patch_meta.csv
   n_patch_meta <- nrow(safe_read_csv2(f_patch_meta,
                                         col_select = 1))
   check_equal("02", "n_points_valid: manifest vs patch_meta.csv",
               manifest$n_points_valid[1], n_patch_meta, "manifest", "patch_meta")
 
-  # todo arquivo of janela existe, foi verificado na escrita, e nao esta
-  # suspeitosamente pequeno (um crash no meio da escrita deixa truncado)
+  # Every window file exists, was verified on write, and is not suspiciously
+  # small (a crash mid-write leaves a truncated file)
   pfiles <- safe_read_csv2(f_pfiles)
   missing_pt <- pfiles$file[!file.exists(file.path(patch_dir, pfiles$file))]
   add_check("02", "every window file exists on disk",
             if (length(missing_pt) == 0L) "PASS" else "FAIL",
             if (length(missing_pt) == 0L) sprintf("%d file(s)", nrow(pfiles))
             else paste("missing:", paste(missing_pt, collapse = ", ")))
-  # A coluna e `status` ("written" / "kept" / "size_mismatch"). Era `verified`
-  # na versao que gravava tensores; o 99 ficou lendo o nome antigo e reportava
-  # "0/3 verificados" num store perfeito. Um check que le a coluna errada e
-  # pior que check nenhum: gasta atencao num alarme falso.
+  # The column is `status` ("written" / "kept" / "size_mismatch"). It was
+  # `verified` in the version that wrote tensors; the 99 kept reading the old
+  # name and reported "0/3 verified" on a perfect store. A check that reads the
+  # wrong column is worse than no check: it spends attention on a false alarm.
   n_ok_files <- sum(pfiles$status %in% c("written", "kept"))
   add_check("02", "every file written without a size error",
             if (n_ok_files == nrow(pfiles)) "PASS" else "WARN",
@@ -368,18 +367,18 @@ if (all_02_exist) {
             sprintf("%.1f GB em %d file(s)", sum(pfiles$gb, na.rm = TRUE),
                     nrow(pfiles)))
 
-  # ── A checagem mais forte deste arquivo ───────────────────────────────
-  # O centro of cada patch TEM que ser igual ao valor que a tabela of pontos
-  # guarda para aquele preditor naquele ponto -- e a mesma celula do mesmo
-  # raster, alcancada por dois caminhos totalmente independentes:
+  # -- The strongest check in this file --──────────────────────────────
+  # The centre of every patch MUST equal the value the point table holds for
+  # that predictor at that point -- it is the same cell of the same raster,
+  # reached by two completely independent routes:
   #
-  #   tabela of pontos : terra::extract() sobre um SpatVector (script 01)
-  #   patch store      : cellFromXY -> row/col -> patch_cell_index (script 02)
+  #   point table : terra::extract() over a SpatVector (script 01)
+  #   patch store : cellFromXY -> row/col -> patch_cell_index (script 02)
   #
-  # Erro of CRS, troca of linha/coluna, off-by-one, reordenacao of canal ou
-  # diretorio of raster desatualizado quebram essa igualdade. Os testes
-  # sinteticos provam que a algebra esta certa; isto prova que ela foi
-  # aplicada no lugar certo do raster REAL.
+  # A CRS error, a row/column swap, an off-by-one, a channel reordering or a
+  # stale raster directory each break that equality. The synthetic tests prove
+  # the algebra is right; this proves it was applied to the right place of the
+  # REAL raster.
   if (file.exists(f_dataset) && file.exists(f_patch_meta) &&
       file.exists(f_manifest_rds)) {
 
@@ -419,7 +418,7 @@ if (all_02_exist) {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ETAPA 03 — Busca of hiperparâmetros (tuning)
+# STAGE 03 - hyperparameter search (tuning)
 # ══════════════════════════════════════════════════════════════════════════════
 
 .say("\n-- Stage 03: hyperparameter tuning --\n")
@@ -433,8 +432,8 @@ if (!dir.exists(tuning_dir)) {
   if (length(tuning_runs) == 0) {
     .say("Stage 03 incomplete -- no run found in: ", tuning_dir)
   } else {
-    # Mais recente por ordenacao do nome (run_id e timestamped) -- mesmo
-    # criterio usado para resolver "latest" no 04/05/06.
+    # Most recent by name order (run_id is timestamped) -- the same criterion
+    # stages 04/05/06 use to resolve "latest".
     tuning_run_id <- sort(tuning_runs, decreasing = TRUE)[1]
     run_dir <- file.path(tuning_dir, tuning_run_id)
     .say("Most recent run: ", tuning_run_id)
@@ -452,9 +451,9 @@ if (!dir.exists(tuning_dir)) {
       tune_grid  <- safe_read_csv2(f_grid_csv)
       comparison <- safe_read_csv2(f_cmp_rank)
 
-      # Runs anteriores a reamostragem tem uma linha por config e nenhuma
-      # coluna unit_id/fold/seed. Preenche-las com o que aquelas linhas de
-      # fato eram deixa todo o resto deste bloco com um caminho so.
+      # Runs from before resampling have one row per config and no
+      # unit_id/fold/seed columns. Filling them with what those rows actually
+      # were leaves the rest of this block with a single path.
       if (!"unit_id" %in% names(comparison)) comparison$unit_id <- comparison$config_id
       if (!"fold"    %in% names(comparison)) comparison$fold    <- 1L
       if (!"seed"    %in% names(comparison)) comparison$seed    <- NA_integer_
@@ -462,12 +461,12 @@ if (!dir.exists(tuning_dir)) {
       n_grid <- nrow(tune_grid)
       n_cmp  <- nrow(comparison)
 
-      # A checagem mais importante desta etapa: nenhuma config do grid ficou
-      # pra tras (crash silencioso, config pulada por engano no resume, etc.)
+      # The most important check of this stage: no config in the grid was left
+      # behind (silent crash, config wrongly skipped on resume, and so on).
       missing_ids <- setdiff(tune_grid$config_id, comparison$config_id)
-      # Contar configs no numerador e configs no denominador. Com units,
-      # `n_cmp` sao LINHAS -- imprimir "27/3 configs" mistura as duas escalas
-      # e le como se sobrassem configs.
+      # Count configs in the numerator and configs in the denominator. With
+      # units, `n_cmp` is ROWS -- printing "27/3 configs" mixes the two scales
+      # and reads as though configs were left over.
       n_cfg_seen <- dplyr::n_distinct(comparison$config_id)
       add_check("03", "every config in the grid has a comparison row",
                 if (length(missing_ids) == 0) "PASS" else "FAIL",
@@ -475,47 +474,46 @@ if (!dir.exists(tuning_dir)) {
                   sprintf("%d/%d configs (%d units)", n_cfg_seen, n_grid, n_cmp)
                 else paste("missing:", paste(missing_ids, collapse = ", ")))
 
-      # Nenhuma linha extra na comparacao que nao esteja no grid atual --
-      # indicaria mistura of runs diferentes (ex.: resume com tune_grid trocado
-      # sem passar por um run_id novo).
+      # No extra row in the comparison that is not in the current grid -- that
+      # would mean two runs mixed together (a resume with a swapped tune_grid
+      # and no new run_id, for instance).
       extra_ids <- setdiff(comparison$config_id, tune_grid$config_id)
       add_check("03", "no config in the comparison outside the current grid",
                 if (length(extra_ids) == 0) "PASS" else "FAIL",
                 if (length(extra_ids) == 0) "" else paste("extra:", paste(extra_ids, collapse = ", ")))
 
-      # status == success para todas -- configs com erro nunca escrevem linha
-      # em comparison_all.csv (ver run_cnn_tuning), entao qualquer coisa
-      # != success aqui seria corrupcao inesperada do CSV, nao uma falha normal
-      # of treino (essas simplesmente nao aparecem, ja coberto pelo check acima).
+      # status == success everywhere. A config that errors still writes a row
+      # with status "failed", so anything else here would be unexpected CSV
+      # corruption rather than an ordinary training failure.
       n_not_success <- sum(comparison$status != "success", na.rm = TRUE)
       add_check("03", "every row has status == success",
                 if (n_not_success == 0) "PASS" else "FAIL",
                 sprintf("%d row(s) with status != success", n_not_success))
 
-      # Cada config com linha na comparacao precisa ter o checkpoint .pt -- e
-      # o sinal of "realmente terminou o treino" usado pelo resume (ver
-      # run_cnn_tuning em R/train_cnn.R). Uma linha sem checkpoint deixaria um
-      # resume futuro confuso sobre se aquela config precisa ser retreinada.
-      # Por UNIDADE: com repeticoes, duas sementes da mesma config sao dois
-      # modelos. Procurar por config_id acharia um arquivo que nao existe e
-      # deixaria of checar os que existem.
+      # Every row in the comparison needs its .pt checkpoint -- that is the
+      # "training really finished" signal resume relies on (see run_cnn_tuning
+      # in R/train_cnn.R). A row without one would leave a future resume unsure
+      # whether that unit needs retraining.
+      # By UNIT: with repetitions, two seeds of one config are two models.
+      # Looking by config_id would search for a file that does not exist AND
+      # skip checking the ones that do.
       ckpt_files <- file.path(run_dir, "models", paste0(comparison$unit_id, "_best.pt"))
       n_missing_ckpt <- sum(!file.exists(ckpt_files))
       add_check("03", "every unit in the comparison has a .pt checkpoint",
                 if (n_missing_ckpt == 0) "PASS" else "FAIL",
                 sprintf("%d checkpoint(s) missing", n_missing_ckpt))
 
-      # best_epoch nao pode ser NA nem <= 0 (indicaria que o treino nunca
-      # passou no criterio of melhora do early stopping -- treino quebrado).
+      # best_epoch cannot be NA or <= 0: that would mean training never met
+      # the early-stopping improvement criterion, which is a broken run.
       n_bad_epoch <- sum(is.na(comparison$best_epoch) | comparison$best_epoch <= 0)
       add_check("03", "best_epoch valid (non-NA, > 0) in every config",
                 if (n_bad_epoch == 0) "PASS" else "FAIL",
                 sprintf("%d config(s) with an invalid best_epoch", n_bad_epoch))
 
-      # Metricas of validacao dentro of faixa FISICAMENTE plausivel (nao NA,
-      # CCC em [-1,1], MAE/RMSE > 0). Nao julga "quao bom" o modelo e -- isso
-      # e decisao of modelagem, nao bug estrutural -- so descarta valores
-      # impossiveis (sinal of erro no calculo, nao of modelo ruim).
+      # Validation metrics inside a PHYSICALLY plausible range (not NA, CCC in
+      # [-1, 1], MAE/RMSE > 0). This does not judge how GOOD the model is --
+      # that is a modelling decision, not a structural bug -- it only rejects
+      # impossible values, which signal an error in the computation.
       n_na_metrics <- sum(is.na(comparison$val_ccc) | is.na(comparison$val_mae) |
                           is.na(comparison$val_rmse))
       add_check("03", "val_ccc/val_mae/val_rmse free of NA",
@@ -532,7 +530,7 @@ if (!dir.exists(tuning_dir)) {
                 if (n_nonpos_error == 0) "PASS" else "FAIL",
                 sprintf("%d config(s) with error <= 0", n_nonpos_error))
 
-      # ── Reamostragem: a contabilidade das repeticoes ────────────────────────
+      # -- Resampling: the bookkeeping of the repetitions --───────────────────────
       f_plan     <- file.path(run_dir, "fold_plan.rds")
       f_byconfig <- file.path(run_dir, "comparison", "comparison_by_config.csv")
       has_plan   <- file.exists(f_plan)
@@ -550,19 +548,19 @@ if (!dir.exists(tuning_dir)) {
                           else "")
                 } else "fold_plan.rds ausente -- run anterior a reamostragem")
 
-      # O grid tem que ter sido treinado por INTEIRO em cada fold e cada
-      # semente. Um buraco aqui nao aparece em lugar nenhum: a media da config
-      # sai of menos repeticoes que as outras e a comparacao fica torta.
+      # The grid has to have been trained WHOLE in every fold and every seed.
+      # A hole here shows up nowhere else: that config's mean comes from fewer
+      # repetitions than the others and the comparison tilts.
       n_expected <- n_grid * n_folds_run * n_seeds_run
       add_check("03", "units = configs x folds x seeds",
                 if (n_cmp == n_expected) "PASS" else "WARN",
-                sprintf("%d linhas | %d configs x %d fold(s) x %d semente(s) = %d",
+                sprintf("%d rows | %d configs x %d fold(s) x %d seed(s) = %d",
                         n_cmp, n_grid, n_folds_run, n_seeds_run, n_expected))
 
-      # A semente TEM que ser a mesma em todas as configs of uma repeticao --
-      # e isso que faz duas configs serem comparadas sob o mesmo sorteio. Se
-      # cada config tiver sua propria semente, parte of toda diferenca medida
-      # e sorte, e nada no resultado avisa.
+      # The seed MUST be the same across every config of a repetition -- that
+      # is what makes two configs comparable under the same draw. If each
+      # config had its own seed, part of every measured difference would be
+      # luck, and nothing in the result would say so.
       if (!all(is.na(comparison$seed))) {
         seeds_per_cfg <- comparison %>%
           dplyr::group_by(config_id) %>%
@@ -575,8 +573,8 @@ if (!dir.exists(tuning_dir)) {
                           seeds_per_cfg$s[1]))
       }
 
-      # rank 1 da tabela POR CONFIG e realmente a maior media -- e nao a linha
-      # que teve o melhor run isolado.
+      # Rank 1 of the PER-CONFIG table really is the highest mean -- not the
+      # row that happened to hold the best single run.
       if (file.exists(f_byconfig)) {
         by_config <- safe_read_csv2(f_byconfig)
         top_by_rank <- by_config$config_id[by_config$rank == 1][1]
@@ -584,15 +582,15 @@ if (!dir.exists(tuning_dir)) {
         check_equal("03", "rank 1 is the highest mean val_ccc",
                     top_by_rank, top_by_mean, "rank_1", "max_mean")
 
-        # A pergunta que decide se este tuning significa alguma coisa: a
-        # distancia entre o 1o e o 2o e maior que o ruido of semente?
+        # The question that decides whether this tuning means anything: is
+        # the gap between first and second larger than the seed noise?
         if (nrow(by_config) > 1L && "val_ccc_sd" %in% names(by_config)) {
           ord <- dplyr::arrange(by_config, rank)
           gap <- ord$val_ccc_mean[1] - ord$val_ccc_mean[2]
-          # O piso of ruido e o sd entre SEMENTES dentro do mesmo fold, medido
-          # por seed_noise_floor(). O sd da tabela por config mistura fold e
-          # semente -- usa-lo aqui com o rotulo "entre sementes" reportava uma
-          # quantidade diferente da que o 03 imprime, com o mesmo nome.
+          # The noise floor is the sd between SEEDS within one fold, from
+          # seed_noise_floor(). The per-config sd mixes fold and seed, so using
+          # it here under the label "between seeds" reported a different
+          # quantity from the one stage 03 prints, under the same name.
           nf    <- seed_noise_floor(comparison)
           noise <- nf$median_sd
           add_check("03", "the winner stands above the seed noise",
@@ -611,10 +609,10 @@ if (!dir.exists(tuning_dir)) {
                     top_by_rank, top_by_ccc, "rank_1", "max_ccc")
       }
 
-      # gate_summary.csv so deveria existir para configs dual-branch (janela
-      # com "x" no nome, ex. "9x15") com gate != no_gate_concat -- confirma
-      # que a logica condicional of extract_gate_analysis() nao esta gerando
-      # (ou deixando of gerar) arquivo para o tipo of config errado.
+      # gate_summary.csv should exist only for dual-branch configs (a window
+      # with "x" in the name, e.g. "9x15") whose gate is not no_gate_concat --
+      # confirming that the conditional logic in extract_gate_analysis() is not
+      # writing, or failing to write, a file for the wrong kind of config.
       gated_ids <- comparison$unit_id[
         grepl("x", comparison$window_sizes) & comparison$gate_type != "no_gate_concat"
       ]
@@ -624,10 +622,10 @@ if (!dir.exists(tuning_dir)) {
                 if (n_missing_gate == 0) "PASS" else "WARN",
                 sprintf("%d/%d faltando", n_missing_gate, length(gated_ids)))
 
-      # Metrica media quando ha repeticoes; a da unica linha quando nao ha.
+      # The mean metric when there are repetitions; the single row's when not.
       top_rows <- dplyr::filter(comparison, config_id == top_by_ccc)
       .say(sprintf(
-        "\n  Best config: %s | CCC=%.3f | MAE=%.2f | RMSE=%.2f | janela=%s | gate=%s | %d repetition(s)",
+        "\n  Best config: %s | CCC=%.3f | MAE=%.2f | RMSE=%.2f | window=%s | gate=%s | %d repetition(s)",
         top_by_ccc,
         mean(top_rows$val_ccc,  na.rm = TRUE),
         mean(top_rows$val_mae,  na.rm = TRUE),
@@ -643,7 +641,7 @@ if (!dir.exists(tuning_dir)) {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ETAPA 04 — Modelo final (ensemble multi-seed)
+# STAGE 04 - final model (multi-seed ensemble)
 # ══════════════════════════════════════════════════════════════════════════════
 
 .say("\n-- Stage 04: final model (multi-seed ensemble) --\n")
@@ -680,26 +678,25 @@ if (!dir.exists(final_model_base)) {
       seeds_expected    <- summary_rds$seeds
       n_seeds_expected  <- length(seeds_expected)
 
-      # O 04 grava qual run of tuning (etapa 03) usou -- confirma que essa
-      # pasta ainda existe (nao foi apagada/renomeada depois) e, quando a
-      # etapa 03 tambem rodou nesta mesma checagem, que e exatamente o run
-      # mais recente resolvido la em cima (evita ficar preso num run antigo
-      # por engano, ex.: tuning_run_id fixo esquecido no script).
+      # Stage 04 records which tuning run it used. This confirms that the
+      # directory still exists (not deleted or renamed since) and, when stage
+      # 03 also ran in this same check, that it is exactly the most recent run
+      # resolved above -- which is what stops a stale tuning_run_id left in the
+      # script from silently pinning the work to an old run.
       linked_tuning_dir <- file.path(tuning_dir, summary_rds$tuning_run_id)
       add_check("04", "the tuning_run_id stage 04 refers to still exists",
                 if (dir.exists(linked_tuning_dir)) "PASS" else "FAIL",
                 summary_rds$tuning_run_id)
       if (exists("tuning_run_id") && all_03_exist) {
-        check_equal("04", "tuning_run_id do 04 == run mais recente da etapa 03",
+        check_equal("04", "stage 04's tuning_run_id == stage 03's most recent run",
                     summary_rds$tuning_run_id, tuning_run_id, "used_by_04", "mais_recente_03")
       }
 
-      # Quando selected_config_ids foi deixado NULL (comportamento padrao,
-      # recomendado no cabecalho do 04), o config escolhido tem que ser
-      # exatamente o rank==1 do ranking of validacao daquele run of tuning --
-      # senao o modelo final estaria sendo treinado numa arquitetura que nao
-      # e a melhor encontrada na etapa 03. Selecao manual of top-N e valida,
-      # entao isso e so um alerta (WARN), nao falha.
+      # When selected_config_ids was left NULL (the default, recommended in
+      # stage 04's header), the chosen config must be exactly rank 1 of that
+      # tuning run's validation ranking -- otherwise the final model is being
+      # trained on an architecture that is not the best one stage 03 found.
+      # Picking a top-N by hand is legitimate, so this is a WARN, not a FAIL.
       if (exists("tuning_run_id") && all_03_exist &&
           identical(summary_rds$tuning_run_id, tuning_run_id)) {
         rank1_id <- comparison$config_id[comparison$rank == 1L]
@@ -709,9 +706,9 @@ if (!dir.exists(final_model_base)) {
                         paste(selected_cfgs$config_id, collapse = ", ")))
       }
 
-      # Cada config selecionado precisa ter exatamente n_seeds_expected linhas
-      # of resultado -- nem seed faltando (crash/erro silencioso), nem seed a
-      # mais (resquicio of outro run com seeds diferentes).
+      # Each selected config needs exactly n_seeds_expected result rows --
+      # no missing seed (a silent crash) and no extra one (a leftover from
+      # another run with different seeds).
       seed_counts <- dplyr::count(all_seed_results, config_id, name = "n_seeds_found")
       for (cid in selected_cfgs$config_id) {
         found <- seed_counts$n_seeds_found[seed_counts$config_id == cid]
@@ -721,10 +718,10 @@ if (!dir.exists(final_model_base)) {
                   sprintf("%d/%d seeds", found, n_seeds_expected))
       }
 
-      # Cada (config, seed) esperado tem checkpoint .pt salvo -- mesmo
-      # principio do check em "03": resultado sem modelo salvo por tras
-      # deixaria o run inutilizavel para inferencia futura mesmo aparecendo
-      # como sucesso na tabela of metricas.
+      # Every expected (config, seed) has a saved .pt checkpoint -- the same
+      # principle as the stage 03 check: a result with no model behind it would
+      # leave the run useless for future inference while still appearing as a
+      # success in the metrics table.
       ckpt_paths <- character(0)
       for (cid in selected_cfgs$config_id) {
         ckpt_paths <- c(ckpt_paths, file.path(run_dir, cid, "models",
@@ -735,8 +732,8 @@ if (!dir.exists(final_model_base)) {
                 if (n_missing_ckpt == 0) "PASS" else "FAIL",
                 sprintf("%d/%d checkpoint(s) missing", n_missing_ckpt, length(ckpt_paths)))
 
-      # Metricas of teste sem NA e em faixa fisicamente plausivel (mesma
-      # logica do 03: nao julga "quao bom", so descarta valores impossiveis).
+      # Test metrics free of NA and inside a physically plausible range (same
+      # logic as stage 03: no judgement of how good, only impossible values).
       n_na_metrics <- sum(is.na(all_seed_results$ccc) | is.na(all_seed_results$mae) |
                           is.na(all_seed_results$rmse))
       add_check("04", "ccc/mae/rmse free of NA (every seed)",
@@ -746,17 +743,17 @@ if (!dir.exists(final_model_base)) {
       n_ccc_out <- sum(all_seed_results$ccc < -1 | all_seed_results$ccc > 1, na.rm = TRUE)
       add_check("04", "ccc within [-1, 1] (every seed)",
                 if (n_ccc_out == 0) "PASS" else "FAIL",
-                sprintf("%d linha(s) fora do range", n_ccc_out))
+                sprintf("%d row(s) out of range", n_ccc_out))
 
       n_nonpos <- sum(all_seed_results$mae <= 0 | all_seed_results$rmse <= 0, na.rm = TRUE)
       add_check("04", "mae and rmse > 0 (every seed)",
                 if (n_nonpos == 0) "PASS" else "FAIL",
                 sprintf("%d row(s) with error <= 0", n_nonpos))
 
-      # Estabilidade entre seeds: SD do CCC como % da media. Um desvio grande
-      # (ver docs/design_decisions.md secao 11) indica treino instavel/pouco
-      # reprodutivel, nao so "sorte" of inicializacao -- resultado publicavel
-      # deveria ter baixo desvio.
+      # Stability across seeds: sd of CCC as a percentage of the mean. A large
+      # spread (see docs/design_decisions.md, section 11) points to unstable,
+      # poorly reproducible training rather than mere initialisation luck -- a
+      # publishable result should have a low one.
       for (i in seq_len(nrow(config_summary))) {
         cs <- config_summary[i, ]
         pct_sd <- 100 * cs$ccc_sd / cs$ccc_mean
@@ -764,8 +761,8 @@ if (!dir.exists(final_model_base)) {
                         pct_sd, warn_above = 10, fail_above = 20, unit = "% da media")
       }
 
-      # config_summary bate com a agregacao recalculada a partir de
-      # all_seed_results -- redundancia contra corrupcao/desalinhamento do CSV.
+      # config_summary matches the aggregation recomputed from
+      # all_seed_results -- redundancy against CSV corruption or misalignment.
       recalc <- all_seed_results %>%
         dplyr::group_by(config_id) %>%
         dplyr::summarise(ccc_mean_recalc = mean(ccc), .groups = "drop")
@@ -776,8 +773,8 @@ if (!dir.exists(final_model_base)) {
                     "salvo", "recalculado")
       }
 
-      # gate_summary.csv por seed so deveria existir para configs dual-branch
-      # (2 janelas) com gate_type != no_gate_concat -- mesma logica do 03.
+      # A per-seed gate_summary.csv should exist only for dual-branch configs
+      # (two windows) whose gate_type is not no_gate_concat -- as in stage 03.
       for (i in seq_len(nrow(selected_cfgs))) {
         cid <- selected_cfgs$config_id[i]
         ws  <- selected_cfgs$window_sizes[[i]]
@@ -806,21 +803,21 @@ if (!dir.exists(final_model_base)) {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# [Placeholder para etapas futuras]
+# [Placeholder for future stages]
 #
-# Etapa 05/06 (predicao espacial): valid_fraction dos tiles nao caiu of novo
-# pra perto of zero -- mesma logica do check do 02, adaptada para os logs
-# of shard/merge. Ver tambem 05a_test.R / 05c_estimate_eta.R, que ja cobrem
-# parte disso para o pipeline 2D.
+# Stages 05/06 (spatial prediction): the tiles' valid_fraction has not dropped
+# back towards zero -- the same logic as the stage 02 check, adapted to the
+# shard/merge logs. See also 05a_test.R and 05c_estimate_eta.R, which already
+# cover part of this for the 2D pipeline.
 # ══════════════════════════════════════════════════════════════════════════════
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SNAPSHOT — o que mudou desde o run anterior?
+# SNAPSHOT - what changed since the previous run?
 #
-# Num ciclo of refatoracao, a pergunta feita apos cada execucao e "mexeu em
-# alguma coisa?", e responde-la significava rolar a tela atras of saida
-# antiga. "Tudo identico" e o resultado que se quer ver, e e justamente o
-# mais dificil of confirmar of olho.
+# In a refactor the question asked after every execution is "did anything
+# move?", and answering it meant scrolling back through old output by hand.
+# "Everything identical" is the result you want to see, and it is precisely the
+# one that is hardest to confirm by eye.
 # ══════════════════════════════════════════════════════════════════════════════
 
 .say("\n-- Snapshot: comparison with the previous run --\n")
@@ -859,12 +856,12 @@ add_snap("99_n_warn", sum(.results$status == "WARN"))
 add_snap("99_n_fail", sum(.results$status == "FAIL"))
 
 snap_dir <- file.path(project_root, "outputs", "qc", "snapshots")
-# Os contadores do proprio 99 (99_n_pass/warn/fail) ficam GRAVADOS no
-# snapshot -- sao o resumo do run e valem para o historico -- mas nao entram
-# no diff. Sao derivados of todas as outras chaves: se uma metrica real
-# mudar, ela aparece no diff sozinha. Compara-los cria uma alca fechada em
-# que CONSERTAR um WARN gera um WARN ("valores alterados"), que foi
-# exatamente o que aconteceu no run que corrigiu os dois checks quebrados.
+# The 99's own counters (99_n_pass/warn/fail) are WRITTEN into the snapshot --
+# they are the run's summary and belong in the history -- but they stay out of
+# the diff. They are derived from every other key: if a real metric moves, it
+# shows up in the diff on its own. Comparing them creates a loop in which
+# FIXING a WARN produces a WARN ("values changed"), which is exactly what
+# happened on the run that repaired the two broken checks.
 cmp <- compare_run_snapshot(snap_vals, snap_dir,
                             exclude = c("99_n_pass", "99_n_warn", "99_n_fail"))
 print_snapshot_diff(cmp)
@@ -877,7 +874,7 @@ if (cmp$has_previous) {
             sprintf("%d of %d", n_changed, nrow(cmp$diff)))
 }
 
-# ── Resumo final ─────────────────────────────────────────────────────────────
+# -- Final summary --────────────────────────────────────────────────────────────
 
 .say("\n", strrep("=", 90))
 .say("SUMMARY")
@@ -890,8 +887,8 @@ n_fail <- sum(.results$status == "FAIL")
 .say(sprintf("\n  PASS: %d   WARN: %d   FAIL: %d   (total: %d checks)\n",
                 n_pass, n_warn, n_fail, nrow(.results)))
 
-# So conta como problema o que realmente falhou -- etapa nao iniciada nem
-# chega a registrar checagem.
+# Only what actually failed counts as a problem -- a stage that never started
+# does not register a check at all.
 if (n_fail > 0) {
   .say("Checks that FAILED:")
   print(dplyr::filter(.results, status == "FAIL"), n = Inf, width = Inf)
