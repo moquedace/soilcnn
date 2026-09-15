@@ -348,7 +348,7 @@ print_snapshot_diff <- function(cmp, n_show = 40L) {
 #' @param loss_col    Column holding the validation loss.
 #' @return A tibble, one row per unit, plus the attribute "summary".
 early_stopping_bias <- function(history_dir, plateau = 20L,
-                                loss_col = "val_loss") {
+                                loss_col = NULL) {
   files <- list.files(history_dir, pattern = "_history\\.csv$", full.names = TRUE)
   if (length(files) == 0L) {
     stop("No *_history.csv in: ", history_dir,
@@ -356,10 +356,41 @@ early_stopping_bias <- function(history_dir, plateau = 20L,
          "retrains nothing.", call. = FALSE)
   }
 
+  # THE COLUMN IS FOUND, NOT ASSUMED.
+  #
+  # This defaulted to "val_loss", which is not what the runner writes, and the
+  # error then said "need >= 3 finite epochs of 'val_loss'" without naming a
+  # single column that DOES exist. A diagnostic whose failure teaches nothing
+  # is worse than no diagnostic.
+  #
+  # The preference order is by MEANING: monitor_metric is literally the
+  # quantity the stopping rule compared, so its minimum is the one that was
+  # selected. The others are fallbacks for histories written before it existed.
+  probe <- suppressWarnings(readr::read_csv2(files[1], n_max = 1,
+                                             show_col_types = FALSE))
+  if (is.null(loss_col)) {
+    for (cand in c("monitor_metric", "validation_loss", "val_loss")) {
+      if (cand %in% names(probe)) { loss_col <- cand; break }
+    }
+  }
+  if (is.null(loss_col) || !loss_col %in% names(probe)) {
+    stop("No usable loss column in these histories. Looked for ",
+         "monitor_metric, validation_loss, val_loss.\n  ",
+         basename(files[1]), " has: ", paste(names(probe), collapse = ", "),
+         "\n  Pass loss_col = to choose one.", call. = FALSE)
+  }
+
   rows <- lapply(files, function(f) {
     h <- suppressWarnings(readr::read_csv2(f, show_col_types = FALSE))
     if (!loss_col %in% names(h) || nrow(h) < 3L) return(NULL)
-    v <- as.numeric(h[[loss_col]])
+    # read_csv2() guesses, and a column holding scientific notation with a
+    # decimal COMMA ("5,67e-02") comes back as TEXT -- the same guess that
+    # killed a run through the comparison table. Coerced here rather than
+    # trusted, so a text column becomes numbers instead of silently NA.
+    raw <- h[[loss_col]]
+    v <- if (is.character(raw)) {
+      suppressWarnings(as.numeric(gsub(",", ".", raw, fixed = TRUE)))
+    } else as.numeric(raw)
     keep <- is.finite(v)
     v <- v[keep]
     if (length(v) < 3L) return(NULL)
@@ -401,6 +432,7 @@ early_stopping_bias <- function(history_dir, plateau = 20L,
   }
 
   attr(out, "summary") <- list(
+    loss_col         = loss_col,
     n_units          = nrow(out),
     median_bias_abs  = stats::median(out$bias_abs, na.rm = TRUE),
     median_bias_rel  = stats::median(out$bias_rel, na.rm = TRUE),
@@ -415,6 +447,9 @@ early_stopping_bias <- function(history_dir, plateau = 20L,
 print_early_stopping_bias <- function(bias, threshold_rel = 0.02) {
   s <- attr(bias, "summary")
   cat("\n-- Optimism of early stopping (from histories, nothing retrained) --\n")
+  cat(sprintf("  measured on           : %s
+",
+              if (is.null(s$loss_col)) "(unknown)" else s$loss_col))
   cat(sprintf("  units                 : %d\n", s$n_units))
   cat(sprintf("  plateau window        : %d epochs around the chosen one\n",
               s$plateau))
