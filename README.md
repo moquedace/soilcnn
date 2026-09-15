@@ -103,6 +103,24 @@ gap between configs smaller than it is not evidence. `one_se()` is available
 for when it is not: among configs within one standard error of the best, take
 the simplest.
 
+**A row is not always an independent observation.** In 3-D soil mapping one
+profile yields several rows — 0–5, 5–15, 15–30 cm — at identical coordinates,
+from the same pit. Split those across training and validation and the model is
+scored on a depth of a profile it already learned. `holdout()` and
+`random_folds()` keep a profile together by default (`group = "auto"`), and
+`check_fold_plan()` **proves** no group was split rather than trusting the
+constructor that was meant to prevent it.
+[Wang et al. 2025, *Geoderma*](https://www.sciencedirect.com/science/article/pii/S0016706125000618)
+
+**A map needs to say where it should be believed.** A prediction exists at
+every pixel, including pixels whose predictor combination the model never saw,
+and the cross-validated CCC does not describe those. `R/aoa.R` computes a
+dissimilarity index and the area of applicability — the DI expressed in units
+of the training set's own mean pairwise distance, and the threshold derived
+from distances **across** folds, which is what makes it mean "as dissimilar as
+something cross-validation coped with".
+[Meyer & Pebesma 2021, *MEE*](https://arxiv.org/pdf/2005.07939)
+
 **Identical inputs are a defect; nearby ones are not.** Two points in the same
 raster cell give the network the same patch, bit for bit, and one can be scored
 on what the other trained on — under any plan. Two *neighbouring* points
@@ -171,59 +189,99 @@ For the reasoning behind every architectural and training choice see [`docs/desi
 | [`R/resample.R`](R/resample.R) | Fold plans · distance buffering · `summarise_resamples()` · `seed_noise_floor()` · `one_se()` |
 | [`R/diagnostics.R`](R/diagnostics.R) | Checks about THIS RUN on real data: patch centres, overlap between splits, run snapshots |
 | [`R/train_cnn.R`](R/train_cnn.R) | `train_one_cnn()` · `run_cnn_tuning()` · `run_cnn_resample()` |
+| [`R/model_registry.R`](R/model_registry.R) | `model_spec()` · `register_model()` · `list_models()` |
+| [`R/baselines.R`](R/baselines.R) | `rf` · `mlp` · `cnn`, registered |
+| [`R/train_table.R`](R/train_table.R) | `run_table_resample()` — tabular models, same comparison table |
+| [`R/caret_adapter.R`](R/caret_adapter.R) | `caret_spec()` — borrow ~230 models, never caret's resampling |
+| [`R/aoa.R`](R/aoa.R) | Dissimilarity index · area of applicability |
+| [`R/api.R`](R/api.R) | **The front end**: `dsm_load()` · `spatial_cv()` · `dsm_train()` |
+| [`R/load_all.R`](R/load_all.R) | One `source()` instead of sixteen, in dependency order |
 
 ---
 
 ## Quickstart
 
 ```r
-for (m in c("utils", "patches", "preprocess", "dataset", "metrics",
-            "diagnostics", "cnn_architecture", "tune_grid", "resample",
-            "train_cnn")) source(file.path("R", paste0(m, ".R")))
+source("R/load_all.R")          # the whole framework, in dependency order
 
-device <- setup_torch_device(n_threads = 8, use_cuda = FALSE)
-
-# The patch store is raw: one file per window, and only the windows the grid
-# asks for are read.
-store  <- load_patch_store("outputs/patches/.../", windows = c(3L, 9L, 15L))
-points <- align_points_to_meta(readr::read_csv2("…/dataset_raw.csv"), store$meta)
-
-# WHO TRAINS AND WHO SCORES -- one line, and one criterion for both the test
-# set and the folds.
-plan <- spatial_folds(store$meta, k = 5, test_frac = 0.15,
-                      block_size = 2,              # in the units of x/y
-                      buffer     = 15 * cell_size) # window x resolution
-print(plan)
-
-# Random grid -- like caret's tuneLength
-grid <- make_tune_grid(tune_length = 30, seed = 42,
-                       fixed = list(loss_fn = "smooth_l1"))
-
-results <- run_cnn_resample(
-  tune_grid  = grid,
-  store      = store,
-  points     = points,
-  type_table = type_table,
-  plan       = plan,
-  n_seeds    = 3,              # a claim without repetitions has no error bar
-  transform  = expm1,          # inverse of the log1p applied to the target
-  output_dir = "outputs/tuning",
-  device     = device,
-  n_epochs   = 500L,
-  patience   = 60L
+data <- dsm_load(
+  patch_dir    = "outputs/patches/.../",
+  points       = "data/processed/.../full_modeling_dataset_raw.csv",
+  type_table   = "outputs/metadata/.../predictor_type_table.csv",
+  raster_table = "outputs/metadata/.../raster_table_used.csv",
+  windows      = c(3L, 9L, 15L)
 )
 
-results$by_config                       # mean +/- sd, one row per config
-print_noise_floor(seed_noise_floor(results$comparison))
-print_one_se(one_se(results$by_config)) # optional: simplest within 1 SE
+fit <- dsm_train(
+  data,
+  model       = "cnn",
+  resampling  = spatial_cv(k = 5, block_size = "auto", buffer = "auto"),
+  tune_length = 30,            # a budget, like caret's
+  n_seeds     = 3,             # a claim without repetitions has no error bar
+  transform   = expm1          # the target was trained on log1p
+)
+
+fit$by_config                            # mean ± sd, one row per config
+print_noise_floor(seed_noise_floor(fit$comparison))
+print_one_se(one_se(fit$by_config))      # the simplest config within 1 SE
 ```
 
-The fold plan is the only line that changes to ask a different question. The
-loop order is fold outside, configs and seeds inside, because the per-fold
-cache — scaling fitted on that fold's training rows and broadcast over every
-patch — is the expensive object, while training one config is minutes.
+`dsm_load()` opens the store, reads the points and predictor types, aligns
+them, reads the raster resolution — and **refuses** if the store was built
+under a different predictor set, window set, target or resolution.
 
-See the full worked example in [`examples/soc_stock_0_5cm/`](examples/soc_stock_0_5cm/).
+### One line decides who trains and who scores
+
+```r
+spatial_cv(k = 5)                        # blocks of ground, buffered
+random_cv(k = 10)                        # ignores geography, on purpose
+holdout_cv(validation_frac = 0.2)        # a single split
+region_cv(group = points$biome)          # leave-one-region-out
+```
+
+Swap it and nothing else changes. One criterion carves the test set **and** the
+folds, so the two numbers a run reports answer the same question.
+
+### `"auto"` means measured, never guessed
+
+| argument | what it resolves to |
+|---|---|
+| `block_size = "auto"` | the **largest** block whose worst case still fits the balance constraint, measured on *these* points |
+| `buffer = "auto"` | `max(window) × cell_size` — the exact distance at which two patches stop sharing a pixel, under the Chebyshev metric |
+
+Both print what they chose, and `"auto"` without a raster resolution **refuses**
+rather than inventing one.
+
+This is not a style preference. A block size measured on the full point set and
+carried into a 10% subsample once left a single block holding a third of the
+data — because block-subsampling keeps *whole* blocks, so a smaller draw has
+fewer blocks of the **same** width.
+
+### Any registered model, same folds, same tables
+
+```r
+list_models()
+
+rf  <- dsm_train(data, model = "rf", resampling = plan,
+                 features = c("centre", "window_mean"))
+mlp <- dsm_train(data, model = "mlp", resampling = plan, features = "centre")
+
+register_model(caret_spec("xgbTree"))    # ~230 methods, borrowed from caret
+xgb <- dsm_train(data, model = "xgbTree", resampling = plan)
+```
+
+Every family produces the same comparison table, so `summarise_resamples()`,
+`seed_noise_floor()` and `one_se()` work across all of them. **The gap between
+the context RF and the CNN is what the convolution is worth** — and if it is
+smaller than the noise floor, the convolution is doing averaging.
+
+caret is borrowed for its model *library*, never for its resampling: the fold
+plan stays here, with its blocks and its buffer. `caret_spec()` calls
+`train(method = "none")` with a one-row grid, so two objects never both believe
+they own the split.
+
+See the full worked example in [`examples/soc_stock_0_5cm/`](examples/soc_stock_0_5cm/)
+and the tour in [`examples/quickstart.R`](examples/quickstart.R).
 
 ---
 
