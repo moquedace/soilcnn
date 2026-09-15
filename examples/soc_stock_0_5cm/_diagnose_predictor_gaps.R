@@ -134,7 +134,7 @@ na_summary <- tibble::tibble(
   dplyr::arrange(dplyr::desc(na_fraction_over_land))
 
 message("\n── Top 20 preditores por fração de NA sobre terra ──────────────────")
-print(head(na_summary, 20), n = 20, width = Inf)
+print_wide(head(na_summary, 20), n = 20)
 
 n_offenders <- sum(na_summary$na_fraction_over_land > 0)
 message(sprintf("\n%d de %d preditores têm pelo menos 1 NA sobre terra na amostra.",

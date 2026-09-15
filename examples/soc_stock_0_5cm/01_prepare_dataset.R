@@ -459,7 +459,7 @@ dataset_check <- dataset_model_split %>%
 
 
 message("\n-- Dataset summary --------------------------")
-print(dataset_check, width = Inf)
+print_wide(dataset_check)
 
 # ── Export ────────────────────────────────────────────────────────────────────
 
@@ -523,7 +523,7 @@ if (nrow(flagged) == 0L) {
 } else {
   message("  ", nrow(flagged), " channel(s) flagged — these are the ones that ",
           "have historically broken the MAP, not the metrics:")
-  print(dplyr::arrange(flagged, risk, dplyr::desc(pct_na)), n = Inf, width = Inf)
+  print_wide(dplyr::arrange(flagged, risk, dplyr::desc(pct_na)), n = Inf)
   n_const <- sum(flagged$risk == "constant")
   if (n_const > 0L) {
     message("

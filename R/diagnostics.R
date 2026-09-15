@@ -296,7 +296,7 @@ print_snapshot_diff <- function(cmp, n_show = 40L) {
     cat("  ", nrow(changed), " de ", nrow(cmp$diff), " valores mudaram:
 ",
         sep = "")
-    print(dplyr::slice_head(changed, n = n_show), n = Inf, width = Inf)
+    print_wide(dplyr::slice_head(changed, n = n_show), n = Inf)
     unchanged <- sum(cmp$diff$status == "=")
     if (unchanged > 0L) cat("  (", unchanged, " inalterado(s))
 ", sep = "")

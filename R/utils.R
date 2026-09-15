@@ -278,3 +278,27 @@ augment_d4_batch <- function(tensor_list) {
     out
   })
 }
+
+# ── printing a wide table without losing columns ──────────────────────────────
+#
+# `print(x, width = Inf)` is a TIBBLE feature. On a plain data.frame it reaches
+# print.data.frame -> print.default, where `width` is coerced to integer, Inf
+# becomes NA, and the call dies with "invalid printing width" plus a coercion
+# warning that names nothing.
+#
+# That is not a hypothetical: stage 01 builds its summary by summarise() over a
+# data.frame -- because terra::extract() returns one -- so the summary was a
+# data.frame, and the script stopped on the line that printed it, AFTER the
+# expensive extraction and BEFORE writing anything.
+#
+# The fix belongs in one place rather than at each call site. Anyone using this
+# framework on their own data.frames would hit the same wall, and "remember to
+# pass a tibble" is not a contract a package can rely on.
+#
+# @param x The table to print.
+# @param n Rows to show; NULL leaves the tibble default (10).
+print_wide <- function(x, n = NULL) {
+  x <- tibble::as_tibble(x)
+  if (is.null(n)) print(x, width = Inf) else print(x, n = n, width = Inf)
+  invisible(x)
+}

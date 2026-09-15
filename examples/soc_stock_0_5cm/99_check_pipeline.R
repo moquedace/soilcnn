@@ -443,7 +443,7 @@ if (all_02_exist) {
                         cc$n_channels, cc$window, cc$window, cc$n_mismatch))
       if (!cc$ok) {
         .say("\n  DIVERGENCE at the patch centres -- channels affected:")
-        print(dplyr::slice_head(cc$by_channel, n = 10), width = Inf)
+        print_wide(dplyr::slice_head(cc$by_channel, n = 10))
         .say("  Largest absolute difference: ", signif(cc$worst, 6))
       }
     }
@@ -932,11 +932,11 @@ n_fail <- sum(.results$status == "FAIL")
 # does not register a check at all.
 if (n_fail > 0) {
   .say("Checks that FAILED:")
-  print(dplyr::filter(.results, status == "FAIL"), n = Inf, width = Inf)
+  print_wide(dplyr::filter(.results, status == "FAIL"), n = Inf)
 }
 if (n_warn > 0) {
   .say("\nChecks with a WARNING:")
-  print(dplyr::filter(.results, status == "WARN"), n = Inf, width = Inf)
+  print_wide(dplyr::filter(.results, status == "WARN"), n = Inf)
 }
 
 report_dir <- file.path(project_root, "outputs", "qc")

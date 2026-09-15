@@ -1475,6 +1475,35 @@ before the pipeline is stable.
 
 ---
 
+## `width = Inf` is a tibble feature (2026-09-14)
+
+The first dev run of stage 01 died at the very last print before the export:
+
+    Error in print.default(...) : invalid printing width
+    NAs introduzidos por coercao a intervalo de inteiros
+
+`print(x, width = Inf)` is dispatched by `print.tbl_df`. On a plain
+`data.frame` it reaches `print.data.frame` -> `print.default`, where `width` is
+coerced to integer, `Inf` becomes `NA`, and the call dies naming nothing that
+points at the cause.
+
+`dataset_check` is built by `summarise()` over `dataset_model_split`, which is
+a data.frame because `terra::extract()` returns one. So the summary was a
+data.frame and the script stopped **after the expensive extraction and before
+writing anything** -- the worst possible place.
+
+### Fixed as a class, not as a line
+
+`print_wide()` in `R/utils.R` coerces to a tibble and then prints. Every
+`print(..., width = Inf)` call site in `R/` and `examples/` now goes through it
+-- there were 14, and each was the same latent failure waiting for a
+data.frame.
+
+"Remember to pass a tibble" is not a contract a package can rely on: anyone
+using this framework on their own data.frames hits the identical wall.
+
+---
+
 ## Pendente
 
 | etapa | o quê |

@@ -373,7 +373,7 @@ if (nrow(top_blame) == 0L) {
   message("  No channel invalidated a single point.")
 } else {
   message("\n  Channels responsible (top 15):")
-  print(dplyr::slice_head(top_blame, n = 15), n = Inf, width = Inf)
+  print_wide(dplyr::slice_head(top_blame, n = 15), n = Inf)
 
   if (top_blame$pct_invalidated[1] > 1) {
     message("\n  WARNING: '", top_blame$predictor[1], "' alone invalidated ",
@@ -533,10 +533,10 @@ safe_write_csv2(saved,    file.path(output_metadata_patch_dir, "patch_files.csv"
 message("\n── Manifest ──────────────────────────────")
 message("  Patches are RAW (no scaling). 03 applies the fold's scaling at")
 message("  tensor-build time via fit_scaling() / scale_patches().")
-print(dplyr::select(manifest, n_points_valid, pct_removed, windows_extracted,
-                    n_channels, storage, scaling_applied, store_complete),
-      width = Inf)
-print(saved, width = Inf)
+print_wide(dplyr::select(manifest, n_points_valid, pct_removed,
+                         windows_extracted, n_channels, storage,
+                         scaling_applied, store_complete))
+print_wide(saved)
 
 if (!manifest$store_complete[1]) {
   message("\n  Store INCOMPLETE. Re-run this script: finished windows are ",

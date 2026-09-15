@@ -125,13 +125,12 @@ tune_grid <- make_tune_grid(
 
 # Preview the grid before running (check it makes sense)
 message("\n── Tune grid (", nrow(tune_grid), " configs) ──────────────────────")
-print(
+print_wide(
   dplyr::mutate(
     tune_grid,
     window_sizes  = purrr::map_chr(window_sizes,  paste, collapse = "x"),
     conv_channels = purrr::map_chr(conv_channels, paste, collapse = "_")
-  ),
-  width = Inf
+  )
 )
 
 # ── Load only the windows this grid actually needs ────────────────────────────
@@ -285,12 +284,12 @@ leak <- fold_leakage_report(plan, store$meta, cell_size = cell_size,
 # only when the plan claims to be spatial, where they describe how well the
 # separation held.
 message("\n-- Identical patches, train vs validation, per fold --")
-print(dplyr::filter(leak, matters), n = Inf, width = Inf)
+print_wide(dplyr::filter(leak, matters), n = Inf)
 
 if (grepl("spatial|region", plan$method)) {
   message("\n-- Shared pixels between neighbours (context, not a defect) --")
-  print(dplyr::filter(leak, !matters, window == max(windows_needed)),
-        n = Inf, width = Inf)
+  print_wide(dplyr::filter(leak, !matters, window == max(windows_needed)),
+             n = Inf)
 }
 
 # O escalonamento e ajustado no treino de CADA fold, dentro do
@@ -376,14 +375,14 @@ message("Results saved to: ", file.path(output_tuning_dir, run_id))
 if (nrow(results$by_config) > 0) {
   message("\nTop 5 configs by mean VALIDATION CCC (the selection metric; ",
           "test_* is diagnostic only):")
-  print(
+  print_wide(
     dplyr::select(
       results$by_config,
       rank, config_id, n_units, n_folds, n_seeds,
       dplyr::starts_with("val_ccc"), dplyr::starts_with("val_mae"),
       dplyr::starts_with("test_ccc"), n_failed
     ),
-    n = 5, width = Inf
+    n = 5
   )
 
   message("\nNoise floor -- only the seed changes:")

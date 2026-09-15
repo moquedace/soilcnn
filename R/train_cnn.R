@@ -826,11 +826,11 @@ run_cnn_tuning <- function(
       if (max(by_config$n_units) > 1L) {
         message("\n-- Por config (media +/- sd sobre ", max(by_config$n_units),
                 " repeticao(oes)) --")
-        print(dplyr::slice_head(
+        print_wide(dplyr::slice_head(
           dplyr::select(by_config, rank, config_id, n_units, n_folds, n_seeds,
                         dplyr::starts_with("val_ccc"),
                         dplyr::starts_with("val_mae"), n_failed),
-          n = 5), width = Inf)
+          n = 5))
         print_noise_floor(seed_noise_floor(comparison))
       }
     }
