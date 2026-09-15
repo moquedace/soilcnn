@@ -667,4 +667,99 @@ cat("  one_se                   : the mean picks cfg_B (", bc$val_ccc_mean[1],
 ",
     sep = "")
 
+# =============================================================================
+# block_share() and suggest_block_size()
+#
+# A block is indivisible: every point in it goes to the same fold. So one
+# oversized block does not merely unbalance a plan, it DECIDES a fold -- and
+# the fold is then scored on whatever that one landscape happens to be.
+#
+# The failure this guards against is specific and already happened: a
+# block_size measured on the full point set was carried over to a 10%
+# block-subsample, where the same size gives a tenth of the blocks at the SAME
+# width, and a block that held 4.4% of the data held 34% of the draw.
+#
+# The fixture is built so the right answer is known by construction: one dense
+# cluster inside a single degree, and a sparse spread around it. A large block
+# swallows the cluster whole; a small one cuts it up.
+# =============================================================================
+
+set.seed(99)
+bs_meta <- tibble::tibble(
+  sample_id = seq_len(400L),
+  # 300 points inside a 0.4 x 0.4 box, plus 100 spread over 20 x 20 degrees
+  x = c(stats::runif(300L, 10.0, 10.4), stats::runif(100L, 0, 20)),
+  y = c(stats::runif(300L, 10.0, 10.4), stats::runif(100L, 0, 20))
+)
+
+bshare <- block_share(bs_meta, c(0.1, 0.5, 5))
+ok["block_share_one_row_per_size"] <- nrow(bshare) == 3L
+ok["block_share_counts_blocks"]    <- all(bshare$n_blocks >= 1L)
+# Bigger blocks can only merge, never split: the count falls, the worst share
+# rises. Both are monotone, and a violation means the grid is not a grid.
+ok["block_share_bigger_means_fewer"] <-
+  all(diff(bshare$n_blocks) <= 0L)
+ok["block_share_bigger_means_lumpier"] <-
+  all(diff(bshare$largest_share) >= 0)
+# The 5-degree block swallows the cluster: >= the 300 clustered points.
+ok["block_share_finds_the_cluster"] <-
+  bshare$largest_n[bshare$block_size == 5] >= 300L
+# ...and a 0.1-degree block cannot.
+ok["block_share_small_cuts_the_cluster"] <-
+  bshare$largest_n[bshare$block_size == 0.1] < 300L
+
+# suggest_block_size takes the LARGEST size that fits the constraint, because
+# separation is the thing being bought.
+sug <- suggest_block_size(bs_meta, k = 3L, max_share = 0.10,
+                          min_blocks_per_fold = 5L,
+                          candidates = c(0.1, 0.25, 0.5, 1, 5))
+sug_tab <- attr(sug, "table")
+fits <- sug_tab$block_size[sug_tab$largest_share <= 0.10 &
+                           sug_tab$n_blocks >= 15L]
+ok["suggest_returns_one_number"] <- length(as.numeric(sug)) == 1L
+ok["suggest_respects_max_share"] <-
+  sug_tab$largest_share[sug_tab$block_size == as.numeric(sug)] <= 0.10
+ok["suggest_takes_the_largest_that_fits"] <-
+  isTRUE(all.equal(as.numeric(sug), max(fits)))
+ok["suggest_attaches_its_evidence"] <-
+  is.data.frame(sug_tab) && nrow(sug_tab) == 5L
+
+# When nothing fits it must SAY so, not return a number that meets no
+# constraint and looks deliberate.
+ok["suggest_warns_when_nothing_fits"] <- {
+  w <- NULL
+  withCallingHandlers(
+    suggest_block_size(bs_meta, k = 3L, max_share = 0.001,
+                       candidates = c(1, 5)),
+    warning = function(cond) { w <<- conditionMessage(cond)
+                               invokeRestart("muffleWarning") })
+  is.character(w) && grepl("clustered", w)
+}
+
+# spatial_folds warns when the blocking it is HANDED lets one block decide a
+# fold -- the case that was carried over silently.
+ok["spatial_folds_warns_on_a_dominant_block"] <- {
+  w <- NULL
+  withCallingHandlers(
+    spatial_folds(bs_meta, k = 3L, block_size = 5, buffer = NULL),
+    warning = function(cond) { w <<- conditionMessage(cond)
+                               invokeRestart("muffleWarning") })
+  is.character(w) && grepl("decides a fold", w)
+}
+# ...and stays quiet when the blocking is balanced.
+ok["spatial_folds_quiet_when_balanced"] <- {
+  w <- NULL
+  withCallingHandlers(
+    spatial_folds(bs_meta, k = 3L, block_size = as.numeric(sug), buffer = NULL),
+    warning = function(cond) { w <<- conditionMessage(cond)
+                               invokeRestart("muffleWarning") })
+  is.null(w)
+}
+
+cat("  block size               : cluster of 300 -> 5 deg keeps ",
+    bshare$largest_n[bshare$block_size == 5], " in one block; suggested ",
+    as.numeric(sug), " keeps ",
+    sug_tab$largest_n[sug_tab$block_size == as.numeric(sug)], "
+", sep = "")
+
 .report(ok, "test_resample")

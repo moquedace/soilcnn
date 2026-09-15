@@ -299,6 +299,106 @@ random_folds <- function(meta, k = 5L, test_frac = 0, test_ids = NULL,
 #'   "euclidean". See apply_buffer().
 #' @param seed       Seed for dealing blocks to folds.
 #' @param blocks_per_fold Target blocks per fold when `block_size` is NULL.
+# ── choosing a block size, by measurement ─────────────────────────────────────
+#
+# THE TENSION. Bigger blocks separate better: a fold whose blocks are 2 degrees
+# wide holds out whole landscapes, and a model cannot reach across the gap by
+# memorising a neighbour. But a block is indivisible -- every point in it goes
+# to the same fold -- so one oversized block unbalances the whole plan.
+#
+# WHY THIS CANNOT BE A CONSTANT. The right size depends on how the points are
+# SPREAD, not on the method, and the same number is right and wrong for two
+# datasets of the same size. It is also right and wrong for the same dataset at
+# two sampling densities: block-subsampling keeps WHOLE blocks, so a 10% draw
+# has a tenth of the blocks but blocks of the SAME size -- and a block that was
+# 3% of the full data becomes 34% of the subsample.
+#
+# That is not hypothetical. It is exactly what happened here: block_size = 2
+# was measured on the full point set (largest block 4.4%) and carried over to a
+# 10% dev draw, where the largest block holds a THIRD of everything.
+#
+# So: measure, then choose. These two functions are what the choice is made
+# from, and both are cheap enough to call before every run.
+
+#' How lumpy is a blocking, at a given size?
+#'
+#' @param meta        Point table with x and y.
+#' @param block_sizes Sizes to evaluate, in the units of x/y.
+#' @return A tibble: one row per size, with the block count and the share of
+#'   points held by the largest block.
+block_share <- function(meta, block_sizes = c(0.25, 0.5, 1, 2, 3)) {
+  x <- as.numeric(meta$x); y <- as.numeric(meta$y)
+  n <- length(x)
+  rows <- lapply(block_sizes, function(bs) {
+    blk <- paste(floor((x - min(x)) / bs), floor((y - min(y)) / bs), sep = "_")
+    tab <- table(blk)
+    tibble::tibble(block_size    = bs,
+                   n_blocks      = length(tab),
+                   largest_n     = as.integer(max(tab)),
+                   largest_share = as.numeric(max(tab)) / n,
+                   median_n      = as.numeric(stats::median(tab)))
+  })
+  dplyr::bind_rows(rows)
+}
+
+#' The largest block size this point set can afford.
+#'
+#' Largest, not smallest: separation is the thing being bought, so take as much
+#' of it as the balance constraint allows.
+#'
+#' @param meta        Point table with x and y.
+#' @param k           Number of folds the blocks must be dealt into.
+#' @param max_share   Largest share of the points one block may hold. The
+#'   default 0.10 is half of what a fold gets at k = 5 -- enough that no single
+#'   block decides a fold.
+#' @param min_blocks_per_fold At least this many blocks per fold, so the deal
+#'   has something to balance WITH.
+#' @param candidates  Sizes to consider, ascending.
+#' @return The chosen size, with the evaluation table attached as "table".
+suggest_block_size <- function(meta, k = 5L, max_share = 0.10,
+                               min_blocks_per_fold = 10L,
+                               candidates = c(0.1, 0.25, 0.5, 1, 2, 3, 5)) {
+  tab <- block_share(meta, sort(candidates))
+  ok  <- tab$largest_share <= max_share &
+         tab$n_blocks >= min_blocks_per_fold * as.integer(k)
+
+  if (!any(ok)) {
+    # Nothing qualifies: say so with the evidence rather than returning a
+    # number that meets no constraint and looks deliberate.
+    warning("No candidate block size keeps the largest block under ",
+            round(100 * max_share), "% of the points with at least ",
+            min_blocks_per_fold, " blocks per fold. The points are too ",
+            "clustered for blocked folds at these sizes -- consider more ",
+            "folds, region_folds() on a grouping that exists, or accepting ",
+            "the imbalance deliberately.", call. = FALSE)
+    chosen <- tab$block_size[which.min(tab$largest_share)]
+  } else {
+    chosen <- max(tab$block_size[ok])
+  }
+  attr(chosen, "table") <- tab
+  attr(chosen, "max_share") <- max_share
+  chosen
+}
+
+#' Print what suggest_block_size() measured.
+print_block_choice <- function(chosen) {
+  tab <- attr(chosen, "table")
+  ms  <- attr(chosen, "max_share")
+  cat("
+-- Block size, measured on these points --
+")
+  print(tibble::as_tibble(dplyr::mutate(
+    tab,
+    largest_share = sprintf("%.1f%%", 100 * largest_share),
+    chosen        = ifelse(block_size == as.numeric(chosen), "  <--", ""))),
+    n = Inf, width = Inf)
+  cat(sprintf("
+  chosen: %g  (largest block <= %.0f%% of the points)
+",
+              as.numeric(chosen), 100 * ms))
+  invisible(chosen)
+}
+
 spatial_folds <- function(meta, k = 5L, test_frac = 0, block_size = NULL,
                           buffer = NULL,
                           buffer_metric = c("chebyshev", "euclidean"),
@@ -331,6 +431,25 @@ spatial_folds <- function(meta, k = 5L, test_frac = 0, block_size = NULL,
 
   blk <- paste(floor((x - min(x)) / block_size),
                floor((y - min(y)) / block_size), sep = "_")
+
+  # A block is indivisible: every point in it goes to the same fold. So one
+  # oversized block does not merely unbalance the plan, it DECIDES a fold --
+  # and the fold it decides is then scored on whatever that one landscape
+  # happens to be. Warned rather than refused, because there are point sets
+  # where this is simply true and known; see suggest_block_size() to pick a
+  # size from the data instead of carrying one over from another run.
+  .share <- max(table(blk)) / length(blk)
+  if (.share > 1 / k) {
+    warning(sprintf(
+      paste0("The largest block holds %.0f%% of the points, more than the ",
+             "%.0f%% one fold gets at k = %d. A block cannot be split, so ",
+             "that block alone decides a fold.
+  block_size = %g gives %d ",
+             "block(s); suggest_block_size(meta, k = %d) measures what this ",
+             "point set can afford."),
+      100 * .share, 100 / k, k, block_size, length(unique(blk)), k),
+      call. = FALSE)
+  }
 
   # The test comes out of the SAME blocks the folds will use, so no test point
   # sits inside a block that also trains.

@@ -236,22 +236,33 @@ frozen_test <- if (file.exists(split_file)) {
   NULL
 }
 
+k_folds <- 3L
+
+# BLOCK_SIZE IS MEASURED HERE, NOT WRITTEN HERE.
+#
+# It used to be the literal 2, with a table of measurements from the FULL point
+# set beside it saying 1,279 blocks and a largest block of 4.4%. That number
+# was right for that point set and wrong for this one, in a way nothing would
+# have reported: block-subsampling keeps WHOLE blocks, so a 10% draw has a
+# tenth of the blocks at the SAME size -- and the block that held 4.4% of the
+# full data holds 34% of the subsample. With k = 3 that single block would
+# have decided a fold, and the fold would have been scored on whatever one
+# landscape it happens to be.
+#
+# Bigger blocks separate better, so suggest_block_size() takes the LARGEST size
+# whose worst block still fits inside the balance constraint. The table it
+# measured is printed, because the choice should be readable, not trusted.
+block_choice <- suggest_block_size(store$meta, k = k_folds, max_share = 0.10)
+print_block_choice(block_choice)
+
 plan <- spatial_folds(
   store$meta,
-  k          = 3,
+  k          = k_folds,
   test_frac  = test_frac,
   test_ids   = frozen_test,
-  block_size = 2,                                 # ~222 km; see below
+  block_size = as.numeric(block_choice),
   buffer     = max(windows_needed) * cell_size    # 15 px, exact under chebyshev
 )
-
-# BLOCK_SIZE, measured over the full point set:
-#   0.25 deg (~27 km)  -> 9,541 blocks, largest = 0.7% of the points
-#   1.0  deg (~111 km) -> 2,788 blocks, largest = 2.5%
-#   2.0  deg (~222 km) -> 1,279 blocks, largest = 4.4%   <- chosen
-#   3.0  deg (~333 km) ->   778 blocks, largest = 8.9%   (starts to unbalance)
-# Larger blocks separate more; blocks that are too large let one of them
-# dominate a fold. Re-measure if the point set changes.
 
 if (!file.exists(split_file)) {
   test_pos <- plan$folds[[1]]$test

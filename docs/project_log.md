@@ -1679,6 +1679,65 @@ lines and extrapolating.
 
 ---
 
+## A block size measured on the full data was wrong for the subsample (2026-09-14)
+
+Audited stage 03 while 02 was extracting, because today had already cost two
+stops from references that were valid when written.
+
+`03` carried `block_size = 2`, with a table of measurements beside it from the
+FULL point set: 1,279 blocks, largest block 4.4% of the points. Correct then.
+
+**On this store the same 2 degrees gives a largest block holding 34% of the
+points.** With k = 3, that one block would have decided a fold, and the fold
+would have been scored on whatever single landscape it happens to be.
+
+### Why, and why nothing would have said so
+
+Block-subsampling keeps **whole blocks**. A 10% draw therefore has a tenth of
+the blocks at the **same width** -- so the block that held 4.4% of 41,385
+points holds 34% of 3,766. The point set changed; the constant did not. The
+comment beside it even said "re-measure if the point set changes", which is a
+note asking a human to remember something, and this is the fifth restart of a
+project that keeps being bitten by exactly that.
+
+### What replaced it
+
+`block_share()` and `suggest_block_size()` in `R/resample.R`, and stage 03 now
+measures instead of asserting:
+
+```r
+block_choice <- suggest_block_size(store$meta, k = k_folds, max_share = 0.10)
+print_block_choice(block_choice)
+```
+
+It takes the **largest** size whose worst block still fits the constraint --
+largest, because separation is what is being bought, and the constraint is the
+only reason not to take more of it. On this store it picks **0.25 deg**
+(largest block 6.0%, 980 blocks); on the full set the same rule would pick 3.
+
+`spatial_folds()` also **warns** whenever the blocking it is handed lets one
+block exceed `1/k` of the points. Warned, not refused: there are point sets
+where this is simply true and known, and a refusal would be the framework
+overruling a deliberate choice.
+
+### The consequence, stated rather than hidden
+
+0.25 deg (~27 km) separates less than 2 deg (~222 km). **The dev run's spatial
+CV is therefore more optimistic than the full run's will be** -- which is
+already the rule in `reference_performance.md` (a dev number is comparable only
+to another dev number), and is now true for one more reason.
+
+### Tests
+
+The fixture makes the answer known by construction: 300 points inside a 0.4-deg
+box plus 100 spread over 20 deg. A large block swallows the cluster whole, a
+small one cuts it up, and both monotonicity properties (bigger blocks -> fewer
+blocks, lumpier worst case) are asserted. The warning paths are tested too --
+including that a balanced blocking stays quiet, which is what makes the noisy
+case mean something.
+
+---
+
 ## Pendente
 
 | etapa | o quê |
