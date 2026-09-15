@@ -450,9 +450,24 @@ early_stopping_bias <- function(history_dir, plateau = 20L,
          loss_col, "').", call. = FALSE)
   }
 
+  # THE ESTIMATE USES ONLY THE UNITS THAT FLATTENED.
+  #
+  # A unit still descending inside its window contributes a bias that is the
+  # FALL, not the selection -- including it makes the median a ceiling rather
+  # than an estimate. The flat subset is where the estimator's own assumption
+  # (exchangeable draws) actually holds.
+  #
+  # Both are reported, and the gap between them is how much of the headline
+  # number was never optimism in the first place.
+  flat <- out[!out$still_descending, , drop = FALSE]
+
   attr(out, "summary") <- list(
     loss_col         = loss_col,
     n_units          = nrow(out),
+    n_flat           = nrow(flat),
+    median_bias_flat = if (nrow(flat) > 0L)
+                         stats::median(flat$bias_rel, na.rm = TRUE)
+                       else NA_real_,
     median_bias_abs  = stats::median(out$bias_abs, na.rm = TRUE),
     median_bias_rel  = stats::median(out$bias_rel, na.rm = TRUE),
     max_bias_rel     = max(out$bias_rel, na.rm = TRUE),
@@ -476,6 +491,11 @@ print_early_stopping_bias <- function(bias, threshold_rel = 0.02) {
               s$median_bias_abs, 100 * s$median_bias_rel))
   cat(sprintf("  worst unit            : %.2f%%\n", 100 * s$max_bias_rel))
   cat(sprintf("  still descending      : %.0f%% of units\n", s$pct_descending))
+  if (!is.null(s$median_bias_flat) && is.finite(s$median_bias_flat)) {
+    cat(sprintf(paste0("  among the %d that FLATTENED : %.2f%%   <- the ",
+                       "estimate; the line above is a ceiling\n"),
+                s$n_flat, 100 * s$median_bias_flat))
+  }
 
   if (s$pct_descending > 25) {
     cat("\n  -> A quarter or more of the units had not flattened. These\n",
@@ -531,10 +551,12 @@ early_stopping_bias_sweep <- function(history_dir,
     if (inherits(b, "try-error")) return(NULL)
     s <- attr(b, "summary")
     tibble::tibble(plateau = p,
-                   median_bias_rel = s$median_bias_rel,
-                   max_bias_rel    = s$max_bias_rel,
-                   pct_descending  = s$pct_descending,
-                   n_units         = s$n_units)
+                   median_bias_rel  = s$median_bias_rel,
+                   median_bias_flat = if (is.null(s$median_bias_flat))
+                                        NA_real_ else s$median_bias_flat,
+                   max_bias_rel     = s$max_bias_rel,
+                   pct_descending   = s$pct_descending,
+                   n_units          = s$n_units)
   })
   out <- dplyr::bind_rows(rows)
   if (nrow(out) == 0L) stop("No width produced a usable estimate.", call. = FALSE)
@@ -547,9 +569,12 @@ print_bias_sweep <- function(sweep) {
   print_wide(dplyr::mutate(
     sweep,
     median_bias = sprintf("%.2f%%", 100 * median_bias_rel),
+    flat_only   = ifelse(is.na(median_bias_flat), "-",
+                         sprintf("%.2f%%", 100 * median_bias_flat)),
     worst       = sprintf("%.2f%%", 100 * max_bias_rel),
     descending  = sprintf("%.0f%%", pct_descending)
-  ) %>% dplyr::select(plateau, median_bias, worst, descending, n_units),
+  ) %>% dplyr::select(plateau, median_bias, flat_only, worst, descending,
+                      n_units),
   n = Inf)
 
   narrow <- sweep$median_bias_rel[which.min(sweep$plateau)]
