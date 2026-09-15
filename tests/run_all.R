@@ -47,6 +47,7 @@ test_files <- c(
   "test_model_registry.R",   # registry contract + the tabular fold view
   "test_aoa.R",              # dissimilarity index + area of applicability
   "test_api.R",              # the front end: specs, "auto", dispatch
+  "test_selection_order.R",  # the test set is scored only after the choice
   "test_architecture.R",     # embed_pool wiring
   "test_augmentation.R"      # D4 symmetries
 )

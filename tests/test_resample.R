@@ -400,13 +400,37 @@ ok["buffer_cost_is_reported"]   <- is.data.frame(sp_buf$buffer_dropped) &&
   nrow(sp_buf$buffer_dropped) == k
 ok["buffer_actually_dropped"]   <- sum(sp_buf$buffer_dropped$n_dropped) > 0L
 
-# The buffer only ever REMOVES training points -- it must never touch the
-# validation sets (that would change what is being measured) nor the test set.
-ok["buffer_leaves_validation_alone"] <- all(vapply(seq_len(k), function(j)
-  identical(sp_buf$folds[[j]]$validation, sp$folds[[j]]$validation),
-  logical(1)))
+# THE BUFFER ONLY EVER REMOVES, AND NEVER FROM THE TEST SET.
+#
+# This used to assert that validation is untouched, and that was the contract
+# until the buffer started protecting the test set as well. Validation may now
+# shrink -- points within one patch span of a test block are dropped, because a
+# stopping epoch chosen on rows that overlap the test set is a small read of it.
+#
+# What survives from the old contract is the part that still matters, and it is
+# asserted more precisely than before:
+#
+#   - the test set is NEVER touched. It is the thing being protected; shrinking
+#     it would silently change what the final number is measured on.
+#   - validation only ever SHRINKS, and only for the test reason. A buffer that
+#     added rows, or reordered them, would be a different bug wearing the same
+#     name.
 ok["buffer_leaves_test_alone"] <- all(vapply(seq_len(k), function(j)
   identical(sp_buf$folds[[j]]$test, sp$folds[[j]]$test), logical(1)))
+
+ok["buffer_only_shrinks_validation"] <- all(vapply(seq_len(k), function(j)
+  all(sp_buf$folds[[j]]$validation %in% sp$folds[[j]]$validation), logical(1)))
+
+ok["buffer_only_shrinks_train"] <- all(vapply(seq_len(k), function(j)
+  all(sp_buf$folds[[j]]$train %in% sp$folds[[j]]$train), logical(1)))
+
+# ...and with the OLD setting, validation is still exactly untouched. This is
+# the old assertion, kept where it is true, so the change is visible as a
+# change of contract rather than as a deleted guarantee.
+sp_valonly <- apply_buffer(sp, meta, buffer = 2000, protect = "validation")
+ok["validation_only_buffer_leaves_validation_alone"] <- all(vapply(seq_len(k),
+  function(j) identical(sp_valonly$folds[[j]]$validation,
+                        sp$folds[[j]]$validation), logical(1)))
 ok["buffer_only_removes"] <- all(vapply(seq_len(k), function(j)
   all(sp_buf$folds[[j]]$train %in% sp$folds[[j]]$train), logical(1)))
 

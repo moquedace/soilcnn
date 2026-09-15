@@ -51,6 +51,7 @@
   "cnn_architecture.R", # the model
   "tune_grid.R",        # the search space
   "train_cnn.R",        # the CNN runner
+  "test_optimism.R",    # freeze_selection / score_test_grid (after 03)
   "model_registry.R",   # model_spec / register_model
   "baselines.R",        # rf, mlp, cnn -- registered
   "train_table.R",      # the tabular runner

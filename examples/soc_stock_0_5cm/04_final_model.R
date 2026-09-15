@@ -210,6 +210,22 @@ if (!is.null(by_config) && nrow(by_config) > 1L &&
   }
 }
 
+# THE CHOICE IS LOCKED HERE, WHERE IT IS MADE.
+#
+# Written to the TUNING run, not to this one, because that is the run whose
+# grid could later be scored on the test set. score_test_grid() refuses to run
+# until this file exists, so the order "chose, then looked" is enforced rather
+# than remembered -- and the record carries the timestamp and the commit, so a
+# reader who was not here can check it.
+#
+# Re-running stage 04 with the same choice is harmless; re-running it with a
+# DIFFERENT choice after the grid has been scored is refused, because that is
+# the loop the lock exists to prevent.
+freeze_selection(tuning_dir, selected_config_ids,
+                 rule   = if (is.null(selection_rule)) "manual" else selection_rule,
+                 metric = selection_metric,
+                 note   = paste("stage 04 on", format(Sys.time())))
+
 missing_cfgs <- setdiff(selected_config_ids, tune_grid_full$config_id)
 if (length(missing_cfgs) > 0) {
   stop("config_ids not found in the tune_grid: ",
