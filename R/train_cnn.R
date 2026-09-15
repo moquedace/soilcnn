@@ -895,7 +895,9 @@ run_cnn_resample <- function(tune_grid, store, points, type_table, plan,
   stopifnot(inherits(plan, "fold_plan"))
 
   # A broken plan costs a second to find here and the whole run to find later.
-  fold_sizes <- check_fold_plan(plan)
+  # meta is passed so the no-split-group property is PROVEN on this data,
+  # not merely intended by the constructor that built the plan.
+  fold_sizes <- check_fold_plan(plan, meta = store$meta)
   message("\n-- Resampling plan --")
   print(plan)
 

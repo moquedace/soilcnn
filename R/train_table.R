@@ -114,7 +114,7 @@ run_table_resample <- function(model, tune_grid = NULL, store, points,
          call. = FALSE)
   }
 
-  fold_sizes <- check_fold_plan(plan)
+  fold_sizes <- check_fold_plan(plan, meta = store$meta)
   message("\n-- Resampling plan --")
   print(plan)
   if (!is.null(tune_grid)) {

@@ -210,20 +210,118 @@ with_local_seed <- function(seed, expr) {
 #' @param test_frac       Fraction held out entirely.
 #' @param test_ids        Optional frozen test sample_ids (see .carve_test).
 #' @param seed            Draw seed.
+# ── rows that must not be separated ───────────────────────────────────────────
+#
+# A ROW IS NOT ALWAYS AN INDEPENDENT OBSERVATION.
+#
+# In 3-D soil mapping one profile yields several rows -- 0-5, 5-15, 15-30 cm --
+# at IDENTICAL coordinates, from the same pit, described by the same surveyor
+# on the same day. Split those across training and validation and the model is
+# scored on a depth of a profile it already learned: the covariates are
+# byte-identical and the target is autocorrelated down the column. Wang et al.
+# (2025, Geoderma 453:117131) name this and show the optimism it produces;
+# leave-PROFILE-out is the fix.
+#
+# This framework was open to it. spatial_folds() and region_folds() happen to
+# be safe -- rows at the same coordinates land in the same block -- but
+# holdout() and random_folds() treated every row as its own unit, which is the
+# exact failure the paper describes.
+#
+# WHY THE DEFAULT IS "auto" AND NOT NULL.
+#
+# Keeping a profile together is never wrong: with one row per profile it
+# changes nothing at all, and with several it is the only correct answer.
+# Failing to do it is silently wrong. A default that is safe in both cases and
+# costs nothing in the common one does not deserve to be opt-in -- so the
+# grouping is applied automatically when it MATTERS (the column exists and has
+# duplicates), and the plan says so rather than doing it quietly.
+#
+# @param meta  Point table.
+# @param group "auto", NULL/"row" for one group per row, a column name, or a
+#   vector of group labels with one entry per row.
+# @return character vector of group labels, with attr "note" describing it.
+.resolve_row_group <- function(meta, group = "auto") {
+  n <- nrow(meta)
+  rows_as_groups <- function(note) {
+    g <- as.character(seq_len(n))
+    attr(g, "note") <- note
+    attr(g, "grouped") <- FALSE
+    g
+  }
+
+  if (is.null(group) || identical(group, "row")) {
+    return(rows_as_groups("every row is its own unit"))
+  }
+
+  if (identical(group, "auto")) {
+    if (!"profile_id" %in% names(meta)) {
+      return(rows_as_groups("every row is its own unit (no profile_id column)"))
+    }
+    pid <- as.character(meta$profile_id)
+    if (anyNA(pid)) {
+      stop("profile_id has ", sum(is.na(pid)), " missing value(s). A row that ",
+           "cannot say which profile it belongs to cannot be kept with it.",
+           call. = FALSE)
+    }
+    if (length(unique(pid)) == n) {
+      return(rows_as_groups("one row per profile -- grouping changes nothing"))
+    }
+    g <- pid
+    attr(g, "note") <- sprintf(
+      paste0("grouped by profile_id: %d rows in %d profiles (up to %d rows ",
+             "share one profile). Rows of one profile stay in the same fold ",
+             "-- see Wang et al. 2025, Geoderma"),
+      n, length(unique(pid)), max(table(pid)))
+    attr(g, "grouped") <- TRUE
+    return(g)
+  }
+
+  if (is.character(group) && length(group) == 1L && group %in% names(meta)) {
+    g <- as.character(meta[[group]])
+    if (anyNA(g)) {
+      stop("Grouping column '", group, "' has ", sum(is.na(g)),
+           " missing value(s).", call. = FALSE)
+    }
+    attr(g, "note") <- sprintf("grouped by %s: %d rows in %d groups",
+                               group, n, length(unique(g)))
+    attr(g, "grouped") <- length(unique(g)) < n
+    return(g)
+  }
+
+  if (length(group) != n) {
+    stop("`group` must be \"auto\", NULL, a column name of meta, or a vector ",
+         "with one entry per row (got length ", length(group), " for ", n,
+         " rows).", call. = FALSE)
+  }
+  g <- as.character(group)
+  if (anyNA(g)) stop("`group` has missing values.", call. = FALSE)
+  attr(g, "note") <- sprintf("grouped by the vector given: %d rows in %d groups",
+                             n, length(unique(g)))
+  attr(g, "grouped") <- length(unique(g)) < n
+  g
+}
+
 holdout <- function(meta, validation_frac = 0.15, test_frac = 0.15,
-                    test_ids = NULL, seed = 42L) {
+                    test_ids = NULL, seed = 42L, group = "auto") {
   if (!"sample_id" %in% names(meta)) {
     stop("meta needs a sample_id column.", call. = FALSE)
   }
   n     <- nrow(meta)
-  group <- as.character(seq_len(n))           # every point is its own group
+  group <- .resolve_row_group(meta, group)
+  grp_note <- attr(group, "note")
+  if (isTRUE(attr(group, "grouped"))) message("holdout: ", grp_note)
+
   test  <- .carve_test(meta, group, test_frac, test_ids, seed)
   pool  <- setdiff(seq_len(n), test)
   if (length(pool) < 2L) stop("Nothing left after the test set.", call. = FALSE)
 
-  val_rel <- with_local_seed(seed,
-    sample(length(pool), max(1L, floor(validation_frac * length(pool)))))
-  val <- sort(pool[val_rel])
+  # The validation cut is drawn over GROUPS, not rows, for the same reason the
+  # test cut is: half a profile in training and half in validation is the
+  # leakage this argument exists to prevent.
+  g_pool <- unique(group[pool])
+  val_g  <- with_local_seed(seed + 1L,
+    g_pool[sample(length(g_pool), max(1L, floor(validation_frac * length(g_pool))))])
+  val <- sort(pool[group[pool] %in% val_g])
   trn <- setdiff(pool, val)
   if (length(trn) == 0L) {
     stop("validation_frac left no training rows.", call. = FALSE)
@@ -235,7 +333,7 @@ holdout <- function(meta, validation_frac = 0.15, test_frac = 0.15,
   .new_fold_plan(list(idx), "holdout",
                  list(k = 1L, validation_frac = validation_frac,
                       test_frac = test_frac, n_test = length(test),
-                      seed = seed),
+                      seed = seed, grouping = grp_note),
                  meta,
                  assignment = tibble::tibble(sample_id = meta$sample_id[pool],
                                              fold = 1L))
@@ -257,15 +355,17 @@ holdout <- function(meta, validation_frac = 0.15, test_frac = 0.15,
 #' @param seed Seed for the partition only (see with_local_seed): a fixed plan
 #'   reproduces even when the training seeds change.
 random_folds <- function(meta, k = 5L, test_frac = 0, test_ids = NULL,
-                        seed = 42L) {
+                        seed = 42L, group = "auto") {
   k <- as.integer(k)
   if (k < 2L) stop("k must be at least 2.", call. = FALSE)
   if (!"sample_id" %in% names(meta)) {
     stop("meta needs a sample_id column.", call. = FALSE)
   }
-  .plan_from_groups(meta, as.character(seq_len(nrow(meta))), k,
-                    test_frac, test_ids, seed,
-                    method = "random_folds", params = list())
+  g <- .resolve_row_group(meta, group)
+  if (isTRUE(attr(g, "grouped"))) message("random_folds: ", attr(g, "note"))
+  .plan_from_groups(meta, g, k, test_frac, test_ids, seed,
+                    method = "random_folds",
+                    params = list(grouping = attr(g, "note")))
 }
 
 # -- 3. spatial block k-fold --------------------------------------------------
@@ -807,7 +907,7 @@ refit_split <- function(plan, meta, validation_frac = 0.15) {
 #' arbitrary set of overlapping subsets.
 #'
 #' @return tibble, one row per fold.
-check_fold_plan <- function(plan) {
+check_fold_plan <- function(plan, meta = NULL, group = "auto") {
   stopifnot(inherits(plan, "fold_plan"))
   val_seen <- integer(0)
 
@@ -839,7 +939,48 @@ check_fold_plan <- function(plan) {
            "not partition the pool.", call. = FALSE)
     }
   }
-  dplyr::bind_rows(rows)
+  sizes <- dplyr::bind_rows(rows)
+
+  # -- the no-split-group property, PROVEN rather than trusted -----------------
+  #
+  # Every constructor here is supposed to keep a profile's rows together:
+  # holdout() and random_folds() group explicitly, spatial_folds() and
+  # region_folds() get it for free because rows at one coordinate fall in one
+  # block. "Supposed to" is the operative phrase -- three of those are separate
+  # code paths, and the property is what matters, not the four arguments that
+  # are meant to produce it.
+  #
+  # So it is checked here, against the data, whenever `meta` is available. It
+  # costs one table() over the row indices and it is the difference between a
+  # plan that is correct and a plan that was built by code intended to be.
+  if (!is.null(meta)) {
+    g <- .resolve_row_group(meta, group)
+    if (isTRUE(attr(g, "grouped"))) {
+      for (j in seq_along(plan$folds)) {
+        f     <- plan$folds[[j]]
+        roles <- list(train = f$train, validation = f$validation)
+        if (!is.null(f$test)) roles$test <- f$test
+        assigned <- unlist(lapply(names(roles), function(r)
+          stats::setNames(rep(r, length(roles[[r]])), g[roles[[r]]])))
+        if (length(assigned) == 0L) next
+        per_group <- tapply(assigned, names(assigned),
+                            function(z) length(unique(z)))
+        split_g <- names(per_group)[per_group > 1L]
+        if (length(split_g) > 0L) {
+          stop("Fold ", j, ": ", length(split_g), " group(s) are split across ",
+               "roles -- e.g. ",
+               paste(utils::head(split_g, 4), collapse = ", "),
+               ".\n  Rows of one profile in both training and scoring is the ",
+               "leakage described by Wang et al. (2025, Geoderma): identical ",
+               "covariates, autocorrelated target.\n  Rebuild the plan with ",
+               "group = \"auto\" (the default) or a grouping of your own.",
+               call. = FALSE)
+        }
+      }
+    }
+  }
+
+  sizes
 }
 
 #' Print a fold plan, with its per-fold sizes.

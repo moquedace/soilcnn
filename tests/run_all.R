@@ -45,6 +45,8 @@ test_files <- c(
   "test_resample.R",         # fold plans: partition, leakage, seed
   "test_store_spec.R",       # the store lock: what it REFUSES
   "test_model_registry.R",   # registry contract + the tabular fold view
+  "test_aoa.R",              # dissimilarity index + area of applicability
+  "test_api.R",              # the front end: specs, "auto", dispatch
   "test_architecture.R",     # embed_pool wiring
   "test_augmentation.R"      # D4 symmetries
 )
