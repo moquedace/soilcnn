@@ -1983,6 +1983,79 @@ error rather than a defect.
 
 ---
 
+## `spatial_cv(k = 5)` was returning a holdout (2026-09-15)
+
+The worst defect of the whole rebuild, found by a test written hours earlier,
+and it was mine from last night.
+
+    Error in switch(spec$kind, spatial = { : EXPR must be a length 1 vector
+
+### The mechanism
+
+```r
+.resample_spec <- function(kind, ...) {
+  structure(c(list(kind = kind), list(...)), class = "resample_spec")
+}
+```
+
+**R partially matches a named argument against any formal declared BEFORE
+`...`.** `k` is a prefix of `kind`. So:
+
+```r
+spatial_cv(k = 5) -> .resample_spec("spatial", k = 5L, block_size = ..., ...)
+                     k = 5L   partial-matches   kind
+                     "spatial" has no formal left -> falls into ...
+```
+
+The spec came out with `kind = 5L` and the word `"spatial"` buried as an
+unnamed element of the list.
+
+### Why it did not error
+
+`switch()` on a **numeric** EXPR ignores the alternative names and returns the
+nth one. `switch(5L, spatial=, random=, holdout=, region=, stop(...))` returns
+the fifth -- and `switch(3L, ...)` the third, which is `holdout`.
+
+So `spatial_cv(k = 3)` produced a **valid one-fold holdout plan**, with the
+right classes, the right row counts, and a `print()` that looked plausible.
+Nothing anywhere complained. That is the exact shape of failure this project
+keeps paying for: the wrong answer, well-formed, silent.
+
+`region_cv()` is the only constructor that crashed, because there `k` defaults
+to NULL and `switch(NULL)` cannot pretend.
+
+### The fix
+
+A formal declared **after** `...` can only be matched exactly -- that is the
+language rule that makes this impossible:
+
+```r
+.resample_spec <- function(..., .kind) {
+  stopifnot(is.character(.kind), length(.kind) == 1L)
+  structure(c(list(kind = .kind), list(...)), class = "resample_spec")
+}
+```
+
+The leading dot is belt and braces: no field a constructor forwards will ever
+be called `.kind`. And `resolve_resampling()` now refuses a `kind` that is not
+a length-1 character instead of letting `switch()` select by position.
+
+### The assertion that was missing
+
+`identical(spatial_cv()$kind, "spatial")` -- one line, for each of the four
+constructors. The file tested what the spec *carried* (`block_size`, `buffer`,
+`k`) and never that it knew *what it was*.
+
+### Swept for the same trap
+
+Six other functions in `R/` declare a formal before `...`. All six are benign:
+five are the S3 `print(x, ...)` signature, and `safe_read_csv2(path, ...)`
+forwards to `read_csv2`, which has no argument that is a prefix of `path`.
+`.resample_spec` was the only one where `...` carried field names the caller
+chooses freely, which is what made it dangerous.
+
+---
+
 ## Pendente
 
 | etapa | o quê |

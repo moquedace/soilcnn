@@ -114,6 +114,34 @@ ok["spec_keeps_auto_as_auto"] <- identical(sp$block_size, "auto") &&
                                  identical(sp$buffer, "auto")
 ok["spec_records_k"]          <- sp$k == 4L
 
+# EVERY CONSTRUCTOR RECORDS ITS OWN KIND, AS A STRING.
+#
+# The assertion that was missing, and the cheapest one in the file. R partially
+# matches a named argument against any formal declared BEFORE `...`, so while
+# the builder was `function(kind, ...)`, `spatial_cv(k = 5)` set `kind` to 5
+# and pushed the word "spatial" into `...`.
+#
+# Nothing errored. switch() on a NUMERIC EXPR ignores the alternative names and
+# returns the nth one, so asking for spatial blocks returned a valid one-fold
+# HOLDOUT plan -- the exact shape of failure this project keeps paying for: the
+# wrong answer, well-formed, with no complaint anywhere.
+ok["spatial_cv_records_its_kind"] <- identical(sp$kind, "spatial")
+ok["random_cv_records_its_kind"]  <- identical(random_cv(k = 5L)$kind, "random")
+ok["holdout_cv_records_its_kind"] <- identical(holdout_cv()$kind, "holdout")
+ok["region_cv_records_its_kind"]  <-
+  identical(region_cv(group = rep("a", 3L))$kind, "region")
+
+# ...and the argument that triggered it is still carried, under its own name.
+ok["k_survives_as_k_not_as_kind"] <- identical(random_cv(k = 7L)$k, 7L)
+ok["region_cv_keeps_a_null_k"]    <- is.null(region_cv(group = "a", k = NULL)$k)
+
+# A spec whose kind is not one of the four must be refused, not resampled by
+# position.
+bad_spec <- structure(list(kind = 3L, k = 2L), class = "resample_spec")
+ok["a_non_character_kind_is_refused"] <- inherits(
+  tryCatch(resolve_resampling(bad_spec, fake_data, verbose = FALSE),
+           error = function(e) e), "error")
+
 # =============================================================================
 # 2. Every kind resolves to a valid plan
 # =============================================================================

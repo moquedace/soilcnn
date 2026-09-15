@@ -121,8 +121,25 @@ print.dsm_data <- function(x, ...) {
 # is what lets `block_size = "auto"` mean "measure it when you see the data"
 # instead of "guess now".
 
-.resample_spec <- function(kind, ...) {
-  structure(c(list(kind = kind), list(...)), class = "resample_spec")
+# THE DOT COMES FIRST, AND IT HAS TO.
+#
+# This was `function(kind, ...)`, and R partially matches a named argument
+# against any formal that comes BEFORE `...`. So `spatial_cv(k = 5)` called
+# `.resample_spec("spatial", k = 5L, ...)`, `k` partial-matched `kind`, and the
+# spec came out with `kind = 5L` while the string "spatial" fell into `...`.
+#
+# The failure that produced was worse than an error. `switch()` on a NUMERIC
+# EXPR ignores the alternative names and returns the nth one, so
+# resolve_resampling() ran the third branch -- holdout -- and returned a
+# perfectly valid one-fold plan to someone who asked for spatial blocks. Only
+# region_cv() crashed, because there k is NULL and switch(NULL) cannot pretend.
+#
+# A formal declared AFTER `...` can only be matched exactly, which is the rule
+# that makes this impossible. The leading dot is belt and braces: no argument a
+# constructor forwards will ever be called `.kind`.
+.resample_spec <- function(..., .kind) {
+  stopifnot(is.character(.kind), length(.kind) == 1L)
+  structure(c(list(kind = .kind), list(...)), class = "resample_spec")
 }
 
 #' Spatially blocked k-fold: whole blocks of ground go to one fold.
@@ -140,7 +157,7 @@ spatial_cv <- function(k = 5L, block_size = "auto", buffer = "auto",
                        test_frac = 0.15, max_share = 0.10,
                        buffer_metric = c("chebyshev", "euclidean"),
                        seed = 42L) {
-  .resample_spec("spatial", k = as.integer(k), block_size = block_size,
+  .resample_spec(.kind = "spatial", k = as.integer(k), block_size = block_size,
                  buffer = buffer, test_frac = test_frac, max_share = max_share,
                  buffer_metric = match.arg(buffer_metric), seed = seed)
 }
@@ -151,21 +168,21 @@ spatial_cv <- function(k = 5L, block_size = "auto", buffer = "auto",
 #' what geography is worth: run it against spatial_cv() on the same points and
 #' the gap is the spatial optimism.
 random_cv <- function(k = 5L, test_frac = 0.15, group = "auto", seed = 42L) {
-  .resample_spec("random", k = as.integer(k), test_frac = test_frac,
+  .resample_spec(.kind = "random", k = as.integer(k), test_frac = test_frac,
                  group = group, seed = seed)
 }
 
 #' A single train/validation/test split.
 holdout_cv <- function(validation_frac = 0.15, test_frac = 0.15,
                        group = "auto", seed = 42L) {
-  .resample_spec("holdout", validation_frac = validation_frac,
+  .resample_spec(.kind = "holdout", validation_frac = validation_frac,
                  test_frac = test_frac, group = group, seed = seed)
 }
 
 #' Leave-region-out, on a grouping that already exists (biome, catchment, ...).
 region_cv <- function(group, k = NULL, test_frac = 0.15, seed = 42L) {
-  .resample_spec("region", group = group, k = k, test_frac = test_frac,
-                 seed = seed)
+  .resample_spec(.kind = "region", group = group, k = k,
+                 test_frac = test_frac, seed = seed)
 }
 
 #' @export
@@ -212,6 +229,16 @@ resolve_resampling <- function(spec, data, test_ids = NULL, windows = NULL,
     # Chebyshev metric -- a circular buffer of the same radius lets the
     # diagonal escape.
     max(windows) * data$cell_size
+  }
+
+  # Guarded rather than trusted: switch() on a non-character EXPR silently
+  # selects by POSITION, which is how a spatial request once came back as a
+  # holdout. If kind is ever not one of the four, say so instead of resampling.
+  if (!is.character(spec$kind) || length(spec$kind) != 1L) {
+    stop("This resample_spec has no usable `kind` (got ",
+         paste(class(spec$kind), collapse = "/"), " of length ",
+         length(spec$kind), "). Build it with spatial_cv(), random_cv(), ",
+         "holdout_cv() or region_cv().", call. = FALSE)
   }
 
   plan <- switch(spec$kind,
