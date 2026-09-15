@@ -154,7 +154,7 @@ type_table <- readr::read_csv2(file.path(metadata_dir, "predictor_type_table.csv
                                show_col_types = FALSE)
 points <- align_points_to_meta(points, store$meta)
 
-# -- Raster resolution, and the units the coordinates are in ------------------─────────────────
+# -- Raster resolution, and the units the coordinates are in ------------------
 #
 # Read from the RASTER ITSELF, never written by hand: block_size and buffer
 # are given in the SAME units as x/y, and here those are DEGREES (lon/lat --
@@ -303,14 +303,15 @@ if (grepl("spatial|region", plan$method)) {
              n = Inf)
 }
 
-# O escalonamento e ajustado no treino de CADA fold, dentro do
-# run_cnn_resample() -- e por isso que os patches sao guardados CRUS. Um fold
-# cujo escalonamento veio do treino de outro fold ja viu dado que nao devia.
+# The scaling is fitted on the training rows of EACH fold, inside
+# run_cnn_resample() -- which is the whole reason the patches are stored RAW. A
+# fold whose scaling came from another fold's training set has already seen
+# data it should not have.
 #
-# Nota: isso e ajustado sobre os pontos que de fato TREINAM (pos-QC de janela),
-# enquanto o predictor_scaling.csv do 01 usou todo ponto de treino, incluindo
-# os ~0,8% depois descartados pela regra de janela completa. A diferenca e
-# pequena, mas esta e a versao honesta -- e a unica que generaliza para um fold.
+# Note: it is fitted over the points that actually TRAIN (after the window QC),
+# whereas stage 01's predictor_scaling.csv used every training point, including
+# the ~0.8% later dropped by the full-window rule. The difference is small, but
+# this is the honest version -- and the only one that generalises to a fold.
 
 message("Channels: ", n_channels, " | Points: ", nrow(store$meta))
 
@@ -328,11 +329,12 @@ message("Channels: ", n_channels, " | Points: ", nrow(store$meta))
 #   The model trains in log1p space; metrics are always in native units.
 
 # To RESUME an interrupted run (crash, power cut): fill
-# resume_run_id com o run_id exato da pasta em outputs/tuning/ que parou no
-# meio (ex: "soc_0_5cm_20260715_093000") e rode o script de novo. run_cnn_tuning
-# detecta sozinho quais config_id já têm checkpoint (models/{id}_best.pt) e
-# pula direto para os que faltam -- NÃO retreina do zero. Deixe NULL para
-# sempre começar um run novo (comportamento padrão, gera timestamp novo).
+# resume_run_id with the exact run_id of the directory under outputs/tuning/
+# that stopped half way (e.g. "soc_0_5cm_20260715_093000") and run the script
+# again. The runner works out by itself which units already have a checkpoint
+# (models/{id}_best.pt) and skips straight to the ones that are missing -- it
+# does NOT retrain from scratch. Leave NULL to always start a new run (the
+# default; generates a fresh timestamp).
 resume_run_id <- NULL
 
 run_id <- if (is.null(resume_run_id)) {

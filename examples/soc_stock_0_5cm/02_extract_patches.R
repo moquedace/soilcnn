@@ -449,10 +449,10 @@ message("\nMetadata written first (", nrow(meta_valid), " points) -- the window 
 # Expected size from the shape. float32 = 4 bytes; the serialisation adds a
 # small header, hence the tolerance.
 
-# Amostra para inspecao visual (99b). Gravada AQUI porque os arrays ja estao
-# na memoria: custa alguns MB e zero tempo. A alternativa -- o 99b recarregar
-# o store inteiro so para tirar 6 patches -- custava minutos e ~12 GB de RAM
-# para olhar 0,016% do dado.
+# A sample for visual inspection (99b). Written HERE because the arrays are
+# already in memory: it costs a few MB and no time at all. The alternative --
+# 99b reloading the whole store to pull six patches out of it -- cost minutes
+# and ~12 GB of RAM to look at 0.016% of the data.
 set.seed(42)
 sample_idx <- sort(sample(n_valid, min(6L, n_valid)))
 patch_sample <- list(
@@ -466,8 +466,8 @@ patch_sample <- list(
 safe_save_rds(patch_sample, file.path(output_patch_dir, "patch_sample.rds"),
               compress = TRUE)
 message("
-Amostra de ", length(sample_idx), " patches gravada para inspecao ",
-        "visual (", round(file.size(file.path(output_patch_dir,
+Sample of ", length(sample_idx), " patches written for visual ",
+        "inspection (", round(file.size(file.path(output_patch_dir,
         "patch_sample.rds")) / 1e6, 1), " MB)")
 
 saved <- tibble::tibble()

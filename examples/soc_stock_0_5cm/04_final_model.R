@@ -40,31 +40,42 @@ source(file.path(project_root, "R", "train_cnn.R"))
 target_label <- "soc_stock_0_5cm"
 target_unit  <- "ton_ha"
 
-# Run de tuning a usar. "latest" pega automaticamente o run mais recente
-# (ordenado pelo timestamp no nome da pasta). Ou informe um run_id explícito.
+# Which tuning run to use. "latest" takes the most recent one automatically
+# (sorted by the timestamp in the directory name). Or name a run_id.
 tuning_run_id <- "latest"
 
-# Configs a treinar no modelo final. Cada um é treinado com TODAS as seeds.
-# NULL = use rank 1 of the validation ranking automatically -- recommended for
-# a primeira corrida a 250 m (ainda não sabemos quem vence).
-# Para comparar o top-N pareado por seed: rode o 03, abra
-#   outputs/.../tuning/<run>/comparison/comparison_ranked.csv
-# e liste aqui os config_ids vencedores, ex.: c("cfg_007", "cfg_013").
-# ATENÇÃO: NÃO reutilize IDs de runs antigos — o mesmo "cfg_004" é uma
-# arquitetura DIFERENTE em cada run de tuning (a numeração é por run).
-# As seeds são as mesmas para todos os configs → comparação pareada por seed.
+# Which configs to train as the final model. Each is trained with EVERY seed.
+#
+# NULL = use rank 1 of the per-config ranking automatically -- the right choice
+# for a first run at a new resolution, when nobody knows yet which wins.
+#
+# To compare the top N paired by seed: run 03, open
+#   outputs/.../tuning/<run>/comparison/comparison_by_config.csv
+# and list the winning config_ids here, e.g. c("cfg_007", "cfg_013").
+#
+# WARNING: NEVER reuse an ID from an older run. The same "cfg_004" is a
+# DIFFERENT architecture in every tuning run -- the numbering is per run, so an
+# ID copied across runs names something else entirely and nothing will say so.
+#
+# The seeds are the same for every config, which is what makes the comparison
+# paired by seed rather than a comparison of who drew the luckier start.
 selected_config_ids <- NULL
 
-# Sementes. Cada seed é um treino independente do zero. A variância entre seeds
-# estima a estabilidade do treinamento — resultado publicável deve ter baixo
-# desvio (idealmente < ~5% do CCC médio).
+# Seeds. Each one is an independent training run from scratch, and the spread
+# between them estimates how STABLE the training is -- not how good the model
+# is. A publishable result should have a low spread (ideally under ~5% of the
+# mean CCC); a large one means the number being reported is partly the draw.
+#
+# This is the same quantity seed_noise_floor() measures during tuning, at a
+# larger sample: ten seeds here against three there.
 seeds <- c(7, 28, 42L, 94, 123L, 333, 456L, 666, 789L, 2025L)
 
 device <- setup_torch_device(n_threads = 30, use_cuda = TRUE)
 
-# ── Hiperparâmetros de treinamento final ──────────────────────────────────────
-# Mais épocas e mais patience do que no tuning: agora que sabemos os configs,
-# deixamos o modelo convergir completamente sem pressa.
+# ── Final training hyperparameters ────────────────────────────────────────────
+# More epochs and more patience than during tuning: the configs are known now,
+# so there is no reason to hurry convergence. Tuning trades a little accuracy
+# per config for covering the grid; this stage does not.
 
 training_args <- list(
   n_epochs             = 700L,
@@ -92,22 +103,23 @@ metadata_dir      <- file.path(project_root, "outputs", "metadata",
 output_tuning_dir <- file.path(project_root, "outputs", "tuning",
                                 "soc_stock_modeling", target_label)
 
-# Resolver "latest" para o run de tuning mais recente
+# Resolve "latest" to the most recent tuning run
 if (identical(tuning_run_id, "latest")) {
   run_dirs <- list.dirs(output_tuning_dir, recursive = FALSE, full.names = FALSE)
   run_dirs <- run_dirs[grepl("^soc_", run_dirs)]
-  if (length(run_dirs) == 0) stop("Nenhum run de tuning encontrado em: ", output_tuning_dir)
+  if (length(run_dirs) == 0) stop("No tuning run found in: ", output_tuning_dir)
   tuning_run_id <- sort(run_dirs, decreasing = TRUE)[1]
-  message("tuning_run_id resolvido para: ", tuning_run_id)
+  message("tuning_run_id resolved to: ", tuning_run_id)
 }
 
 tuning_dir   <- file.path(output_tuning_dir, tuning_run_id)
 ranking_file <- file.path(tuning_dir, "comparison", "comparison_ranked.csv")
-# A tabela POR CONFIG (media +/- sd sobre as repeticoes) e a que decide. A
-# comparison_ranked.csv tem uma linha por UNIDADE (config x fold x semente) --
-# ler o rank dela deixaria uma semente sortuda de uma config mediocre passar na
-# frente da media firme de uma boa. Runs antigos (1 semente, 1 fold) nao tem
-# este arquivo, e ai as duas tabelas coincidem de qualquer forma.
+# THE PER-CONFIG TABLE IS THE ONE THAT DECIDES (mean +/- sd over the
+# repetitions). comparison_ranked.csv has one row per UNIT (config x fold x
+# seed), and reading its rank would let a lucky seed of a mediocre config
+# outrank the steady mean of a good one -- which is precisely the mistake
+# repetitions exist to prevent. Older runs (one seed, one fold) have no
+# per-config file, and there the two tables coincide anyway.
 byconfig_file <- file.path(tuning_dir, "comparison", "comparison_by_config.csv")
 tune_grid_file <- file.path(tuning_dir, "tune_grid.rds")
 
@@ -117,13 +129,13 @@ output_dir <- file.path(project_root, "outputs", "final_model",
 
 create_output_dirs(c(output_dir, file.path(output_dir, "comparison")))
 
-# ── Validações ────────────────────────────────────────────────────────────────
+# -- Validations -------------------------------------------------------------
 
-if (!dir.exists(patch_dir))      stop("Patches não encontrados: ", patch_dir)
-if (!file.exists(ranking_file))  stop("Ranking não encontrado: ",  ranking_file)
-if (!file.exists(tune_grid_file)) stop("tune_grid.rds não encontrado: ", tune_grid_file)
+if (!dir.exists(patch_dir))      stop("Patches not found: ", patch_dir)
+if (!file.exists(ranking_file))  stop("Ranking not found: ",  ranking_file)
+if (!file.exists(tune_grid_file)) stop("tune_grid.rds not found: ", tune_grid_file)
 
-# ── Selecionar configs ────────────────────────────────────────────────────────
+# -- Select the configs ------------------------------------------------------
 
 ranking        <- readr::read_csv2(ranking_file, show_col_types = FALSE)
 tune_grid_full <- readRDS(tune_grid_file)
@@ -142,35 +154,39 @@ if (is.null(selected_config_ids)) {
   }
 }
 
-# Se a vantagem do vencedor for menor que o ruido de semente, dizer isso em voz
-# alta AQUI, onde a escolha esta sendo feita -- e nao deixar o numero passar
-# como se fosse um resultado. Selecionar mesmo assim e legitimo; nao saber nao.
+# If the winner's margin is smaller than the seed noise, SAY SO HERE, where
+# the choice is being made -- rather than letting the number travel onward as
+# if it were a result. Selecting anyway is legitimate; not knowing is not.
 if (!is.null(by_config) && nrow(by_config) > 1L &&
     "val_ccc_sd" %in% names(by_config)) {
   top2 <- dplyr::arrange(by_config, rank)[1:2, ]
   gap  <- top2$val_ccc_mean[1] - top2$val_ccc_mean[2]
   noise <- stats::median(by_config$val_ccc_sd, na.rm = TRUE)
   if (is.finite(gap) && is.finite(noise) && gap < noise) {
-    message("\n  ATENCAO: a vantagem do 1o sobre o 2o (", round(gap, 4),
-            ") e MENOR que o sd tipico entre sementes (", round(noise, 4), ").")
-    message("  As duas configs sao indistinguiveis com o numero de repeticoes ",
-            "deste run.")
-    message("  Rode mais sementes, ou selecione pela mais simples (one_se).")
+    message("\n  WARNING: the 1st config's margin over the 2nd (", round(gap, 4),
+            ") is SMALLER than the typical sd between seeds (",
+            round(noise, 4), ").")
+    message("  The two are indistinguishable at this run's number of ",
+            "repetitions.")
+    message("  Run more seeds, or select the simplest within one SE ",
+            "(see one_se()).")
   }
 }
 
 missing_cfgs <- setdiff(selected_config_ids, tune_grid_full$config_id)
 if (length(missing_cfgs) > 0) {
-  stop("config_ids não encontrados no tune_grid: ", paste(missing_cfgs, collapse = ", "))
+  stop("config_ids not found in the tune_grid: ",
+       paste(missing_cfgs, collapse = ", "))
 }
 
 selected_cfgs <- dplyr::filter(tune_grid_full, config_id %in% selected_config_ids)
 
 message("\n── Configs selected for the final model ──────────────────────")
 for (cid in selected_config_ids) {
-  # slice(1): com repeticoes ha varias linhas por config no ranking, e os
-  # campos de ARQUITETURA sao identicos entre elas (e a mesma config) -- a
-  # primeira serve. As METRICAS vem da tabela por config, com o desvio junto.
+  # slice(1): with repetitions the ranking holds several rows per config, and
+  # their ARCHITECTURE fields are identical (it is the same config) -- so the
+  # first will do. The METRICS come from the per-config table instead, where
+  # they arrive with their spread attached.
   r <- dplyr::slice(dplyr::filter(ranking, config_id == cid), 1)
   b <- if (!is.null(by_config)) {
     dplyr::filter(by_config, config_id == cid)
@@ -191,7 +207,7 @@ for (cid in selected_config_ids) {
           " | ", metric_txt)
 }
 
-# ── Carregar patches e montar o cache do fold ─────────────────────────────────
+# -- Load the patches and build the fold cache -------------------------------
 # Carregado só agora porque só agora se sabe quais janelas os configs
 # selecionados usam -- o patch store guarda um arquivo por janela, então
 # carregar tudo pagaria RAM por window que nenhum config vai usar.
@@ -223,8 +239,8 @@ fold         <- build_fold_cache(store, points, type_table, index, windows_neede
 points_valid <- fold_points_valid(store, index)
 tensor_cache <- fold$cache
 
-# Mesma lição do 03: as sementes todas compartilham UM cache. O escalonamento
-# é do fold, não da semente, então refazê-lo por semente seria só desperdício.
+# Same lesson as stage 03: every seed shares ONE cache. The scaling belongs to
+# the fold, not to the seed, so rebuilding it per seed would be pure waste.
 store$windows <- NULL
 invisible(gc())
 
