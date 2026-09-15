@@ -419,9 +419,28 @@ early_stopping_bias <- function(history_dir, plateau = 20L,
       # Did training actually flatten? A plateau still descending steeply makes
       # the estimate an upper bound rather than an estimate, and saying so is
       # better than reporting a number that looks the same either way.
-      still_descending = (mean(w[seq_len(length(w) %/% 2L)]) -
-                          mean(w[(length(w) %/% 2L + 1L):length(w)])) >
-                         2 * stats::sd(w)
+      # DID THE PLATEAU ACTUALLY FLATTEN?
+      #
+      # If the window still contains the descent, the minimum sits below the
+      # window's mean because the curve was FALLING -- not because selecting
+      # the minimum of noise flatters it. The estimate is then an artefact of
+      # the window, and reporting it as selection optimism is wrong.
+      #
+      # The first version compared the two halves against 2 * sd of the WHOLE
+      # window -- and a descent inflates exactly that sd, so the test raised
+      # its own bar and never fired. It reported 0% descending on curves that
+      # fall from 0.268 to 0.232 inside the window.
+      #
+      # The yardstick has to come from the part that is supposed to be flat:
+      # the second half. A drop larger than twice ITS spread is a descent.
+      still_descending = {
+        h  <- length(w) %/% 2L
+        if (h < 2L) FALSE else {
+          s2 <- stats::sd(w[(h + 1L):length(w)])
+          (mean(w[seq_len(h)]) - mean(w[(h + 1L):length(w)])) >
+            2 * max(s2, .Machine$double.eps)
+        }
+      }
     )
   })
 
@@ -472,4 +491,95 @@ print_early_stopping_bias <- function(bias, threshold_rel = 0.02) {
         "     separate early-stopping split, scored on the untouched fold.\n", sep = "")
   }
   invisible(bias)
+}
+
+# ── is it selection, or is it the descent? ────────────────────────────────────
+#
+# early_stopping_bias() treats the epochs around the chosen one as exchangeable
+# draws. That assumption is the whole estimator, and it is FALSE whenever the
+# window still contains the descent -- there the minimum sits below the window
+# mean because the curve was falling, which is not optimism at all.
+#
+# The two explanations react to the window width in OPPOSITE directions, and
+# that is what makes them separable without training anything:
+#
+#   real selection noise   the minimum of k exchangeable draws falls further
+#                          below their mean as k grows, but slowly (roughly
+#                          with the spread, not the width). The RELATIVE bias
+#                          is fairly stable, and does not collapse when the
+#                          window narrows.
+#
+#   descent contamination  a narrow window sits inside the flat part and the
+#                          bias nearly vanishes; a wide one reaches back into
+#                          the fall and the bias grows steeply.
+#
+# So: sweep the width and look at the shape. A bias that halves when the window
+# halves was never optimism.
+
+#' Measure the early-stopping bias at several plateau widths.
+#'
+#' @param history_dir Directory of *_history.csv.
+#' @param plateaus    Window widths to try.
+#' @param ... Passed to early_stopping_bias().
+#' @return A tibble: one row per width, with the median relative bias and how
+#'   many units were still descending at that width.
+early_stopping_bias_sweep <- function(history_dir,
+                                      plateaus = c(6L, 10L, 20L, 40L, 80L),
+                                      ...) {
+  rows <- lapply(plateaus, function(p) {
+    b <- try(early_stopping_bias(history_dir, plateau = p, ...), silent = TRUE)
+    if (inherits(b, "try-error")) return(NULL)
+    s <- attr(b, "summary")
+    tibble::tibble(plateau = p,
+                   median_bias_rel = s$median_bias_rel,
+                   max_bias_rel    = s$max_bias_rel,
+                   pct_descending  = s$pct_descending,
+                   n_units         = s$n_units)
+  })
+  out <- dplyr::bind_rows(rows)
+  if (nrow(out) == 0L) stop("No width produced a usable estimate.", call. = FALSE)
+  out
+}
+
+#' Print the sweep, and say which explanation it supports.
+print_bias_sweep <- function(sweep) {
+  cat("\n-- Bias against plateau width (nothing retrained) --\n")
+  print_wide(dplyr::mutate(
+    sweep,
+    median_bias = sprintf("%.2f%%", 100 * median_bias_rel),
+    worst       = sprintf("%.2f%%", 100 * max_bias_rel),
+    descending  = sprintf("%.0f%%", pct_descending)
+  ) %>% dplyr::select(plateau, median_bias, worst, descending, n_units),
+  n = Inf)
+
+  narrow <- sweep$median_bias_rel[which.min(sweep$plateau)]
+  wide   <- sweep$median_bias_rel[which.max(sweep$plateau)]
+  ratio  <- if (narrow > 0) wide / narrow else Inf
+
+  cat("\n")
+  if (!is.finite(ratio)) {
+    cat("  -> The narrowest window shows no bias at all. Whatever the wide\n",
+        "     windows measure, it is not the minimum of a flat sequence.\n",
+        sep = "")
+  } else if (ratio > 2.5) {
+    cat(sprintf(paste0("  -> THE DESCENT, not selection. The bias grows %.1fx ",
+                       "from the narrowest window\n     to the widest: a flat ",
+                       "sequence's minimum does not behave that way.\n",
+                       "     Early stopping is fine; a third split would buy ",
+                       "nothing and cost 15%%\n     of the training data.\n"),
+                ratio))
+  } else if (ratio > 1.5) {
+    cat(sprintf(paste0("  -> MIXED. The bias grows %.1fx with the window, so ",
+                       "part of it is the descent,\n     but it does not ",
+                       "vanish when the window narrows. Read the narrowest ",
+                       "row\n     as the honest estimate of selection ",
+                       "optimism.\n"), ratio))
+  } else {
+    cat(sprintf(paste0("  -> SELECTION. The bias is stable across widths ",
+                       "(%.1fx), which is what the\n     minimum of an ",
+                       "exchangeable sequence does. Part of each config's ",
+                       "score\n     is the luck of its best epoch, and a ",
+                       "separate stopping set would remove it.\n"), ratio))
+  }
+  invisible(sweep)
 }
