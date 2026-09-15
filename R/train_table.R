@@ -215,6 +215,22 @@ run_table_resample <- function(model, tune_grid = NULL, store, points,
           torch::torch_manual_seed(this_seed)
         }
 
+        # READ OFF THE SPEC HERE, WHERE `model` CAN ONLY MEAN THE SPEC.
+        #
+        # tibble() evaluates its arguments in order and puts each finished
+        # column into the data mask, so a column named `model` SHADOWS the
+        # model_spec for every expression after it. `model = model$name`
+        # created exactly that column, and the next line's
+        # `model$count_params` then resolved `model` to a character vector and
+        # died with "$ operator is invalid for atomic vectors" -- on the first
+        # unit of the first baseline.
+        #
+        # Same shape as the print_block_choice() bug: a column name colliding
+        # with a variable inside a tidy-eval context. The fix is not to rename
+        # the column -- `model` is the right name for it -- but to stop reading
+        # the spec once a column could be called that.
+        model_name <- model$name
+
         message("\n-- ", unit_id, " (config ", i, "/", nrow(tune_grid),
                 ", fold ", j, ", seed ", this_seed, ") --")
 
@@ -241,7 +257,7 @@ run_table_resample <- function(model, tune_grid = NULL, store, points,
         if (is.null(fitted)) {
           comparison <- dplyr::bind_rows(comparison, dplyr::bind_cols(
             tibble::tibble(
-              unit_id = unit_id, config_id = cfg$config_id, model = model$name,
+              unit_id = unit_id, config_id = cfg$config_id, model = model_name,
               fold = j, seed = this_seed, best_epoch = NA_integer_,
               runtime_min = round(runtime_min, 2), n_params = NA_integer_,
               n_features = ncol(tab$train$x),
@@ -285,20 +301,24 @@ run_table_resample <- function(model, tune_grid = NULL, store, points,
           dplyr::select(n, ccc, r2, mae, nse, rmse, rpd, mqi) %>%
           dplyr::rename_with(~ paste0("test_", .x))
 
+        # Computed before the tibble, for the same reason model_name is: this
+        # is the expression that failed.
+        n_params_val <- if (!is.null(model$count_params)) {
+          tryCatch(as.integer(model$count_params(fitted)),
+                   error = function(e) NA_integer_)
+        } else NA_integer_
+
         comparison <- dplyr::bind_rows(comparison, dplyr::bind_cols(
           tibble::tibble(
             unit_id     = unit_id,
             config_id   = cfg$config_id,
-            model       = model$name,
+            model       = model_name,
             fold        = j,
             seed        = this_seed,
             best_epoch  = if (!is.null(fitted$best_epoch))
                             as.integer(fitted$best_epoch) else NA_integer_,
             runtime_min = round(runtime_min, 2),
-            n_params    = if (!is.null(model$count_params))
-                            tryCatch(model$count_params(fitted),
-                                     error = function(e) NA_integer_)
-                          else NA_integer_,
+            n_params    = n_params_val,
             n_features  = ncol(tab$train$x),
             status      = "success",
             error_message = NA_character_),

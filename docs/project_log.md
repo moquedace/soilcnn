@@ -2170,6 +2170,64 @@ for a function every fold index depends on.
 
 ---
 
+## A column named `model` shadowed the model (2026-09-15)
+
+    Error in model$count_params : $ operator is invalid for atomic vectors
+
+Third defect in an hour, third one found by running code that had never run.
+
+### The mechanism
+
+`tibble()` evaluates its arguments **in order**, and puts each finished column
+into the data mask for the ones that follow.
+
+```r
+tibble::tibble(
+  unit_id = unit_id, config_id = cfg$config_id,
+  model = model$name,                 # creates a COLUMN called `model`
+  ...
+  n_params = if (!is.null(model$count_params)) ...   # resolves to the COLUMN
+)
+```
+
+`model = model$name` works -- the right-hand side is evaluated before the
+column exists. Every argument **after** it sees a character vector where the
+model_spec used to be.
+
+It would have fired on the first RF unit of `03b`.
+
+### The fix, and what it is not
+
+Not renaming the column: `model` is the right name for it. The rule is to stop
+reading the spec once a column could be called that -- so `model_name` and
+`n_params_val` are computed before the tibble, where `model` can only mean the
+spec.
+
+This is the second instance of the same shape today: `print_block_choice()` had
+`chosen = ifelse(block_size == as.numeric(chosen), ...)` inside a `mutate()`
+that also creates `chosen`.
+
+### Swept for it
+
+A static scan for "column name later used with `$` in the same call" returned
+four more. Three are false positives -- `m$parameters$parameter` inside a
+lambda, and two matches that crossed comment blocks outside any tibble. The
+fourth, in `05`, is `device = device$type` as the LAST argument: safe today,
+and safe only while it stays last, so it is now read before the tibble.
+
+The durable guard is not the scan. It is `test_api_run.R`, which exercises the
+table path end to end -- and which is what caught this.
+
+### Why this run of defects is not bad news
+
+Three real framework defects in an hour, and **none of them would have appeared
+as an error in the pipeline**: the `spatial_cv` one returned a valid holdout,
+the `align_points_to_meta` one only bites a point table built in R, and this
+one lives in a baseline the CNN path never touches. They appeared because the
+new code was exercised on purpose, before it was trusted.
+
+---
+
 ## Pendente
 
 | etapa | o quê |

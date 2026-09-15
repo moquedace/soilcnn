@@ -906,6 +906,8 @@ block_summary <- dplyr::bind_rows(block_log)
 safe_write_csv2(block_summary,
                 file.path(output_log_dir, paste0("prediction_block_summary", part_suffix, ".csv")))
 
+device_type <- device$type
+
 prediction_config <- tibble::tibble(
   target_label = target_label, target_unit = target_unit,
   config_id = config_id, final_run_id = final_run_id,
@@ -925,7 +927,10 @@ prediction_config <- tibble::tibble(
   n_valid = n_valid_total, valid_fraction = n_valid_total / tile_ncell,
   global_median_ton_ha = global_med, global_max_ton_ha = global_max,
   runtime_min = as.numeric(total_time, units = "mins"),
-  device = device$type, predicted_at = as.character(Sys.time())
+  # device_type, read before the tibble: a column called `device` shadows the
+  # torch device for every argument AFTER it, so this is safe only while it
+  # stays last. Read here, it stays safe wherever it moves.
+  device = device_type, predicted_at = as.character(Sys.time())
 )
 safe_write_csv2(prediction_config,
                 file.path(output_log_dir, paste0("prediction_config", part_suffix, ".csv")))
