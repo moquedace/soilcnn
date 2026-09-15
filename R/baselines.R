@@ -83,8 +83,17 @@ rf_spec <- function() {
 
     fit = function(x, y, cfg, ...) {
       backend <- .rf_backend()
-      mtry <- if (!is.null(cfg$mtry) && !is.na(cfg$mtry)) as.integer(cfg$mtry)
-              else max(1L, as.integer(round(cfg$mtry_frac * ncol(x))))
+      # [[ ]] behind a names() check, never cfg$mtry: on a tibble, $ on a
+      # missing column returns NULL *and* warns ("Unknown or uninitialised
+      # column"). The path is deliberately optional -- mtry is resolved from
+      # the real feature count when the grid did not carry it -- so a warning
+      # here is noise that trains people to ignore warnings.
+      mtry_col <- if ("mtry" %in% names(cfg)) cfg[["mtry"]] else NULL
+      mtry <- if (!is.null(mtry_col) && length(mtry_col) && !is.na(mtry_col[1])) {
+        as.integer(mtry_col[1])
+      } else {
+        max(1L, as.integer(round(cfg$mtry_frac * ncol(x))))
+      }
 
       if (backend == "ranger") {
         fit <- ranger::ranger(

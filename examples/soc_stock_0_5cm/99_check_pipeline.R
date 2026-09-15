@@ -175,16 +175,19 @@ if (all_01_exist) {
                   pct_pred_problem, warn_above = 2, fail_above = 10)
 
   # Predictor count consistent across EVERY file that should agree.
+  # predictor_scaling.csv is NOT in this list any more. Stage 01 stopped
+  # writing it when the scaling became a property of the FITTED MODEL: it is
+  # fitted on each fold's training rows and written next to the weights by
+  # stage 04. Checking it here would be checking for a file that must not
+  # exist -- and this line survived the refactor as a reference to an object
+  # nothing creates, which is why the 99 crashed instead of reporting.
   n_pred_rtable  <- nrow(rtable)
   n_pred_ptype   <- nrow(ptype)
-  n_pred_scaling <- nrow(scaling)
   n_pred_dscheck <- dscheck$n_predictors[1]
   n_pred_tconfig <- tconfig$n_predictors_final[1]
 
   check_equal("01", "n_predictors: raster_table vs predictor_type_table",
               n_pred_rtable, n_pred_ptype, "raster_table", "predictor_type")
-  check_equal("01", "n_predictors: raster_table vs predictor_scaling",
-              n_pred_rtable, n_pred_scaling, "raster_table", "scaling")
   check_equal("01", "n_predictors: raster_table vs dataset_check",
               n_pred_rtable, n_pred_dscheck, "raster_table", "dataset_check")
   check_equal("01", "n_predictors: raster_table vs target_config",
@@ -196,8 +199,10 @@ if (all_01_exist) {
   check_equal("01", "dummy + percentage + continuous == total predictors",
               n_type_sum, n_pred_rtable, "soma_tipos", "total")
 
-  # Split proportions near 70/15/15 (2 percentage-point tolerance)
-  total_n <- sum(split$n)
+  # The 70/15/15 proportion check is gone with the split itself. Stage 01
+  # decides no roles: who trains, who scores and who is held out is carved by
+  # a fold plan in stage 03, from coordinates, and fold_sizes.csv is where
+  # those proportions get checked -- against the plan that will actually run.
   
   # target_native and target_log1p agree (log1p(native) == log1p) -- checked
   # indirectly through the median already computed in dataset_check.csv
@@ -206,12 +211,18 @@ if (all_01_exist) {
               round(dscheck$median_target_log1p[1], 4), round(implied_log1p, 4),
               "salvo", "recalculado")
 
-  # The single dataset matches the sum of the splits (same lineage).
+  # The dataset, the point table and the QC summary must agree on how many
+  # rows survived. Stage 01 writes them from three different objects in three
+  # different blocks, so a disagreement means one was built from a stale copy --
+  # which is how a store once ended up with more patches than there were points.
   # col_select = 1 keeps the read fast even with 180+ columns.
-  n_dataset <- nrow(safe_read_csv2(f_dataset,
-                                     col_select = 1))
-  check_equal("01", "dataset rows vs the sum of the splits",
-              n_dataset, sum(split$n), "dataset", "split_check")
+  n_dataset <- nrow(safe_read_csv2(f_dataset, col_select = 1))
+  check_equal("01", "rows: dataset vs point_metadata",
+              n_dataset, nrow(pmeta), "dataset", "point_metadata")
+  check_equal("01", "rows: dataset vs qc_summary (after QC)",
+              n_dataset, qc$n_rows_after_qc[1], "dataset", "qc_summary")
+  check_equal("01", "rows: dataset vs dataset_check",
+              n_dataset, dscheck$n_rows[1], "dataset", "dataset_check")
 
   # qc_table holds one rule per predictor, in type_table's order -- and that
   # order is what stage 02 uses to know which rule applies to which band.

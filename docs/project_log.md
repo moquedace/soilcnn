@@ -1590,6 +1590,56 @@ day as a framework file that cannot, and the scripts are what get edited most.
 
 ---
 
+## The 99 still referenced two objects the refactor deleted (2026-09-14)
+
+    Error: objeto 'scaling' nao encontrado
+
+`nrow(scaling)` and `sum(split$n)`. Both are valid syntax, so `parse()` cannot
+see them; they only fail when the line is reached -- which in a checker is
+after the stage it was meant to guard has already run. Stage 01 has not written
+`predictor_scaling.csv` since the scaling became a property of the fitted
+model, and it has not written a split since the fold plan took that over, so
+these lines had been dead for as long as those changes.
+
+### Replaced rather than deleted
+
+Both checks were worth having; they were pointed at the wrong files.
+
+- `n_predictors: raster_table vs predictor_scaling` is gone. Checking for that
+  file would now be checking that a file which must NOT exist does.
+- `dataset rows vs the sum of the splits` became three checks: dataset vs
+  `point_metadata`, vs `qc_summary$n_rows_after_qc`, vs `dataset_check$n_rows`.
+  Stage 01 writes those from three different objects in three different blocks,
+  so a disagreement means one was built from a stale copy -- which is how a
+  store once ended up with more patches than there were points.
+- The 70/15/15 proportion check is gone with the split. `fold_sizes.csv` in
+  stage 03 is where those proportions get checked now, against the plan that
+  will actually run.
+
+### The rest of the pipeline was swept for the same thing
+
+A static scan of every pipeline script for names used but never assigned
+returned 14 more hits, and **all 14 were false positives** -- chained access
+(`store$meta$sample_id`, `result$gate$summary`, `pl$params$buffer`,
+`cmp$diff$status`), which the heuristic reads as a bare name. `scaling` and
+`split` were the only real ones.
+
+No permanent automated guard was added for this. `codetools::checkUsage` is the
+right tool in principle, but on a SCRIPT every function from a sourced file and
+every library export is reported as a global, which is a checker nobody reads.
+The guard that works is the one that already caught it: the 99 has to RUN, end
+to end, before every expensive stage.
+
+### Also
+
+`rf_spec()` used `cfg$mtry` on a tibble that may not carry the column, which
+returns NULL *and* warns. Now `[[ ]]` behind a `names()` check -- the same fix
+`build_cnn_from_config()` already carried for `embed_pool`, for the same
+reason: the path is deliberately optional, and a warning on it trains people to
+ignore warnings.
+
+---
+
 ## Pendente
 
 | etapa | o quê |
