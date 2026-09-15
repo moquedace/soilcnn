@@ -109,3 +109,75 @@ report.
 Subsample **whole blocks** instead: keep every point inside the blocks that are
 kept. Local density, and therefore the leakage phenomenon the project exists to
 control, is preserved at one tenth of the cost.
+
+---
+
+# The first dev run, 2026-09-15
+
+`soc_0_5cm_20260915_122952` — the first run on the rebuilt pipeline, on the
+front end, with the spec lock, the measured block size and the carved test set.
+
+**A dev number. Comparable only with another dev number.** 10% of the points,
+by whole blocks.
+
+| | |
+|---|---|
+| points | 3,766 prepared / 3,728 with a fully valid window |
+| resampling | `spatial_cv(k = 3, block_size = "auto" -> 0.25 deg, buffer = "auto" -> 0.0337 deg)` |
+| test | 591 points, carved by the SAME criterion, frozen in `data_split.csv` |
+| buffer cost | 319 training points dropped, 5.1% per fold |
+| units | 27 = 3 configs x 3 folds x 3 seeds, **0 failures** |
+
+## Results
+
+| rank | config | architecture | val CCC | sd | SE | test CCC | val − test |
+|---|---|---|---|---|---|---|---|
+| 1 | cfg_002 | 3x9 · 64_128 · flatten · **valid_large** · lr 1e-3 | **0.4885** | 0.0370 | 0.0123 | 0.4768 | +0.012 |
+| 2 | cfg_001 | 9x15 · 64_128_128 · gap · same · lr 1e-4 | 0.4442 | 0.0340 | 0.0113 | 0.4098 | +0.034 |
+| 3 | cfg_003 | 15 · 64_128 · gap · **valid_large** · lr 3e-4 | 0.4212 | 0.0370 | 0.0123 | 0.4070 | +0.014 |
+
+## Three things this run establishes
+
+### 1. The grid separated, for the first time
+
+| | full run (14 Sep) | dev run (15 Sep) |
+|---|---|---|
+| 1st − 2nd | 0.0086 | **0.0443** |
+| noise floor (sd between seeds) | 0.0275 | 0.0383 |
+| verdict | gap is 3.2x SMALLER than the noise | gap **clears** it |
+
+Against the standard error of the mean — the right yardstick for comparing
+means of 9 units — the gap is **3.6 SE**. The three configs of the full run
+were indistinguishable; these are not.
+
+### 2. The test optimism is gone, and that is the refactor's whole point
+
+The full run's test was a stratified RANDOM draw made in stage 01, while
+validation was spatial. Measured consequence: the test came out **+0.042 CCC
+EASIER** than the validation, across all three configs, while carrying the name
+that suggests it is the stricter number.
+
+The test is now carved by the SAME criterion as the folds. It comes out
+**0.012 to 0.034 HARDER** than validation, on all three configs. The sign
+flipped, which is what it should do when both numbers answer the same question.
+
+### 3. Zero leakage, by construction and by measurement
+
+0 identical patches AND **0 shared pixels at window 15**, on all three folds.
+
+That is not luck: `block_size = 0.25 deg` (~27 km) with `buffer = 0.0337 deg`
+puts every validation point at least 3.75 km from any training point — exactly
+the ground a 15x15 patch spans at 250 m. The buffer was derived from the window
+and the resolution, and the report confirms it did what the arithmetic said.
+
+## What this run does NOT establish
+
+**Nothing about `conv_padding`.** cfg_002 won and uses `valid_large`, but it
+also differs in window (3x9 vs 9x15), learning rate (1e-3 vs 1e-4), gate and
+pooling. Three configs cannot separate five factors. The question stays open;
+answering it needs a grid that varies padding while holding the rest.
+
+**Nothing about the full data.** 0.489 here against ~0.52 on the full set is
+encouraging — a tenth of the data costs ~0.03 CCC, so volume is not the binding
+constraint at this scale — but it is a comparison ACROSS profiles, which this
+file exists to warn against.
