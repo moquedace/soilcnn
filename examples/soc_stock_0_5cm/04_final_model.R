@@ -208,12 +208,12 @@ for (cid in selected_config_ids) {
 }
 
 # -- Load the patches and build the fold cache -------------------------------
-# Carregado só agora porque só agora se sabe quais janelas os configs
-# selecionados usam -- o patch store guarda um arquivo por janela, então
-# carregar tudo pagaria RAM por window que nenhum config vai usar.
+# Loaded only now, because only now is it known which windows the selected
+# configs use -- the patch store keeps one file per window, so loading
+# everything would pay RAM for windows no config is going to touch.
 
 windows_needed <- sort(unique(unlist(selected_cfgs$window_sizes)))
-message("\nJanelas necessárias: ", paste(windows_needed, collapse = ", "))
+message("\nWindows needed: ", paste(windows_needed, collapse = ", "))
 
 store      <- load_patch_store(patch_dir, windows_needed)
 n_channels <- store$n_channels
@@ -249,7 +249,7 @@ message("Channels: ", n_channels,
         " | Val: ",   length(index$validation),
         " | Test: ",  length(index$test))
 
-# ── Função: treinar um config com todas as seeds ──────────────────────────────
+# -- Train one config with every seed ----------------------------------------
 
 train_config_all_seeds <- function(cfg, config_id) {
 
@@ -323,7 +323,7 @@ train_config_all_seeds <- function(cfg, config_id) {
   dplyr::bind_rows(purrr::compact(seed_rows))
 }
 
-# ── Rodar todos os configs ────────────────────────────────────────────────────
+# -- Run every config --------------------------------------------------------
 
 all_seed_results <- tibble::tibble()
 for (i in seq_len(nrow(selected_cfgs))) {
@@ -332,9 +332,9 @@ for (i in seq_len(nrow(selected_cfgs))) {
   all_seed_results <- dplyr::bind_rows(all_seed_results, res)
 }
 
-if (nrow(all_seed_results) == 0) stop("Nenhuma seed completou com sucesso.")
+if (nrow(all_seed_results) == 0) stop("No seed finished successfully.")
 
-# ── Resumo por config: média ± desvio entre seeds ─────────────────────────────
+# -- Per config: mean +/- sd between seeds -----------------------------------
 
 config_summary <- all_seed_results %>%
   dplyr::group_by(config_id) %>%
@@ -364,9 +364,11 @@ safe_save_rds(
   compress = FALSE
 )
 
-# ── Comparação pareada por seed (cfg_004 vs cfg_012) ──────────────────────────
-# Mesma seed = mesmo estado de RNG inicial, então a diferença por seed isola o
-# efeito da arquitetura. Reporta a diferença média e se ela é consistente.
+# -- Paired comparison, seed by seed -----------------------------------------
+# The same seed means the same initial RNG state, so the difference WITHIN a
+# seed isolates the effect of the architecture from the effect of the draw.
+# Reported as the mean difference, and whether it is consistent across seeds --
+# a mean difference smaller than the spread between seeds is a tie.
 
 if (length(selected_config_ids) == 2) {
   paired <- all_seed_results %>%
@@ -384,17 +386,18 @@ if (length(selected_config_ids) == 2) {
 
   safe_write_csv2(paired, file.path(output_dir, "comparison", "paired_by_seed.csv"))
 
-  message("\n── Diferença pareada (", c1, " − ", c2, "), média entre seeds ──")
+  message("\n-- Paired difference (", c1, " - ", c2, "), mean over seeds --")
   message(sprintf("  ΔCCC : %+.4f", mean(paired$d_ccc,  na.rm = TRUE)))
   message(sprintf("  ΔMAE : %+.3f", mean(paired$d_mae,  na.rm = TRUE)))
   message(sprintf("  ΔRMSE: %+.3f", mean(paired$d_rmse, na.rm = TRUE)))
   message(sprintf("  ΔMQI : %+.4f", mean(paired$d_mqi,  na.rm = TRUE)))
-  message("  (ΔCCC > 0 favorece ", c1, "; |ΔCCC| menor que o desvio entre seeds = empate técnico)")
+  message("  (dCCC > 0 favours ", c1,
+          "; |dCCC| smaller than the spread between seeds is a tie)")
 }
 
-# ── Relatório final ───────────────────────────────────────────────────────────
+# -- Final report ------------------------------------------------------------
 
-message("\n── Resumo por config (média ± desvio entre ", length(seeds), " seeds) ──")
+message("\n-- Per config (mean +/- sd over ", length(seeds), " seeds) --")
 for (i in seq_len(nrow(config_summary))) {
   s <- config_summary[i, ]
   message("\n  ", s$config_id, " (n=", s$n_seeds, "):")

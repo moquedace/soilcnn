@@ -484,14 +484,17 @@ suggest_block_size <- function(meta, k = 5L, max_share = 0.10,
 print_block_choice <- function(chosen) {
   tab <- attr(chosen, "table")
   ms  <- attr(chosen, "max_share")
+  # Pulled out of the mutate() on purpose: `chosen` is both this function's
+  # argument and the column being created, and relying on dplyr to resolve that
+  # the way it happens to today is a bug waiting for a dplyr release.
+  pick <- as.numeric(chosen)
   cat("
 -- Block size, measured on these points --
 ")
-  print(tibble::as_tibble(dplyr::mutate(
+  print_wide(dplyr::mutate(
     tab,
     largest_share = sprintf("%.1f%%", 100 * largest_share),
-    chosen        = ifelse(block_size == as.numeric(chosen), "  <--", ""))),
-    n = Inf, width = Inf)
+    chosen        = ifelse(block_size == pick, "  <--", "")), n = Inf)
   cat(sprintf("
   chosen: %g  (largest block <= %.0f%% of the points)
 ",
