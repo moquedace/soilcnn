@@ -342,7 +342,35 @@ align_points_to_meta <- function(points, meta) {
          "different data?", call. = FALSE)
   }
   out <- points[pos, , drop = FALSE]
-  stopifnot(identical(out$sample_id, meta$sample_id))
+
+  # THE VALUES HAVE TO LINE UP; THE STORAGE TYPE DOES NOT.
+  #
+  # This was stopifnot(identical(...)), and identical() compares type as well
+  # as value. In this pipeline both sides arrive from read_csv2() as doubles,
+  # so it passed -- but a point table built in R carries integer sample_ids
+  # against a store read from CSV, and the check then failed on 1L vs 1 with
+  # the message "identical(...) is not TRUE", which names nothing and suggests
+  # nothing.
+  #
+  # An id is a label. Compared numerically when both sides are numbers, and as
+  # text otherwise -- never as.character() on numbers, because as.character(1e5)
+  # is "1e+05" while as.character(100000L) is "100000", and a framework that
+  # breaks above 99,999 points is worse than one that breaks loudly.
+  same <- if (is.numeric(out$sample_id) && is.numeric(meta$sample_id)) {
+    isTRUE(all.equal(as.numeric(out$sample_id), as.numeric(meta$sample_id)))
+  } else {
+    identical(as.character(out$sample_id), as.character(meta$sample_id))
+  }
+  if (!same) {
+    bad <- which(as.character(out$sample_id) != as.character(meta$sample_id))
+    stop("The aligned point table does not line up with the patch store: ",
+         length(bad), " row(s) differ, first at position ", bad[1],
+         " (points has '", out$sample_id[bad[1]], "', the store expects '",
+         meta$sample_id[bad[1]], "').
+  sample_id must identify the same ",
+         "observation in both, and it is what every fold index refers to.",
+         call. = FALSE)
+  }
   out
 }
 

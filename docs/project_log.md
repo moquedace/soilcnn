@@ -2123,6 +2123,53 @@ dataset. It is now one call that cannot be half-done.
 
 ---
 
+## align_points_to_meta() refused an integer id (2026-09-15)
+
+The new front-end smoke test failed on its first run:
+
+    identical(out$sample_id, meta$sample_id) is not TRUE
+
+### What it is
+
+`align_points_to_meta()` reorders the point table to match the patch store.
+Stage 02 drops points whose window was not fully valid, so the point table
+always has MORE rows and a different order -- and **every fold index in this
+framework is a position in the STORE**. Get the alignment wrong and the model
+trains on one point's covariates and is scored against another's target,
+silently, with a plausible CCC.
+
+### The defect
+
+The final check was `stopifnot(identical(out$sample_id, meta$sample_id))`, and
+`identical()` compares storage TYPE as well as value.
+
+In this pipeline both sides arrive from `read_csv2()` as doubles, so it always
+passed. A point table built in R carries **integer** ids against a store read
+from CSV, and the check then fails on `1L` vs `1` -- with the message
+`identical(...) is not TRUE`, which names nothing and suggests nothing.
+
+That is a defect for exactly the audience this is being built for: a package
+user assembling their own point table in R rather than reading one of our CSVs.
+
+### The fix
+
+An id is a label. Compared numerically when both sides are numbers, as text
+otherwise -- and never `as.character()` on numbers, because
+`as.character(1e5)` is `"1e+05"` while `as.character(100000L)` is `"100000"`,
+and a framework that breaks above 99,999 points is worse than one that breaks
+loudly. On a real mismatch it now names the position and both values.
+
+### It had no test at all
+
+That is why this survived. `align_points_to_meta` appeared in no test file --
+only inside pipeline scripts, where both sides happened to be doubles.
+
+`test_patch_store_io.R` now covers it: reordering, subsetting, integer vs
+double, character ids, and a store point with no matching row. Six assertions
+for a function every fold index depends on.
+
+---
+
 ## Pendente
 
 | etapa | o quê |

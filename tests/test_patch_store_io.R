@@ -23,6 +23,7 @@
 suppressMessages({
   library(torch)
   library(tibble)
+  library(dplyr)    # mutate(), in the alignment block at the end
 })
 
 root <- (function() {
@@ -119,6 +120,55 @@ results["arquivo_truncado_detectado"] <- inherits(
   try(load_patch_window(store, 3L), silent = TRUE), "try-error")
 
 unlink(store, recursive = TRUE)
+
+# =============================================================================
+# align_points_to_meta()
+#
+# Stage 02 drops points whose window was not fully valid, so the point table
+# always has MORE rows than the store, in a different order. Every fold index
+# in this framework is a position in the STORE, so if the alignment is wrong
+# the model trains on one point's covariates and is scored against another's
+# target -- silently, with no error and a plausible CCC.
+#
+# It had no test at all. The defect that revealed that: the final check was
+# stopifnot(identical(out$sample_id, meta$sample_id)), and identical() compares
+# storage TYPE. Both sides come from read_csv2() in this pipeline, so both are
+# double and it passed; a point table built in R carries INTEGER ids, and the
+# check then failed on 1L vs 1 with a message that named nothing.
+# =============================================================================
+
+pm <- tibble::tibble(sample_id = c(4, 1, 7),      # store order, and a subset
+                     x = c(40, 10, 70), y = 0)
+pt <- tibble::tibble(sample_id = 1:8,             # INTEGER, and more rows
+                     v = (1:8) * 10L)
+
+al <- align_points_to_meta(pt, pm)
+results["align_reorders_to_the_store"] <-
+  identical(as.numeric(al$sample_id), c(4, 1, 7))
+results["align_carries_the_values"] <- identical(al$v, c(40L, 10L, 70L))
+results["align_drops_what_the_store_dropped"] <- nrow(al) == nrow(pm)
+
+# THE TYPE MUST NOT MATTER. An id is a label; integer 4 and double 4 name the
+# same observation, and a framework that refuses one of them breaks for anyone
+# who builds their point table in R instead of reading it from a CSV.
+results["align_ignores_integer_vs_double"] <- !inherits(
+  try(align_points_to_meta(
+        dplyr::mutate(pt, sample_id = as.numeric(sample_id)),
+        dplyr::mutate(pm, sample_id = as.integer(sample_id))),
+      silent = TRUE), "try-error")
+
+# ...and character ids are a legitimate choice, so they must work too.
+results["align_accepts_character_ids"] <- {
+  a <- align_points_to_meta(
+    dplyr::mutate(pt, sample_id = as.character(sample_id)),
+    dplyr::mutate(pm, sample_id = as.character(sample_id)))
+  identical(a$sample_id, c("4", "1", "7"))
+}
+
+# A store point with no row in the point table is the real failure, and it must
+# say so rather than silently shortening the table.
+results["align_refuses_a_missing_point"] <- inherits(
+  try(align_points_to_meta(pt[1:3, ], pm), silent = TRUE), "try-error")
 
 cat(sprintf("  synthetic store     : %d points x %d channels, windows 3/9/15\n", n, ch))
 cat(sprintf("  torch_save limit    : %s bytes (2^31)\n",
