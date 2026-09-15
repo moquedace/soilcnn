@@ -88,27 +88,41 @@ check_patch_centres <- function(patch_dir, points, predictors,
   )
 }
 
-# ── 2. spatial overlap between splits ─────────────────────────────────────────
+# ── 2. overlap between splits: two different things, never conflated ──────────
 #
-# Makes visible, every run, the finding that invalidated the first round of
-# results: a random split over spatially clustered profiles puts 33% of the
-# test set in the SAME 250 m pixel as a training profile. Those test points
-# share their input patch with training data, bit for bit.
+# ONE OF THESE IS A DEFECT. THE OTHER IS NOT.
 #
-# Computed on raster row/col, so it costs one pass and no extra package:
-#   • same cell          -> identical 3x3 patch, the unambiguous case
-#   • within half a window -> patches physically overlap
+#   same raster cell   Two points in the same pixel have a patch that is
+#                      IDENTICAL, bit for bit. The model can be scored on an
+#                      input it was trained on. This is a defect under ANY
+#                      split -- random, spatial, grouped -- because it is not
+#                      about geography, it is about duplicate inputs.
 #
-# Reported, never failed on. A random split is a legitimate choice as long as
-# it is a CHOSEN one -- what is not acceptable is not knowing.
+#   patches overlap    Two nearby points share some of their surrounding
+#                      pixels. This is NOT a defect. It is what neighbouring
+#                      samples look like. Under a RANDOM split it is the very
+#                      condition being measured -- "how well does this predict
+#                      at new points drawn from the same spatial distribution"
+#                      -- so calling it leakage misstates the question the
+#                      split was chosen to answer.
+#
+#                      It becomes worth looking at only when the plan claims to
+#                      be SPATIAL, where the point of the exercise is to score
+#                      on ground the model has not seen. There it describes how
+#                      well the separation held; it is still not a defect.
+#
+# The `matters` column carries that distinction so no caller has to remember
+# it, and so the 99 warns on the first and merely reports the second.
 
 #' Quantify how much of one split shares raster cells with another.
 #'
 #' @param row_ids,col_ids Integer raster row/col of every point.
 #' @param split           Character vector of split labels, same length.
-#' @param windows         Window sizes to report overlap for.
+#' @param windows         Window sizes to report shared pixels for.
 #' @param reference       Split whose points count as "seen in training".
-#' @return A tibble: one row per (split, criterion).
+#' @return A tibble, one row per (split, criterion), with a `matters` flag:
+#'   TRUE for identical patches (a defect under any split) and FALSE for shared
+#'   pixels between neighbours (not a defect -- see the note above).
 spatial_overlap_report <- function(row_ids, col_ids, split,
                                    windows = c(3L, 9L, 15L),
                                    reference = "train") {
@@ -130,7 +144,8 @@ spatial_overlap_report <- function(row_ids, col_ids, split,
 
     same <- sum(paste(row_ids[sel], col_ids[sel], sep = "_") %in% ref_cell)
     out[[length(out) + 1L]] <- tibble::tibble(
-      split = s, criterion = "same raster cell", window = NA_integer_,
+      split = s, criterion = "identical patch (same raster cell)",
+      window = NA_integer_, matters = TRUE,
       n = same, pct = round(100 * same / n_s, 2), n_split = n_s)
 
     # Window overlap, still O(n): bucket by half-window and test the 9
@@ -147,9 +162,9 @@ spatial_overlap_report <- function(row_ids, col_ids, split,
         hit <- hit | paste(rb[sel] + dr, cb[sel] + dc, sep = "_") %in% ref_bucket
       }
       out[[length(out) + 1L]] <- tibble::tibble(
-        split = s, criterion = paste0("patches overlap (", w, "x", w, ")"),
-        window = w, n = sum(hit), pct = round(100 * sum(hit) / n_s, 2),
-        n_split = n_s)
+        split = s, criterion = paste0("shares pixels (", w, "x", w, ")"),
+        window = w, matters = FALSE,
+        n = sum(hit), pct = round(100 * sum(hit) / n_s, 2), n_split = n_s)
     }
   }
   dplyr::bind_rows(out)

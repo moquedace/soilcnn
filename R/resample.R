@@ -18,12 +18,28 @@
 # method, its parameters and its per-row assignment, all of which get written
 # next to the results.
 #
+# ONE CUT POINT, ONE CRITERION
+# The plan carves the test set AND the folds, and it carves both the SAME way.
+# A spatial validation sitting next to a random test set puts two numbers in
+# one table that cannot be compared: measured on this project's own data, the
+# random test came out 0.042 CCC EASIER than the spatial validation, while
+# carrying a name that suggests it is the stricter of the two.
+#
+# So every constructor takes the same two numbers -- how many folds, and how
+# much goes to test -- and the criterion (blocks, groups, at random) decides
+# how both cuts are made. There is no half-spatial plan.
+#
 # THE TEST SET IS NOT RESAMPLED
-# Rows marked `test` in dataset_role stay test in EVERY fold and are never
-# trained on. Resampling partitions the train+validation pool only. A test set
-# that moves between folds has been seen by some model in the ensemble, and
-# then it is not a test set -- it is a third validation set with a misleading
-# name.
+# Once carved, the test rows stay test in EVERY fold and are never trained on.
+# A test set that moves between folds has been seen by some model in the
+# ensemble, and then it is not a test set -- it is a third validation set with
+# a misleading name.
+#
+# NOTHING UPSTREAM DECIDES ROLES
+# The patch store carries no role column. Stage 01 writes points, coordinates
+# and values; who is test and who trains is answered here, in seconds, as many
+# times as you like. That is what stops a change of split strategy from costing
+# a re-extraction.
 
 # -- small helpers ------------------------------------------------------------
 
@@ -45,18 +61,90 @@ with_local_seed <- function(seed, expr) {
   force(expr)
 }
 
-# The pool that folds partition, and the test rows that ride along unchanged.
-.fold_pool <- function(meta) {
-  if (!"dataset_role" %in% names(meta)) {
-    stop("meta has no dataset_role column -- cannot tell the pool from the ",
-         "held-out test rows.", call. = FALSE)
+# Draw WHOLE groups, in random order, until `frac` of the POINTS is reached.
+#
+# The one primitive behind every cut in this file. Drawing a fraction of GROUPS
+# instead would miss the point target badly whenever group sizes are uneven,
+# and they always are -- one spatial block can hold 5% of the data.
+.draw_groups_for_frac <- function(group, frac, seed) {
+  if (frac <= 0) return(integer(0))
+  by_g    <- split(seq_along(group), group)
+  order_g <- with_local_seed(seed, sample(names(by_g)))
+  target  <- ceiling(frac * length(group))
+  out     <- integer(0)
+  for (g in order_g) {
+    out <- c(out, by_g[[g]])
+    if (length(out) >= target) break
   }
-  pool <- which(meta$dataset_role %in% c("train", "validation"))
-  test <- which(meta$dataset_role == "test")
-  if (length(pool) == 0L) {
-    stop("No rows with dataset_role in {train, validation}.", call. = FALSE)
+  sort(out)
+}
+
+# Carve the test set out of `group`, by the same criterion the folds will use.
+#
+# `test_ids` takes precedence over `test_frac`: a test set that is re-drawn on
+# every run is not a test set. The example scripts freeze it to a file on the
+# first run and pass it back afterwards.
+.carve_test <- function(meta, group, test_frac, test_ids, seed) {
+  if (!is.null(test_ids)) {
+    if (!"sample_id" %in% names(meta)) {
+      stop("meta needs sample_id to apply a frozen test set.", call. = FALSE)
+    }
+    pos <- match(as.character(test_ids), as.character(meta$sample_id))
+    if (anyNA(pos)) {
+      stop(sum(is.na(pos)), " frozen test sample_id(s) are not in meta -- the ",
+           "frozen split and this dataset are not the same data.", call. = FALSE)
+    }
+    return(sort(pos))
   }
-  list(pool = pool, test = test)
+  if (is.null(test_frac) || test_frac <= 0) return(integer(0))
+  if (test_frac >= 1) {
+    stop("test_frac must be below 1 -- something has to be left to train on.",
+         call. = FALSE)
+  }
+  # A different stream from the fold draw: changing k must not reshuffle the
+  # test set, or two plans could never be compared on the same held-out data.
+  .draw_groups_for_frac(group, test_frac, seed + 1000L)
+}
+
+# Everything after the test is carved: group -> k folds over what remains.
+.plan_from_groups <- function(meta, group, k, test_frac, test_ids, seed,
+                              method, params, extra = NULL) {
+  n    <- length(group)
+  test   <- .carve_test(meta, group, test_frac, test_ids, seed)
+  pool   <- setdiff(seq_len(n), test)
+  g_pool <- group[pool]
+
+  # k = NULL means leave-one-group-out, and it can only be counted AFTER the
+  # test is carved -- the groups that went to test are not available to be
+  # folds. Resolved FIRST, because every check below compares against it.
+  if (is.null(k)) k <- dplyr::n_distinct(g_pool)
+  k <- as.integer(k)
+  if (k < 2L) {
+    stop("Only ", k, " group(s) left after the test set -- not enough to fold.",
+         call. = FALSE)
+  }
+  if (length(pool) < k) {
+    stop("Only ", length(pool), " row(s) left after the test set, for k = ", k,
+         " folds.", call. = FALSE)
+  }
+  ug <- with_local_seed(seed, sample(unique(g_pool)))
+  if (length(ug) < k) {
+    stop("Only ", length(ug), " group(s) available for k = ", k, " folds -- ",
+         "the grouping is too coarse for this many folds.", call. = FALSE)
+  }
+  sizes      <- as.integer(table(factor(g_pool, levels = ug))[ug])
+  assignment <- .deal_groups(sizes, k)[match(g_pool, ug)]
+
+  asg <- tibble::tibble(sample_id = meta$sample_id[pool], fold = assignment)
+  if (!is.null(extra)) asg[[names(extra)]] <- extra[[1]][pool]
+
+  .new_fold_plan(
+    .folds_from_assignment(assignment, pool, test, k),
+    method,
+    c(params, list(k = k, test_frac = test_frac, n_test = length(test),
+                   seed = seed)),
+    meta, assignment = asg
+  )
 }
 
 # Deal groups into k folds: largest group first, into whichever fold is
@@ -109,20 +197,48 @@ with_local_seed <- function(seed, expr) {
 
 # -- 1. holdout: the fixed split written by stage 01 --------------------------
 
-#' The single fixed split, expressed as a one-fold plan.
+#' A single random split: train / validation / test, one fold.
 #'
-#' The DEFAULT, deliberately: it reproduces exactly what the pipeline did
-#' before resampling existed, so turning resampling on is a choice the user
-#' makes, never something a version bump did to them. It is also the only plan
-#' whose validation set is the one stage 01 wrote, which is what makes results
-#' comparable with earlier runs.
+#' The cheapest plan, and the right one when the rows really are independent.
+#' On spatially clustered data it is the optimistic one -- and note that it is
+#' random on BOTH cuts, which is what keeps its two numbers comparable with
+#' each other. For a spatial question, use spatial_folds(): a spatial
+#' validation beside a random test is the mismatch this file exists to prevent.
 #'
-#' @param meta  Patch store meta.
-#' @param roles Roles to extract, in order.
-#' @return A one-fold `fold_plan`.
-holdout <- function(meta, roles = c("train", "validation", "test")) {
-  idx <- split_index_from_meta(meta, roles = roles)
-  .new_fold_plan(list(idx), "holdout", list(roles = roles), meta)
+#' @param meta            Point table; needs sample_id.
+#' @param validation_frac Fraction of the non-test rows used to score.
+#' @param test_frac       Fraction held out entirely.
+#' @param test_ids        Optional frozen test sample_ids (see .carve_test).
+#' @param seed            Draw seed.
+holdout <- function(meta, validation_frac = 0.15, test_frac = 0.15,
+                    test_ids = NULL, seed = 42L) {
+  if (!"sample_id" %in% names(meta)) {
+    stop("meta needs a sample_id column.", call. = FALSE)
+  }
+  n     <- nrow(meta)
+  group <- as.character(seq_len(n))           # every point is its own group
+  test  <- .carve_test(meta, group, test_frac, test_ids, seed)
+  pool  <- setdiff(seq_len(n), test)
+  if (length(pool) < 2L) stop("Nothing left after the test set.", call. = FALSE)
+
+  val_rel <- with_local_seed(seed,
+    sample(length(pool), max(1L, floor(validation_frac * length(pool)))))
+  val <- sort(pool[val_rel])
+  trn <- setdiff(pool, val)
+  if (length(trn) == 0L) {
+    stop("validation_frac left no training rows.", call. = FALSE)
+  }
+
+  idx <- list(train = trn, validation = val)
+  if (length(test) > 0L) idx$test <- test
+
+  .new_fold_plan(list(idx), "holdout",
+                 list(k = 1L, validation_frac = validation_frac,
+                      test_frac = test_frac, n_test = length(test),
+                      seed = seed),
+                 meta,
+                 assignment = tibble::tibble(sample_id = meta$sample_id[pool],
+                                             fold = 1L))
 }
 
 # -- 2. random k-fold ---------------------------------------------------------
@@ -140,23 +256,16 @@ holdout <- function(meta, roles = c("train", "validation", "test")) {
 #' @param k    Number of folds.
 #' @param seed Seed for the partition only (see with_local_seed): a fixed plan
 #'   reproduces even when the training seeds change.
-random_folds <- function(meta, k = 5L, seed = 42L) {
+random_folds <- function(meta, k = 5L, test_frac = 0, test_ids = NULL,
+                        seed = 42L) {
   k <- as.integer(k)
   if (k < 2L) stop("k must be at least 2.", call. = FALSE)
-  p <- .fold_pool(meta)
-  if (k > length(p$pool)) {
-    stop("k = ", k, " but the pool has only ", length(p$pool), " rows.",
-         call. = FALSE)
+  if (!"sample_id" %in% names(meta)) {
+    stop("meta needs a sample_id column.", call. = FALSE)
   }
-
-  assignment <- with_local_seed(seed, ((sample.int(length(p$pool)) - 1L) %% k) + 1L)
-
-  .new_fold_plan(
-    .folds_from_assignment(assignment, p$pool, p$test, k),
-    "random_folds", list(k = k, seed = seed), meta,
-    assignment = tibble::tibble(sample_id = meta$sample_id[p$pool],
-                                fold = assignment)
-  )
+  .plan_from_groups(meta, as.character(seq_len(nrow(meta))), k,
+                    test_frac, test_ids, seed,
+                    method = "random_folds", params = list())
 }
 
 # -- 3. spatial block k-fold --------------------------------------------------
@@ -183,24 +292,31 @@ random_folds <- function(meta, k = 5L, seed = 42L) {
 #'   NULL (default) means no buffer -- and blocking ALONE does not guarantee
 #'   separation, because a boundary can fall inside a cluster. Distance here is
 #'   EUCLIDEAN, so to guarantee that no training patch shares a pixel with a
-#'   validation patch you need max(window) * resolution * SQRT(2), not
-#'   max(window) * resolution: patch overlap is a square condition and the
-#'   diagonal escapes a circular buffer. See apply_buffer().
+#'   validation patch, max(window) * resolution is exact under the default
+#'   chebyshev metric. Under euclidean it takes sqrt(2) more, because patch
+#'   overlap is a square condition and the diagonal escapes a circle.
+#' @param buffer_metric "chebyshev" (default, the patch geometry) or
+#'   "euclidean". See apply_buffer().
 #' @param seed       Seed for dealing blocks to folds.
 #' @param blocks_per_fold Target blocks per fold when `block_size` is NULL.
-spatial_folds <- function(meta, k = 5L, block_size = NULL, buffer = NULL,
-                          seed = 42L, blocks_per_fold = 10L) {
+spatial_folds <- function(meta, k = 5L, test_frac = 0, block_size = NULL,
+                          buffer = NULL,
+                          buffer_metric = c("chebyshev", "euclidean"),
+                          test_ids = NULL, seed = 42L,
+                          blocks_per_fold = 10L) {
+  buffer_metric <- match.arg(buffer_metric)
   k <- as.integer(k)
   if (k < 2L) stop("k must be at least 2.", call. = FALSE)
   if (!all(c("x", "y") %in% names(meta))) {
     stop("meta needs x and y columns for spatial folds.", call. = FALSE)
   }
-  p <- .fold_pool(meta)
-  x <- as.numeric(meta$x)[p$pool]
-  y <- as.numeric(meta$y)[p$pool]
+  if (!"sample_id" %in% names(meta)) {
+    stop("meta needs a sample_id column.", call. = FALSE)
+  }
+  x <- as.numeric(meta$x)
+  y <- as.numeric(meta$y)
   if (anyNA(x) || anyNA(y)) {
-    stop("x/y are NA for ", sum(is.na(x) | is.na(y)), " pooled row(s).",
-         call. = FALSE)
+    stop("x/y are NA for ", sum(is.na(x) | is.na(y)), " row(s).", call. = FALSE)
   }
 
   auto <- is.null(block_size)
@@ -213,35 +329,22 @@ spatial_folds <- function(meta, k = 5L, block_size = NULL, buffer = NULL,
     stop("block_size must be a positive finite number.", call. = FALSE)
   }
 
-  bx  <- floor((x - min(x)) / block_size)
-  by  <- floor((y - min(y)) / block_size)
-  blk <- paste(bx, by, sep = "_")
-  ub  <- unique(blk)
-  if (length(ub) < k) {
-    stop("Only ", length(ub), " spatial block(s) for k = ", k,
-         " folds -- block_size is too large for this extent.", call. = FALSE)
-  }
+  blk <- paste(floor((x - min(x)) / block_size),
+               floor((y - min(y)) / block_size), sep = "_")
 
-  # Shuffle block order before the greedy pass: point tables usually arrive
-  # sorted by geography, and dealing in that order would hand each fold one
-  # contiguous strip of the map.
-  ub       <- with_local_seed(seed, sample(ub))
-  sizes    <- as.integer(table(factor(blk, levels = ub))[ub])
-  blk_fold <- .deal_groups(sizes, k)
-  assignment <- blk_fold[match(blk, ub)]
-
-  plan <- .new_fold_plan(
-    .folds_from_assignment(assignment, p$pool, p$test, k),
-    "spatial_folds",
-    list(k = k, block_size = block_size, block_size_auto = auto,
-         n_blocks = length(ub), seed = seed), meta,
-    assignment = tibble::tibble(sample_id = meta$sample_id[p$pool],
-                                fold = assignment, block = blk)
+  # The test comes out of the SAME blocks the folds will use, so no test point
+  # sits inside a block that also trains.
+  plan <- .plan_from_groups(
+    meta, blk, k, test_frac, test_ids, seed,
+    method = "spatial_folds",
+    params = list(block_size = block_size, block_size_auto = auto,
+                  n_blocks = length(unique(blk))),
+    extra  = list(block = blk)
   )
   # Blocking chooses where the cut falls; the buffer is what makes the cut
   # mean something. See apply_buffer() for why one without the other is not
   # enough -- it is measured there, not assumed.
-  apply_buffer(plan, meta, buffer)
+  apply_buffer(plan, meta, buffer, metric = buffer_metric)
 }
 
 # -- 4. grouped folds (leave-region-out) --------------------------------------
@@ -255,37 +358,29 @@ spatial_folds <- function(meta, k = 5L, block_size = NULL, buffer = NULL,
 #' @param meta  Patch store meta.
 #' @param group Group labels, one per row of `meta`.
 #' @param k     Number of folds; defaults to one per group.
-region_folds <- function(meta, group, k = NULL) {
+region_folds <- function(meta, group, k = NULL, test_frac = 0,
+                        test_ids = NULL, seed = 42L) {
   if (length(group) != nrow(meta)) {
     stop("group has ", length(group), " values but meta has ", nrow(meta),
          " rows.", call. = FALSE)
   }
-  p <- .fold_pool(meta)
-  g <- as.character(group)[p$pool]
+  g <- as.character(group)
   if (anyNA(g)) {
-    stop(sum(is.na(g)), " pooled row(s) have no group label -- decide what ",
-         "they belong to instead of letting them fall into an NA group.",
+    stop(sum(is.na(g)), " row(s) have no group label -- decide what they ",
+         "belong to instead of letting them fall into an NA group.",
          call. = FALSE)
   }
-  ug <- unique(g)
-  if (is.null(k)) k <- length(ug)
-  k <- as.integer(k)
-  if (k < 2L) stop("Need at least 2 groups (or k >= 2).", call. = FALSE)
-  if (k > length(ug)) {
-    stop("k = ", k, " but there are only ", length(ug), " group(s).",
-         call. = FALSE)
+  # k stays NULL when the caller wants leave-one-group-out: how many groups are
+  # left is only known after the test set is carved.
+  if (!is.null(k)) {
+    k <- as.integer(k)
+    if (k < 2L) stop("Need at least 2 groups (or k >= 2).", call. = FALSE)
   }
 
-  sizes      <- as.integer(table(factor(g, levels = ug))[ug])
-  g_fold     <- .deal_groups(sizes, k)
-  assignment <- g_fold[match(g, ug)]
-
-  .new_fold_plan(
-    .folds_from_assignment(assignment, p$pool, p$test, k),
-    "region_folds", list(k = k, n_groups = length(ug)), meta,
-    assignment = tibble::tibble(sample_id = meta$sample_id[p$pool],
-                                fold = assignment, group = g)
-  )
+  .plan_from_groups(meta, g, k, test_frac, test_ids, seed,
+                    method = "region_folds",
+                    params = list(n_groups = dplyr::n_distinct(g)),
+                    extra  = list(group = g))
 }
 
 # -- 5. buffer: the mechanism that actually separates folds -------------------
@@ -315,13 +410,19 @@ region_folds <- function(meta, group, k = NULL) {
 # 0.98% of validation points per fold still shared patch pixels with training,
 # even though "same raster cell" was a clean 0%.
 #
-# So, with Euclidean distance:
+# So `metric = "chebyshev"` is the default: a SQUARE buffer, which is the
+# geometry of the thing being excluded. With it, `buffer = max(window) * res`
+# is exact, and no training point is discarded for being diagonally far but
+# circularly near.
 #
-#     buffer >= max(window) * resolution * sqrt(2)     (41% wider)
+#     chebyshev  buffer >= max(window) * resolution            exact
+#     euclidean  buffer >= max(window) * resolution * sqrt(2)  41% wider,
+#                                                              same guarantee,
+#                                                              more training
+#                                                              data thrown away
 #
-# A square buffer would be both exact and cheaper (buffer = w * res, no
-# diagonal waste) and is the right geometry for square patches -- see the
-# `metric` argument proposed in docs/revisao_e_prospeccao_2026_09.md §A0.
+# `metric = "euclidean"` stays available for a target whose correlation really
+# is isotropic in distance rather than tied to the patch grid.
 #
 # Above that floor the buffer becomes a statement about how far the target
 # autocorrelates, which is a question about the soil, not about code.
@@ -349,8 +450,10 @@ region_folds <- function(meta, group, k = NULL) {
 #' @param buffer Exclusion radius in the units of x/y. NULL or 0 returns the
 #'   plan unchanged.
 #' @return The plan, with buffered training sets and a `buffer_dropped` tibble.
-apply_buffer <- function(plan, meta, buffer) {
+apply_buffer <- function(plan, meta, buffer,
+                         metric = c("chebyshev", "euclidean")) {
   stopifnot(inherits(plan, "fold_plan"))
+  metric <- match.arg(metric)
   if (is.null(buffer) || buffer <= 0) return(plan)
   if (!all(c("x", "y") %in% names(meta))) {
     stop("meta needs x and y columns to apply a buffer.", call. = FALSE)
@@ -362,7 +465,7 @@ apply_buffer <- function(plan, meta, buffer) {
   for (j in seq_along(plan$folds)) {
     f    <- plan$folds[[j]]
     near <- .near_any(x[f$train], y[f$train], x[f$validation], y[f$validation],
-                      buffer)
+                      buffer, metric)
     n_before <- length(f$train)
     plan$folds[[j]]$train <- f$train[!near]
     if (length(plan$folds[[j]]$train) == 0L) {
@@ -374,8 +477,9 @@ apply_buffer <- function(plan, meta, buffer) {
       pct_dropped = round(100 * sum(near) / n_before, 2))
   }
 
-  plan$params$buffer  <- buffer
-  plan$buffer_dropped <- dplyr::bind_rows(dropped)
+  plan$params$buffer        <- buffer
+  plan$params$buffer_metric <- metric
+  plan$buffer_dropped       <- dplyr::bind_rows(dropped)
   plan
 }
 
@@ -386,7 +490,9 @@ apply_buffer <- function(plan, meta, buffer) {
 # that product is ~2e8 per fold, the difference between a second and minutes.
 # Distances inside the candidate set are exact: the buckets narrow the search,
 # they never decide the answer.
-.near_any <- function(tx, ty, vx, vy, buffer) {
+.near_any <- function(tx, ty, vx, vy, buffer,
+                      metric = c("chebyshev", "euclidean")) {
+  metric <- match.arg(metric)
   if (length(tx) == 0L || length(vx) == 0L) return(rep(FALSE, length(tx)))
   b2 <- buffer^2
   ox <- min(c(tx, vx)); oy <- min(c(ty, vy))
@@ -406,9 +512,15 @@ apply_buffer <- function(plan, meta, buffer) {
                    use.names = FALSE)
     if (length(cand) == 0L) next
     cx <- vx[cand]; cy <- vy[cand]
-    hit[rows] <- vapply(rows, function(i) {
-      any((cx - tx[i])^2 + (cy - ty[i])^2 <= b2)
-    }, logical(1))
+    hit[rows] <- if (metric == "chebyshev") {
+      vapply(rows, function(i) {
+        any(pmax(abs(cx - tx[i]), abs(cy - ty[i])) <= buffer)
+      }, logical(1))
+    } else {
+      vapply(rows, function(i) {
+        any((cx - tx[i])^2 + (cy - ty[i])^2 <= b2)
+      }, logical(1))
+    }
   }
   hit
 }
@@ -442,6 +554,126 @@ fold_leakage_report <- function(plan, meta, cell_size, windows = c(3L, 9L, 15L))
       dplyr::mutate(fold = j, .before = 1)
   })
   dplyr::bind_rows(out)
+}
+
+# -- development subsampling --------------------------------------------------
+#
+# A pipeline you can run end to end in minutes is a pipeline you can fix
+# without fear. Subsampling exists for that, and for nothing else: the number
+# it produces is only ever comparable with another number from the same
+# subsample.
+#
+# WHY WHOLE BLOCKS AND NOT RANDOM POINTS. Dropping 90% of points at random
+# THINS the spatial clusters. Leakage falls, the buffer discards fewer points,
+# and the folds come out looking cleaner than the data really is -- so a bug in
+# the spatial logic hides behind a healthy-looking report. Keeping whole blocks
+# preserves local density, which is the very phenomenon the spatial machinery
+# exists to control.
+#
+# It is also faster for a reason that has nothing to do with statistics:
+# extraction reads raster strips covering the points, so points concentrated in
+# fewer regions mean fewer strips.
+
+#' Keep roughly `frac` of the points, by whole spatial blocks.
+#'
+#' @param x,y        Coordinates, in the units the block size is given in.
+#' @param frac       Target fraction of POINTS (not of blocks) to keep.
+#' @param block_size Block side, same units as x/y.
+#' @param seed       Seed for the block draw; independent of every other
+#'   stream (see with_local_seed).
+#' @return Integer row positions to keep, with attributes describing what was
+#'   drawn -- a subsample whose composition cannot be reported is a subsample
+#'   whose results cannot be interpreted.
+block_subsample <- function(x, y, frac, block_size, seed = 42L) {
+  stopifnot(length(x) == length(y), frac > 0, frac <= 1, block_size > 0)
+  n <- length(x)
+  if (frac >= 1) return(seq_len(n))
+
+  blk <- paste(floor((x - min(x)) / block_size),
+               floor((y - min(y)) / block_size), sep = "_")
+
+  # Same primitive the test set is carved with -- one implementation, so the
+  # subsample and the split cannot drift apart in how they treat a block.
+  keep <- .draw_groups_for_frac(blk, frac, seed)
+  used <- unique(blk[keep])
+
+  structure(
+    keep,
+    n_total        = n,
+    n_kept         = length(keep),
+    frac_requested = frac,
+    frac_actual    = length(keep) / n,
+    blocks_total   = dplyr::n_distinct(blk),
+    blocks_kept    = length(used),
+    block_size     = block_size,
+    seed           = seed
+  )
+}
+
+#' One line describing a block_subsample() result, for logs and metadata.
+describe_subsample <- function(idx) {
+  sprintf(
+    "%s of %s points (%.1f%%, requested %.1f%%) from %s of %s blocks of %s",
+    format(attr(idx, "n_kept"), big.mark = ","),
+    format(attr(idx, "n_total"), big.mark = ","),
+    100 * attr(idx, "frac_actual"), 100 * attr(idx, "frac_requested"),
+    format(attr(idx, "blocks_kept"), big.mark = ","),
+    format(attr(idx, "blocks_total"), big.mark = ","),
+    format(attr(idx, "block_size"))
+  )
+}
+
+# -- refitting after selection ------------------------------------------------
+
+#' A single train/validation split for the FINAL fit, by the plan's own rules.
+#'
+#' After cross-validation has chosen a configuration, the final model is
+#' refitted on everything except the test set. It still needs somewhere to stop
+#' (early stopping), and that somewhere must be carved the SAME way the
+#' validation was carved during selection -- a spatially-selected model whose
+#' final fit stops on a randomly drawn validation set has changed the question
+#' between the two stages.
+#'
+#' The test set is taken from the tuning plan verbatim, never redrawn: the
+#' model that gets tested must not have trained on any row the selection
+#' already held out.
+#'
+#' @param plan            The fold_plan used for tuning.
+#' @param meta            The same point table.
+#' @param validation_frac Share of the non-test rows used to stop training.
+#' @return A one-fold `fold_plan`.
+refit_split <- function(plan, meta, validation_frac = 0.15) {
+  stopifnot(inherits(plan, "fold_plan"))
+  test_pos <- plan$folds[[1]]$test
+  test_ids <- if (length(test_pos)) meta$sample_id[test_pos] else NULL
+  k        <- max(2L, as.integer(round(1 / validation_frac)))
+  seed     <- plan$params$seed %||% 42L
+
+  # One fold of a k-fold plan with k = 1/validation_frac IS a holdout carved by
+  # that plan's criterion -- so there is one implementation, not two.
+  sub_plan <- switch(
+    plan$method,
+    spatial_folds = spatial_folds(
+      meta, k = k, test_ids = test_ids,
+      block_size    = plan$params$block_size,
+      buffer        = plan$params$buffer,
+      buffer_metric = plan$params$buffer_metric %||% "chebyshev",
+      seed = seed),
+    region_folds  = stop("refit_split() for region_folds needs the group ",
+                         "vector -- pass it explicitly.", call. = FALSE),
+    random_folds  = random_folds(meta, k = k, test_ids = test_ids, seed = seed),
+    holdout       = holdout(meta, validation_frac = validation_frac,
+                            test_ids = test_ids, seed = seed),
+    stop("Unknown plan method: ", plan$method, call. = FALSE)
+  )
+
+  if (identical(plan$method, "holdout")) return(sub_plan)
+
+  idx <- sub_plan$folds[[1]]
+  .new_fold_plan(list(idx), paste0("refit_", plan$method),
+                 c(sub_plan$params, list(refit_of = plan$method,
+                                         validation_frac = validation_frac)),
+                 meta, assignment = sub_plan$assignment)
 }
 
 # -- validation and reporting -------------------------------------------------

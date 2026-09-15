@@ -8,8 +8,7 @@
 # patch store — not as a property of the stored data. That is the change that
 # makes cross-validation possible: the same 8.6 GB of patches serve any number
 # of folds, each with its own scaling, at the cost of one broadcast per fold.
-# `split_index_from_meta()` below is the degenerate case (a single fixed
-# holdout, read from the dataset_role column) and is what the pipeline uses
+# A fold plan (R/resample.R) is what the pipeline uses
 # today; a spatial-fold constructor plugs into exactly the same slot.
 #
 # Channel ORDER is the contract that ties the whole pipeline together. It is
@@ -207,40 +206,11 @@ load_patch_store <- function(patch_dir, window_sizes = NULL, verbose = TRUE) {
 
 # ── split as an index ─────────────────────────────────────────────────────────
 
-#' Read the fixed holdout out of the meta table's dataset_role column.
-#'
-#' The single-holdout case, kept explicit so the call site reads the same as it
-#' will when a resampling constructor takes its place.
-#'
-#' @param meta  The patch store's meta tibble.
-#' @param roles Role names to extract, in order.
-#' @return Named list of integer row positions into `meta`.
-split_index_from_meta <- function(meta,
-                                  roles = c("train", "validation", "test")) {
-  if (!"dataset_role" %in% names(meta)) {
-    stop("meta has no dataset_role column.", call. = FALSE)
-  }
-  idx <- lapply(roles, function(r) which(meta$dataset_role == r))
-  names(idx) <- roles
-
-  empty <- roles[lengths(idx) == 0L]
-  if (length(empty) > 0L) {
-    stop("No rows for role(s): ", paste(empty, collapse = ", "), call. = FALSE)
-  }
-
-  # Disjoint and complete: a point in two splits is leakage, a point in none is
-  # silently discarded data. Both are worth failing on.
-  all_idx <- unlist(idx, use.names = FALSE)
-  if (anyDuplicated(all_idx)) {
-    stop("Split index is not disjoint -- some rows appear in more than one role.",
-         call. = FALSE)
-  }
-  if (length(all_idx) != nrow(meta)) {
-    message("NOTE: ", nrow(meta) - length(all_idx),
-            " row(s) of the patch store belong to no role and will be unused.")
-  }
-  idx
-}
+# The split used to be read from a `dataset_role` column on the store's meta.
+# It is not any more, and the reader was removed rather than left lying about:
+# the store carries points, coordinates and values, and WHO TRAINS is decided
+# by a fold plan (R/resample.R) in seconds. That is what stops a change of
+# split strategy from costing a re-extraction.
 
 # ── aligning point values to the store ────────────────────────────────────────
 
@@ -280,7 +250,7 @@ align_points_to_meta <- function(points, meta) {
 #' @param points       Point values, aligned via align_points_to_meta().
 #' @param type_table   Tibble with predictor / is_dummy / is_percentage, in
 #'   channel order.
-#' @param index        From split_index_from_meta() or a fold constructor.
+#' @param index        One fold of a fold_plan: named list of row positions.
 #' @param window_sizes Windows to include (default: all loaded).
 #' @param scaling      Optional precomputed scaling; when NULL it is fitted
 #'   from the fold's training rows, which is the point of the whole design.

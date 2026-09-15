@@ -356,9 +356,12 @@ train_one_cnn <- function(
   pred_val2  <- predict_loader(model, loaders$validation,
                                points_valid$validation, "validation", transform,
                                device, clamp)
-  pred_test  <- predict_loader(model, loaders$test,
-                               points_valid$test, "test", transform, device,
-                               clamp)
+  pred_test <- if (!is.null(loaders$test)) {
+    predict_loader(model, loaders$test, points_valid$test, "test", transform,
+                   device, clamp)
+  } else {
+    NULL
+  }
 
   pred_all <- dplyr::mutate(
     dplyr::bind_rows(pred_train, pred_val2, pred_test),
@@ -368,8 +371,12 @@ train_one_cnn <- function(
   perf_all      <- make_performance_table(pred_all)
   perf_quantile <- make_quantile_performance(pred_all)
 
-  gate <- extract_gate_analysis(model, loaders$test, points_valid$test,
-                                 "test", device)
+  # Gate analysis on the test set when there is one, otherwise on validation:
+  # it is an interpretability readout, not a metric, so it is better computed
+  # on held-out data than skipped.
+  gate_role <- if (!is.null(loaders$test)) "test" else "validation"
+  gate <- extract_gate_analysis(model, loaders[[gate_role]],
+                                points_valid[[gate_role]], gate_role, device)
 
   # `model` is deliberately NOT returned. Nothing consumed it, and because the
   # caller only overwrites `result` on the next iteration, returning it kept a
@@ -754,6 +761,12 @@ run_cnn_tuning <- function(
     # Append to comparison table
     val_perf  <- dplyr::filter(result$perf_all, dataset_role == "validation")
     test_perf <- dplyr::filter(result$perf_all, dataset_role == "test")
+    if (nrow(test_perf) == 0L) {
+      # No test set in this plan: the columns still exist, holding NA, so the
+      # table has one shape whatever the plan was.
+      test_perf <- val_perf
+      test_perf[] <- lapply(test_perf, function(z) z[NA_integer_])
+    }
     val_metrics <- val_perf %>%
       dplyr::select(n, ccc, r2, mae, nse, rmse, rpd, mqi) %>%
       dplyr::rename_with(~ paste0("val_", .x))
@@ -981,16 +994,22 @@ run_cnn_resample <- function(tune_grid, store, points, type_table, plan,
 
   train_ds <- make_ds("train")
   val_ds   <- make_ds("validation")
-  test_ds  <- make_ds("test")
+  # The test role is OPTIONAL. A plan is allowed to carve no test set -- the
+  # framework does not invent one nobody asked for -- and training must work
+  # under that, evaluating and reporting only what exists.
+  test_ds  <- if (!is.null(cache$test)) make_ds("test") else NULL
 
   # drop_last = TRUE on the training loader: prevents a final batch of size 1,
   # which would make BatchNorm fail (variance of a single sample). Eval loaders
   # keep every sample and never shuffle – predict_loader() depends on that,
   # since it pairs loader row i with metadata row i.
-  list(
+  out <- list(
     train      = torch::dataloader(train_ds, batch_size = bs_train, shuffle = TRUE, drop_last = TRUE),
     train_eval = torch::dataloader(train_ds, batch_size = bs_eval,  shuffle = FALSE),
-    validation = torch::dataloader(val_ds,   batch_size = bs_eval,  shuffle = FALSE),
-    test       = torch::dataloader(test_ds,  batch_size = bs_eval,  shuffle = FALSE)
+    validation = torch::dataloader(val_ds,   batch_size = bs_eval,  shuffle = FALSE)
   )
+  if (!is.null(test_ds)) {
+    out$test <- torch::dataloader(test_ds, batch_size = bs_eval, shuffle = FALSE)
+  }
+  out
 }

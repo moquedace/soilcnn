@@ -7,9 +7,14 @@
 # is known by construction.
 #
 # Verifies:
-#   1. holdout() reproduces the dataset_role split exactly
+#   1. the PLAN carves the test set -- nothing upstream decides roles, and the
+#      point table carries no dataset_role column at all
+#   1b. the criterion cuts the test the SAME way it cuts the folds: a spatial
+#      test comes out of whole blocks, a random one does not. And changing k
+#      does not move the test set, or two plans could not be compared.
 #   2. every plan: train and validation disjoint, test in neither
-#   3. k-fold plans partition the pool -- each row validated exactly ONCE
+#   3. k-fold plans partition what is left after the test -- each row
+#      validated exactly ONCE
 #   4. the test set is identical in every fold and never trained on
 #   5. spatial_folds(): no spatial block is split across folds -- but a
 #      CLUSTER can be, because the grid is drawn on the map and not on the
@@ -28,6 +33,8 @@
 #  13. summarise_resamples() / seed_noise_floor(): means and spreads computed
 #      by hand, and the winner's curse demonstrated -- the config holding the
 #      single best run is NOT the config with the best mean
+#  14. block_subsample(): keeps WHOLE blocks and therefore preserves local
+#      density, where a random subsample of the same size destroys it
 #
 # Run: source("D:/.../tests/test_resample.R")    (CPU, no torch needed)
 
@@ -63,6 +70,9 @@ root <- (function() {
 source(file.path(root, "tests", "helper.R"))
 source(file.path(root, "R", "utils.R"))
 source(file.path(root, "R", "dataset.R"))
+# diagnostics.R owns spatial_overlap_report(), which resample.R calls from
+# fold_leakage_report() and which this file asserts directly.
+source(file.path(root, "R", "diagnostics.R"))
 source(file.path(root, "R", "resample.R"))
 
 ok <- c()
@@ -80,44 +90,44 @@ n_per  <- 30L
 site_x <- rep(seq(0, 150000, length.out = 4L), times = 3L)
 site_y <- rep(seq(0, 100000, length.out = 3L), each  = 4L)
 
+# NOTE: no dataset_role column. That is the contract -- the point table says
+# where the points are and what they are worth, and NOTHING about who trains.
 meta <- tibble::tibble(
-  sample_id    = seq_len(n_site * n_per),
-  profile_id   = seq_len(n_site * n_per),
-  site         = rep(seq_len(n_site), each = n_per),
-  x            = rep(site_x, each = n_per) + runif(n_site * n_per, -200, 200),
-  y            = rep(site_y, each = n_per) + runif(n_site * n_per, -200, 200),
-  dataset_role = "train"
+  sample_id  = seq_len(n_site * n_per),
+  profile_id = seq_len(n_site * n_per),
+  site       = rep(seq_len(n_site), each = n_per),
+  x          = rep(site_x, each = n_per) + runif(n_site * n_per, -200, 200),
+  y          = rep(site_y, each = n_per) + runif(n_site * n_per, -200, 200)
 )
-# a fixed holdout on top, the way stage 01 writes it
-meta$dataset_role[seq(2, nrow(meta), by = 7)]  <- "validation"
-meta$dataset_role[seq(5, nrow(meta), by = 11)] <- "test"
-
-pool_ids <- meta$sample_id[meta$dataset_role %in% c("train", "validation")]
-test_idx <- which(meta$dataset_role == "test")
 
 cat("  pontos sinteticos    : ", nrow(meta), " (", n_site, " sitios x ", n_per,
     ", sitios a 50 km)\n", sep = "")
-cat("  pool / teste         : ", length(pool_ids), " / ", length(test_idx), "\n",
-    sep = "")
 
-# -- 1. holdout reproduces the fixed split ------------------------------------
+# -- 1. the plan carves the test set, by its own criterion --------------------
 
-hp <- holdout(meta)
-ok["holdout_is_one_fold"]   <- hp$n_folds == 1L
-ok["holdout_method_label"]  <- hp$method == "holdout"
-ok["holdout_train_matches"] <- identical(
-  sort(hp$folds[[1]]$train), sort(which(meta$dataset_role == "train")))
-ok["holdout_val_matches"] <- identical(
-  sort(hp$folds[[1]]$validation),
-  sort(which(meta$dataset_role == "validation")))
-ok["holdout_test_matches"] <- identical(sort(hp$folds[[1]]$test), sort(test_idx))
+test_frac <- 0.15
+
+hp <- holdout(meta, validation_frac = 0.2, test_frac = test_frac, seed = 7L)
+ok["holdout_is_one_fold"]  <- hp$n_folds == 1L
+ok["holdout_method_label"] <- hp$method == "holdout"
+ok["holdout_three_roles"]  <- setequal(names(hp$folds[[1]]),
+                                       c("train", "validation", "test"))
+ok["holdout_covers_everything"] <- identical(
+  sort(unlist(hp$folds[[1]], use.names = FALSE)), seq_len(nrow(meta)))
 
 # -- plans under test ---------------------------------------------------------
 
 k  <- 4L
-rp <- random_folds(meta, k = k, seed = 7L)
-sp <- spatial_folds(meta, k = k, block_size = 25000, seed = 7L)
-gp <- region_folds(meta, group = meta$site)
+rp <- random_folds(meta, k = k, test_frac = test_frac, seed = 7L)
+sp <- spatial_folds(meta, k = k, test_frac = test_frac, block_size = 25000,
+                    seed = 7L)
+gp <- region_folds(meta, group = meta$site, test_frac = test_frac, seed = 7L)
+
+# A plan with no test set is legitimate, and must be possible to ask for --
+# the framework does not invent a test set nobody requested.
+np <- spatial_folds(meta, k = k, block_size = 25000, seed = 7L)
+ok["no_test_when_not_asked"] <- all(vapply(
+  np$folds, function(f) is.null(f$test), logical(1)))
 
 plans <- list(holdout = hp, random = rp, spatial = sp, region = gp)
 
@@ -134,19 +144,23 @@ for (nm in names(plans)) {
     p$folds, function(f) length(intersect(f$train, f$validation)) == 0L,
     logical(1)))
 
-  # the test rows are the SAME rows in every fold, and never train
+  # the test rows are the SAME rows in every fold of the plan, and never train
+  p_test <- p$folds[[1]]$test
+  ok[paste0(nm, "_test_exists")] <- length(p_test) > 0L
   ok[paste0(nm, "_test_constant")] <- all(vapply(
-    p$folds, function(f) identical(sort(f$test), sort(test_idx)), logical(1)))
+    p$folds, function(f) identical(sort(f$test), sort(p_test)), logical(1)))
+  ok[paste0(nm, "_test_frac_respected")] <-
+    abs(length(p_test) / nrow(meta) - test_frac) < 0.12   # whole groups overshoot
   ok[paste0(nm, "_test_never_trains")] <- all(vapply(
     p$folds,
     function(f) length(intersect(f$test, c(f$train, f$validation))) == 0L,
     logical(1)))
 
   if (nm != "holdout") {
-    # every pooled row validated exactly once across the k folds
+    # every NON-TEST row validated exactly once across the k folds
     seen <- sort(unlist(lapply(p$folds, `[[`, "validation"), use.names = FALSE))
     ok[paste0(nm, "_partitions_pool")] <-
-      identical(seen, sort(which(meta$sample_id %in% pool_ids)))
+      identical(seen, sort(setdiff(seq_len(nrow(meta)), p_test)))
     # and trained on in exactly (folds - 1) of them. Uses the PLAN's own
     # fold count, not the k of this block: region_folds() defaults to
     # leave-one-group-out, so it has one fold per site, not k.
@@ -154,6 +168,76 @@ for (nm in names(plans)) {
     ok[paste0(nm, "_trained_k_minus_1")] <- all(trained == (p$n_folds - 1L))
   }
 }
+
+# -- 1b. the criterion cuts the TEST the same way it cuts the folds ----------
+#
+# The whole point of moving the split into the plan. A spatial validation next
+# to a randomly drawn test set puts two incomparable numbers in one table --
+# measured on the real data, the random test came out 0.042 CCC easier.
+
+blk_of <- function(rows, bs = 25000) {
+  paste(floor((meta$x[rows] - min(meta$x)) / bs),
+        floor((meta$y[rows] - min(meta$y)) / bs), sep = "_")
+}
+sp_test <- sp$folds[[1]]$test
+sp_pool <- setdiff(seq_len(nrow(meta)), sp_test)
+ok["spatial_test_is_whole_blocks"] <-
+  length(intersect(blk_of(sp_test), blk_of(sp_pool))) == 0L
+
+# THE DISTINCTION THE REPORT MUST KEEP. An identical patch (two points in one
+# raster cell) is a defect under any plan. Shared pixels between neighbours are
+# not -- they are what neighbouring samples look like, and under a random plan
+# they are the condition being measured. Conflating them turns a legitimate
+# random split into a reported failure.
+ov <- spatial_overlap_report(round(meta$y[sp_pool] / 250),
+                             round(meta$x[sp_pool] / 250),
+                             ifelse(seq_along(sp_pool) %% 4 == 0,
+                                    "validation", "train"))
+ok["report_flags_identical_patches"] <-
+  all(ov$matters[grepl("identical", ov$criterion)])
+ok["report_does_not_flag_shared_pixels"] <-
+  !any(ov$matters[grepl("shares pixels", ov$criterion)])
+ok["report_covers_both"] <- dplyr::n_distinct(ov$matters) == 2L
+
+# What the block criterion promises is BLOCKS, not sites: the grid is drawn on
+# the map at an origin unrelated to the points, so a boundary can still cut a
+# cluster. Asserting "no site split" would demand a guarantee the method does
+# not make, and would hide the very fact the buffer exists to handle.
+n_site_cut_test <- length(intersect(meta$site[sp_test], meta$site[sp_pool]))
+ok["spatial_test_cuts_few_sites"] <- n_site_cut_test <= 2L
+
+# A random plan cuts nearly all of them -- and that is NOT a defect, it is what
+# a random split is. Asserted so the difference between the two criteria is a
+# measured fact rather than a claim.
+rp_test <- rp$folds[[1]]$test
+n_site_cut_rand <- length(intersect(
+  meta$site[rp_test], meta$site[setdiff(seq_len(nrow(meta)), rp_test)]))
+ok["random_test_cuts_many_sites"] <- n_site_cut_rand > n_site_cut_test
+
+cat("  sitios em ambos os lados do teste: espacial ", n_site_cut_test,
+    " | aleatorio ", n_site_cut_rand, "  (aleatorio nao promete separar)\n",
+    sep = "")
+
+# CHANGING k MUST NOT MOVE THE TEST SET. Two plans that score on different
+# held-out data cannot be compared, so the test draw runs on its own stream.
+sp_k7 <- spatial_folds(meta, k = 7L, test_frac = test_frac,
+                       block_size = 25000, seed = 7L)
+ok["test_set_independent_of_k"] <- identical(sort(sp_k7$folds[[1]]$test),
+                                             sort(sp_test))
+
+# A frozen test set is honoured verbatim: a test set redrawn every run is not
+# a test set.
+frozen <- meta$sample_id[sp_test]
+sp_frozen <- spatial_folds(meta, k = 3L, test_ids = frozen,
+                           block_size = 25000, seed = 99L)
+ok["frozen_test_is_honoured"] <- identical(sort(sp_frozen$folds[[1]]$test),
+                                           sort(sp_test))
+ok["frozen_test_rejects_alien_ids"] <- inherits(
+  try(spatial_folds(meta, k = 3L, test_ids = c(frozen, 999999L),
+                    block_size = 25000), silent = TRUE), "try-error")
+
+cat("  teste carvado pelo plano : espacial ", length(sp_test),
+    " pts (blocos inteiros) | aleatorio ", length(rp_test), " pts\n", sep = "")
 
 # -- 5. spatial: a block is never split across folds --------------------------
 
@@ -196,8 +280,8 @@ near_share <- function(plan) {
   mean(shares)
 }
 
-sp_buf <- spatial_folds(meta, k = k, block_size = 25000, buffer = 2000,
-                        seed = 7L)
+sp_buf <- spatial_folds(meta, k = k, test_frac = test_frac,
+                        block_size = 25000, buffer = 2000, seed = 7L)
 
 share_random   <- near_share(rp)
 share_spatial  <- near_share(sp)
@@ -224,7 +308,7 @@ grp_fold <- gp$assignment %>%
   dplyr::group_by(group) %>%
   dplyr::summarise(n_folds = dplyr::n_distinct(fold), .groups = "drop")
 ok["region_group_not_split"] <- all(grp_fold$n_folds == 1L)
-ok["region_logo_by_default"]  <- gp$n_folds == n_site
+ok["region_logo_by_default"]  <- gp$n_folds <= n_site   # minus the test groups
 ok["region_k_respected"]      <- region_folds(meta, meta$site, k = 3L)$n_folds == 3L
 
 # -- 8. greedy dealing balances very uneven groups ----------------------------
@@ -249,11 +333,12 @@ ok["spatial_folds_balanced"] <-
 # -- 9. reproducibility -------------------------------------------------------
 
 ok["random_same_seed_same_plan"] <- identical(
-  random_folds(meta, k = k, seed = 7L)$folds, rp$folds)
+  random_folds(meta, k = k, test_frac = test_frac, seed = 7L)$folds, rp$folds)
 ok["random_diff_seed_diff_plan"] <- !identical(
-  random_folds(meta, k = k, seed = 8L)$folds, rp$folds)
+  random_folds(meta, k = k, test_frac = test_frac, seed = 8L)$folds, rp$folds)
 ok["spatial_same_seed_same_plan"] <- identical(
-  spatial_folds(meta, k = k, block_size = 25000, seed = 7L)$folds, sp$folds)
+  spatial_folds(meta, k = k, test_frac = test_frac, block_size = 25000,
+                seed = 7L)$folds, sp$folds)
 
 # -- 10. fold construction does not consume the caller's RNG stream -----------
 #
@@ -278,12 +363,29 @@ ok["huge_block_fails"]       <- fails(spatial_folds(meta, k = 4L,
                                                     block_size = 1e9))
 ok["na_group_fails"]         <- fails(region_folds(meta, c(NA, meta$site[-1])))
 ok["wrong_group_length_fails"] <- fails(region_folds(meta, meta$site[-1]))
-ok["no_dataset_role_fails"]  <- fails(random_folds(dplyr::select(meta,
-                                                                -dataset_role)))
+ok["no_sample_id_fails"]     <- fails(random_folds(dplyr::select(meta,
+                                                                -sample_id)))
+ok["test_frac_1_fails"]      <- fails(random_folds(meta, k = 3L, test_frac = 1))
 
 # -- 12. the buffer: what it guarantees, and what it costs -------------------
 
 ok["buffer_recorded_in_params"] <- isTRUE(sp_buf$params$buffer == 2000)
+ok["buffer_metric_is_chebyshev_by_default"] <-
+  identical(sp_buf$params$buffer_metric, "chebyshev")
+
+# THE GEOMETRY. Two square patches of width w share a pixel when the centres
+# are within w-1 cells in BOTH axes -- a square condition. A circular buffer of
+# radius w lets the diagonal through: at (14, 14) the distance is 14*sqrt(2) =
+# 19.8, outside a circle of 15, and the patches still share the corner pixel.
+# Measured on the real run: 0.51%-0.98% of validation points per fold still
+# shared patch pixels while "same raster cell" reported a clean 0%.
+tx <- c(0, 0); ty <- c(0, 0)
+ok["euclidean_lets_the_diagonal_escape"] <-
+  identical(.near_any(tx[1], ty[1], 14, 14, 15, "euclidean"), FALSE)
+ok["chebyshev_catches_the_diagonal"] <-
+  identical(.near_any(tx[1], ty[1], 14, 14, 15, "chebyshev"), TRUE)
+ok["chebyshev_still_excludes_far_points"] <-
+  identical(.near_any(tx[1], ty[1], 16, 16, 15, "chebyshev"), FALSE)
 ok["buffer_cost_is_reported"]   <- is.data.frame(sp_buf$buffer_dropped) &&
   nrow(sp_buf$buffer_dropped) == k
 ok["buffer_actually_dropped"]   <- sum(sp_buf$buffer_dropped$n_dropped) > 0L
@@ -451,5 +553,59 @@ cat("  piso de ruido (fixture)  : sd mediano ",
     sprintf("%.3f", nf$median_sd), " | amplitude ",
     sprintf("%.3f", nf$max_range),
     "  <- diferenca menor que isso nao e evidencia\n", sep = "")
+
+# -- 14. block_subsample() ----------------------------------------------------
+#
+# The property that matters is NOT "keeps 10% of points" -- it is "keeps whole
+# blocks". A subsample that thins clusters makes the spatial machinery look
+# healthier than it is, which is the one failure mode that would waste the
+# whole development cycle it exists to speed up.
+
+sub <- block_subsample(meta$x, meta$y, frac = 0.30, block_size = 25000,
+                       seed = 3L)
+
+ok["subsample_hits_the_target"] <- attr(sub, "frac_actual") >= 0.30 &&
+  attr(sub, "frac_actual") < 0.45          # overshoots by at most one block
+ok["subsample_keeps_whole_blocks"] <- {
+  bx <- floor((meta$x - min(meta$x)) / 25000)
+  by <- floor((meta$y - min(meta$y)) / 25000)
+  blk <- paste(bx, by, sep = "_")
+  kept <- unique(blk[sub])
+  # every point of every kept block is present: no block is half in
+  all(which(blk %in% kept) %in% sub)
+}
+
+# THE assertion: local density survives. Within the kept blocks, the mean
+# number of neighbours under 1 km must be unchanged -- that is what a random
+# subsample would destroy.
+neigh_density <- function(rows) {
+  xx <- meta$x[rows]; yy <- meta$y[rows]
+  mean(vapply(seq_along(xx), function(i)
+    sum((xx - xx[i])^2 + (yy - yy[i])^2 < 1000^2) - 1L, numeric(1)))
+}
+d_full  <- neigh_density(which(meta$sample_id %in% meta$sample_id))
+d_block <- neigh_density(sub)
+d_rand  <- neigh_density(with_local_seed(3L,
+             sample(nrow(meta), length(sub))))
+
+ok["block_subsample_preserves_density"] <- d_block > 0.8 * d_full
+ok["random_subsample_destroys_density"] <- d_rand  < 0.6 * d_full
+
+cat("  vizinhos <1 km por ponto : completo ", sprintf("%.1f", d_full),
+    " | por bloco ", sprintf("%.1f", d_block),
+    " | aleatorio ", sprintf("%.1f", d_rand), "
+", sep = "")
+
+ok["subsample_is_reproducible"] <- identical(
+  as.integer(block_subsample(meta$x, meta$y, 0.30, 25000, seed = 3L)),
+  as.integer(sub))
+ok["subsample_frac_1_is_identity"] <- identical(
+  as.integer(block_subsample(meta$x, meta$y, 1, 25000)), seq_len(nrow(meta)))
+ok["subsample_describes_itself"] <- grepl("blocks of", describe_subsample(sub))
+
+# It must not consume the caller's RNG stream either.
+set.seed(7); b1 <- runif(3)
+set.seed(7); invisible(block_subsample(meta$x, meta$y, 0.3, 25000, seed = 99L))
+ok["subsample_leaves_rng_alone"] <- identical(b1, runif(3))
 
 .report(ok, "test_resample")

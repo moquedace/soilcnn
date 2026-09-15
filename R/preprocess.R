@@ -170,6 +170,27 @@ scale_patches <- function(x, scaling, inplace = FALSE) {
 }
 
 #' Same operation on a plain R array, for callers not holding a tensor.
+#' Apply the same affine scaling to a [n_rows, n_channels] matrix.
+#'
+#' The table view of the same transform `scale_patches()` applies to patches.
+#' One implementation of the arithmetic, three shapes -- tensor, array, matrix
+#' -- because the map and the model must be built with the same constants and
+#' the same formula, and two hand-written copies of an affine transform is
+#' exactly how they stop agreeing.
+#'
+#' @param mat     Numeric matrix, columns in channel order.
+#' @param scaling From fit_scaling(), rows in the SAME channel order.
+scale_patches_matrix <- function(mat, scaling) {
+  if (ncol(mat) != nrow(scaling)) {
+    stop("matrix has ", ncol(mat), " columns but scaling has ", nrow(scaling),
+         " rows -- channel order must match exactly.", call. = FALSE)
+  }
+  for (i in seq_len(ncol(mat))) {
+    mat[, i] <- (mat[, i] - scaling$center[i]) / scaling$scale[i]
+  }
+  mat
+}
+
 scale_patches_array <- function(x, scaling) {
   n_ch <- dim(x)[2]
   if (nrow(scaling) != n_ch) {

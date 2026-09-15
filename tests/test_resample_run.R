@@ -90,8 +90,6 @@ y_true <- y_true - min(y_true) + 1          # positive, so log1p is defined
 meta <- tibble::tibble(
   profile_id       = seq_len(n_pts),
   sample_id        = seq_len(n_pts),
-  dataset_role     = rep(c("train", "train", "validation", "test"),
-                         length.out = n_pts),
   x                = x,
   y                = y,
   target_native    = y_true,
@@ -176,7 +174,8 @@ quiet_run <- function(...) {
 
 res1 <- quiet_run(
   tune_grid = grid, store = store, points = points, type_table = type_table,
-  plan = holdout(store$meta), transform = expm1, output_dir = out_root,
+  plan = holdout(store$meta, validation_frac = 0.2, test_frac = 0.2, seed = 3L),
+  transform = expm1, output_dir = out_root,
   device = device, run_id = "smoke_holdout", n_seeds = 2L,
   release_store = FALSE
 )
@@ -244,13 +243,15 @@ ok["resume_retrains_nothing"] <- identical(file.mtime(ckpt), mtimes_before)
 # treina, e as linhas tem que empilhar.
 res_p1 <- quiet_run(
   tune_grid = grid, store = store, points = points, type_table = type_table,
-  plan = holdout(store$meta), transform = expm1, output_dir = out_root,
+  plan = holdout(store$meta, validation_frac = 0.2, test_frac = 0.2, seed = 3L),
+  transform = expm1, output_dir = out_root,
   device = device, run_id = "smoke_partial", n_seeds = 1L,
   release_store = FALSE
 )
 res_p2 <- quiet_run(
   tune_grid = grid, store = store, points = points, type_table = type_table,
-  plan = holdout(store$meta), transform = expm1, output_dir = out_root,
+  plan = holdout(store$meta, validation_frac = 0.2, test_frac = 0.2, seed = 3L),
+  transform = expm1, output_dir = out_root,
   device = device, run_id = "smoke_partial", n_seeds = 2L,
   release_store = FALSE
 )
@@ -281,6 +282,10 @@ if (length(bad_cols)) {
 
 # -- 4/7. two folds -----------------------------------------------------------
 
+# No test set on purpose: a plan is allowed to carve none, and training must
+# work under that. This used to crash -- train_one_cnn assumed three roles
+# always existed, so "the framework does not invent a test set nobody asked
+# for" was a promise the training path could not keep.
 plan2 <- random_folds(store$meta, k = 2L, seed = 5L)
 res2 <- quiet_run(
   tune_grid = grid, store = store, points = points, type_table = type_table,
@@ -294,6 +299,13 @@ ok["kfold_rows_configs_x_folds"] <- nrow(cmp2) == 2L * 2L
 ok["kfold_both_folds_present"]   <- setequal(unique(cmp2$fold), c(1L, 2L))
 ok["kfold_single_run_dir"] <- dplyr::n_distinct(basename(res2$run_dir)) == 1L
 ok["kfold_by_config_counts_folds"] <- all(res2$by_config$n_folds == 2L)
+
+# Without a test set the columns still exist, holding NA: one table shape
+# whatever the plan was, so nothing downstream has to branch on it.
+ok["no_test_still_trains"]        <- all(res2$comparison$status == "success")
+ok["no_test_columns_exist"]       <- "test_ccc" %in% names(res2$comparison)
+ok["no_test_metrics_are_na"]      <- all(is.na(res2$comparison$test_ccc))
+ok["no_test_val_metrics_are_not"] <- all(is.finite(res2$comparison$val_ccc))
 
 # the plan travels with the results
 ok["fold_plan_saved"] <- file.exists(file.path(res2$run_dir, "fold_plan.rds"))
@@ -328,7 +340,8 @@ grid_bad$embedding_dim[1] <- 0L
 
 res3 <- quiet_run(
   tune_grid = grid_bad, store = store, points = points, type_table = type_table,
-  plan = holdout(store$meta), transform = expm1, output_dir = out_root,
+  plan = holdout(store$meta, validation_frac = 0.2, test_frac = 0.2, seed = 3L),
+  transform = expm1, output_dir = out_root,
   device = device, run_id = "smoke_failure", n_seeds = 1L,
   release_store = FALSE
 )
