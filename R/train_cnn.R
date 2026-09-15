@@ -207,7 +207,7 @@ train_one_cnn <- function(
 
   model <- build_cnn_from_config(cfg, n_channels)
   model <- model$to(device = device)
-  gc()  # evita race condition GC do R vs CUDA async copy
+  gc()  # avoids an R GC / CUDA async-copy race
 
   loss_fn <- switch(cfg$loss_fn,
     smooth_l1 = torch::nn_smooth_l1_loss(),
@@ -250,8 +250,8 @@ train_one_cnn <- function(
     model$train()
     tr_loss_sum <- 0; tr_n <- 0L
     coro::loop(for (batch in loaders$train) {
-      # augment_d4_batch usa indexacao R-style (out[idx,,,] <-) que nao e
-      # suportada em tensores CUDA — aplica no CPU antes de mover ao device
+      # augment_d4_batch uses R-style indexing (out[idx,,,] <-), which CUDA
+      # tensors do not support -- apply on CPU, then move to the device
       inputs <- lapply(batch[-length(batch)], function(t) t)
       if (augment) inputs <- augment_d4_batch(inputs)
       inputs <- lapply(inputs, function(t) t$to(device = device))
@@ -458,11 +458,11 @@ train_one_cnn <- function(
 #' @param ...          Passed to train_one_cnn() (n_epochs, patience, etc.).
 # Le um comparison_all.csv de um run gravado ANTES do RDS existir.
 #
-# So para esses; runs novos leem o RDS e nunca passam por aqui. O tipo de cada
-# coluna nao e adivinhado nem listado a mao: vem do `tune_grid`, que e a
-# autoridade sobre os hiperparametros e esta carregado ali do lado. As demais
-# colunas sao conhecidas e poucas -- identificadores e status sao texto,
-# contadores sao inteiros, e o que sobra sao metricas, que sao numericas.
+# For those only; new runs read the RDS and never come through here. No column
+# type is guessed or listed by hand: it comes from `tune_grid`, which is the
+# authority on the hyperparameters and is loaded right there. The remaining
+# columns are few and known -- identifiers and status are text, counters are
+# integers, and what is left are metrics, which are numeric.
 .comparison_from_csv <- function(path, tune_grid) {
   cmp <- readr::read_csv2(path, show_col_types = FALSE)
 
@@ -473,7 +473,7 @@ train_one_cnn <- function(
   for (nm in intersect(as_chr, names(cmp))) cmp[[nm]] <- as.character(cmp[[nm]])
   for (nm in intersect(as_int, names(cmp))) cmp[[nm]] <- as.integer(cmp[[nm]])
 
-  # Hiperparametros: o tipo e o que o tune_grid diz que e.
+  # Hyperparameters: the type is whatever tune_grid says it is.
   for (nm in intersect(names(tune_grid), names(cmp))) {
     if (nm %in% c(as_chr, as_int)) next
     want <- class(tune_grid[[nm]])[1]
@@ -488,7 +488,7 @@ train_one_cnn <- function(
   }
 
   # O que sobra e metrica: numerica, e um texto aqui significa que o locale
-  # nao parseou algum valor (notacao cientifica, por exemplo).
+  # failed to parse some value (scientific notation, for instance).
   known <- unique(c(as_chr, as_int, names(tune_grid)))
   for (nm in setdiff(names(cmp), known)) {
     if (is.character(cmp[[nm]])) {
@@ -499,8 +499,8 @@ train_one_cnn <- function(
   cmp
 }
 
-# O CSV e a copia legivel; o RDS e a copia AUTORITATIVA, a que a retomada le.
-# Gravados sempre juntos, para nunca discordarem.
+# The CSV is the readable copy; the RDS is the AUTHORITATIVE one, and the one
+# resume reads. Always written together, so they cannot disagree.
 write_comparison <- function(comparison, csv_path, rds_path) {
   safe_write_csv2(comparison, csv_path)
   safe_save_rds(comparison, rds_path, compress = FALSE)
@@ -580,20 +580,20 @@ run_cnn_tuning <- function(
   if (resume && file.exists(comparison_path)) {
     # A RETOMADA LE O RDS, NUNCA O CSV.
     #
-    # O CSV e para humanos; ele nao preserva tipo. read_csv2() adivinha, e
-    # adivinha errado de duas maneiras que ja derrubaram este run:
+    # The CSV is for humans; it does not preserve type. read_csv2() guesses,
+    # and guessed wrong in two ways that have each killed a run here:
     #
     #   window_sizes  "3"      (config de janela unica) -> lido como NUMERO
     #   weight_decay  "1e-04"  (notacao cientifica)     -> com decimal virgula
-    #                                                     nao parseia, vira TEXTO
+    #                                                     unparseable -> TEXT
     #
     # Em qualquer dos casos o bind_rows aborta com "Can't combine <double> and
     # <character>" -- DEPOIS de treinar, perdendo o trabalho da unidade.
     #
-    # A primeira tentativa de conserto foi forcar uma LISTA de colunas a
-    # character. Estrategia errada: a lista nunca esta completa, e cada coluna
-    # nova e uma chance de repetir o mesmo erro. O RDS guarda a tibble como
-    # ela e -- nenhuma coluna para lembrar, nenhum tipo para adivinhar.
+    # The first attempt forced a LIST of columns to character. Wrong
+    # strategy: the list is never complete, and every new column is another
+    # chance to repeat it. The RDS keeps the tibble as it is -- no column to
+    # remember, no type to guess.
     #
     # O fallback para o CSV existe so para runs gravados antes deste RDS.
     comparison <- if (file.exists(comparison_rds)) {
@@ -627,9 +627,9 @@ run_cnn_tuning <- function(
 
   if (length(done_ids) > 0L) {
     # `done_ids` conta as unidades prontas do RUN INTEIRO (todos os folds);
-    # `n_units` e o que ESTA chamada vai treinar (um fold). Misturar os dois
-    # produzia linhas como "Resume: 18/9", que nao significa nada. Reporta a
-    # fracao deste fold e o total do run separadamente.
+    # `n_units` is what THIS call will train (one fold). Mixing the two
+    # produced lines like "Resume: 18/9", which means nothing. Report this
+    # fold's fraction and the run's total separately.
     mine <- sum(done_ids %in% sprintf("%s_f%d_s%d",
                                       rep(tune_grid$config_id, each = n_seeds),
                                       fold, seq_len(n_seeds)))
@@ -643,19 +643,18 @@ run_cnn_tuning <- function(
     seed_i <- units$seed_i[u]
     cfg    <- tune_grid[i, ]
 
-    # O nome da unidade e SEMPRE o mesmo formato.
+    # The unit name is ALWAYS the same shape.
     #
-    # A primeira versao disto abreviava para o config_id puro quando havia um
-    # fold e uma semente, para manter os nomes de arquivo de antes da
-    # reamostragem. Era uma armadilha: mudar n_seeds renomeava as unidades,
-    # entao retomar um run de 1 semente pedindo 3 retreinava tudo e ainda
-    # deixava linhas duplicadas na comparacao (config_id E config_id_f1_s1
-    # para o mesmo trabalho).
+    # The first version of this shortened it to the bare config_id when there
+    # was one fold and one seed, to keep the filenames from before resampling
+    # existed. It was a trap: changing n_seeds renamed the units, so resuming a
+    # 1-seed run and asking for 3 retrained everything AND left duplicate rows
+    # in the comparison (config_id AND config_id_f1_s1 for the same work).
     #
-    # Nome uniforme faz de "aumentar n_seeds" uma mudanca RETOMAVEL: as
-    # repeticoes que ja existem sao reconhecidas e so as novas treinam. O que
-    # se perde e a leitura de diretorios anteriores a reamostragem -- e nao ha
-    # nenhum: a etapa 03 nunca rodou desde a limpeza das saidas.
+    # A uniform name makes "raise n_seeds" a RESUMABLE change: the repetitions
+    # already on disk are recognised and only the new ones train. What is lost
+    # is reading run directories from before resampling -- and there are none:
+    # stage 03 has not run since the outputs were cleared.
     unit_id <- sprintf("%s_f%d_s%d", cfg$config_id, fold, seed_i)
 
     if (unit_id %in% done_ids) {
@@ -897,7 +896,7 @@ run_cnn_resample <- function(tune_grid, store, points, type_table, plan,
 
   # A broken plan costs a second to find here and the whole run to find later.
   fold_sizes <- check_fold_plan(plan)
-  message("\n-- Plano de reamostragem --")
+  message("\n-- Resampling plan --")
   print(plan)
 
   windows_needed <- sort(unique(unlist(tune_grid$window_sizes)))

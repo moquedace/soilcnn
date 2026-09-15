@@ -18,13 +18,13 @@ safe_write_csv2 <- function(data, path) {
 }
 
 #' Save an R object as RDS safely.
-# Par de leitura do safe_write_csv2.
-#
-# read_csv2() emite "Using ',' as decimal and '.' as grouping mark" a CADA
-# chamada. Num script que le 22 arquivos isso vira 22 linhas de ruido
-# intercaladas no meio do relatorio -- o aviso e sobre o locale que NOS
-# escolhemos, entao nao informa nada. Silenciado aqui, uma vez, em vez de
-# repetir suppressMessages() em cada chamada do pipeline.
+#' Read a CSV written by safe_write_csv2().
+#'
+# read_csv2() emits "Using ',' as decimal and '.' as grouping mark" on EVERY
+# call. In a script that reads 22 files that is 22 lines of noise interleaved
+# through the report -- and the notice is about the locale WE chose, so it
+# tells nobody anything. Silenced here, once, instead of repeating
+# suppressMessages() at every call site in the pipeline.
 safe_read_csv2 <- function(path, ...) {
   suppressMessages(readr::read_csv2(path, show_col_types = FALSE, ...))
 }

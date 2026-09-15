@@ -120,7 +120,7 @@ results["arquivo_truncado_detectado"] <- inherits(
 
 unlink(store, recursive = TRUE)
 
-cat(sprintf("  store sintetico     : %d pontos x %d canais, janelas 3/9/15\n", n, ch))
-cat(sprintf("  limite do torch_save: %s bytes (2^31)\n",
+cat(sprintf("  synthetic store     : %d points x %d channels, windows 3/9/15\n", n, ch))
+cat(sprintf("  torch_save limit    : %s bytes (2^31)\n",
             format(2^31, big.mark = ",")))
 .report(results, "test_patch_store_io")

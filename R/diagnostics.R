@@ -148,18 +148,40 @@ spatial_overlap_report <- function(row_ids, col_ids, split,
       window = NA_integer_, matters = TRUE,
       n = same, pct = round(100 * same / n_s, 2), n_split = n_s)
 
-    # Window overlap, still O(n): bucket by half-window and test the 9
-    # neighbouring buckets. Slightly conservative (a bucket is a square, not a
-    # disc), which is the right direction for a leakage warning.
+    # Shared pixels: two patches of width w have a cell in common exactly when
+    # their centres are within w-1 cells in BOTH axes -- a Chebyshev square.
+    #
+    # This used to bucket by HALF the window and test the 9 neighbours, with no
+    # exact check. Two errors in one: the radius was half what the geometry
+    # needs, so real overlaps were missed, and nothing verified the candidates
+    # the buckets returned. Caught by asserting against a layout whose answer
+    # was known -- three points placed exactly two cells away were reported as
+    # not sharing anything.
+    #
+    # Now the buckets NARROW the search and an exact test DECIDES it, the same
+    # shape apply_buffer() uses.
     for (w in windows) {
-      hw <- max(1L, (w - 1L) %/% 2L)
-      rb <- row_ids %/% hw
-      cb <- col_ids %/% hw
-      ref_bucket <- unique(paste(rb[is_ref], cb[is_ref], sep = "_"))
+      hw   <- max(1L, w - 1L)
+      rb   <- row_ids %/% hw
+      cb   <- col_ids %/% hw
+      ref_i <- which(is_ref)
+      sel_i <- which(sel)
+      ref_by <- split(ref_i, paste(rb[ref_i], cb[ref_i], sep = "_"))
+      key_s  <- paste(rb[sel_i], cb[sel_i], sep = "_")
 
       hit <- rep(FALSE, n_s)
-      for (dr in -1:1) for (dc in -1:1) {
-        hit <- hit | paste(rb[sel] + dr, cb[sel] + dc, sep = "_") %in% ref_bucket
+      for (bk in unique(key_s)) {
+        rows <- which(key_s == bk)
+        rc   <- as.integer(strsplit(bk, "_", fixed = TRUE)[[1]])
+        cand <- unlist(ref_by[paste(rep(rc[1] + (-1:1), each = 3L),
+                                    rep(rc[2] + (-1:1), times = 3L),
+                                    sep = "_")], use.names = FALSE)
+        if (length(cand) == 0L) next
+        cr <- row_ids[cand]; cc <- col_ids[cand]
+        hit[rows] <- vapply(rows, function(i) {
+          any(abs(cr - row_ids[sel_i[i]]) <= hw &
+              abs(cc - col_ids[sel_i[i]]) <= hw)
+        }, logical(1))
       }
       out[[length(out) + 1L]] <- tibble::tibble(
         split = s, criterion = paste0("shares pixels (", w, "x", w, ")"),
@@ -188,21 +210,26 @@ write_run_snapshot <- function(values, dir, label = NULL) {
   dir.create(dir, recursive = TRUE, showWarnings = FALSE)
   if (is.null(label)) label <- format(Sys.time(), "%Y%m%d_%H%M%S")
 
+  # unname(): vapply() over a named list returns a NAMED vector, and those
+  # names ride along into the tibble column. Harmless to `==`, but it makes the
+  # written and the in-memory value fail identical() -- a difference in
+  # attributes reading as a difference in content.
   snap <- tibble::tibble(
     key   = names(values),
-    value = vapply(values, function(z) as.character(z[1]), character(1))
+    value = unname(vapply(values, function(z) as.character(z[1]), character(1)))
   )
   f <- file.path(dir, paste0("snapshot_", label, ".csv"))
   readr::write_csv2(snap, f)
   invisible(f)
 }
 
-# Snapshots sao comparados como TEXTO, entao a leitura tem que devolver texto.
+# Snapshots are compared as TEXT, so reading one has to give back text.
 #
-# Sem isto, read_csv2() adivinha o tipo: com locale ";"/"," ele le o PONTO de
-# "31.190645" como separador de MILHAR e devolve 31190645. O valor gravado e o
-# relido passam a diferir por formatacao, e o diff acusa mudanca onde nada
-# mudou -- exatamente o ruido que este mecanismo existe para eliminar.
+# Without this, read_csv2() guesses the type: under a ";"/"," locale it reads
+# the POINT in "31.190645" as a THOUSANDS separator and returns 31190645. The
+# written value and the value read back then differ by formatting alone, and
+# the diff reports a change where nothing changed -- precisely the noise this
+# mechanism exists to remove.
 .read_snapshot <- function(path) {
   suppressMessages(
     readr::read_csv2(path,
@@ -220,7 +247,7 @@ compare_run_snapshot <- function(values, dir, exclude = character(0)) {
                                 full.names = TRUE), decreasing = TRUE)
   now <- tibble::tibble(
     key = names(values),
-    new = vapply(values, function(z) as.character(z[1]), character(1))
+    new = unname(vapply(values, function(z) as.character(z[1]), character(1)))
   )
 
   if (length(prev_files) == 0L) {
@@ -248,9 +275,9 @@ compare_run_snapshot <- function(values, dir, exclude = character(0)) {
 }
 
 #' Print a snapshot comparison, changes first.
-# cat(), nao message(): message() escreve em stderr e print() em stdout, e no
-# console do RStudio os dois se juntam na MESMA linha ("...mudaram:# A tibble").
-# Saida de relatorio tem que sair toda pelo mesmo canal para manter a ordem.
+# cat(), not message(): message() writes to stderr and print() to stdout, and
+# in the RStudio console the two land on the SAME line ("...changed:# A
+# tibble"). Report output has to leave through one channel to keep its order.
 print_snapshot_diff <- function(cmp, n_show = 40L) {
   if (!cmp$has_previous) {
     cat("  Sem snapshot anterior -- este vira a referencia.

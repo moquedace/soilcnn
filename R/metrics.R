@@ -17,6 +17,45 @@
 #           No direct literature precedent — treated as a project innovation.
 #           Higher is better; use alongside CCC and RMSE for paper reporting.
 
+# ── Lin's Concordance Correlation Coefficient ─────────────────────────────────
+#
+# Four lines of arithmetic, written out rather than imported.
+#
+# It used to come from DescTools::CCC(), which is a heavy dependency for one
+# formula -- and which computes a confidence interval nobody reads, on every
+# validation set, EVERY EPOCH. Removing it drops a dependency and takes work
+# out of the training loop.
+#
+# The moments are POPULATION moments (divide by n, not n-1), which is how Lin
+# (1989) defines it and what DescTools computes; the test asserts equality with
+# DescTools to 1e-12 so this stays a reimplementation and not a variant.
+#
+# Note the behaviour at zero variance: a model predicting a constant gives
+# s_pred = 0, so ccc = 0 -- no agreement, which is the honest reading. Only an
+# empty or all-NA input gives NA.
+
+#' Lin's Concordance Correlation Coefficient.
+#'
+#' @param obs,pred Numeric vectors of the same length.
+#' @return A single numeric, or NA when fewer than two finite pairs remain.
+ccc <- function(obs, pred) {
+  keep <- is.finite(obs) & is.finite(pred)
+  obs  <- obs[keep]
+  pred <- pred[keep]
+  n <- length(obs)
+  if (n < 2L) return(NA_real_)
+
+  mo <- mean(obs)
+  mp <- mean(pred)
+  vo <- stats::var(obs)  * (n - 1) / n
+  vp <- stats::var(pred) * (n - 1) / n
+  cv <- sum((obs - mo) * (pred - mp)) / n
+
+  den <- vo + vp + (mo - mp)^2
+  if (den == 0) return(NA_real_)     # both constant AND equal: undefined
+  2 * cv / den
+}
+
 # ── Core metric function ──────────────────────────────────────────────────────
 
 #' Compute all regression metrics for one obs/pred pair.
@@ -38,15 +77,17 @@ calc_metrics <- function(obs, pred) {
                           rpd = NA_real_, mqi = NA_real_))
   }
 
-  ccc_val <- tryCatch(
-    as.numeric(DescTools::CCC(obs, pred, conf.level = 0.95)$rho.c$est)[1],
-    error = function(e) NA_real_
-  )
+  ccc_val <- ccc(obs, pred)
 
-  r2_val <- tryCatch(
-    as.numeric(cor(pred, obs, use = "pairwise.complete.obs"))^2,
-    error = function(e) NA_real_
-  )
+  # A constant prediction has no correlation to report, and cor() says so with
+  # a warning. NA is the answer; a warning from a reporting function only
+  # teaches people to ignore warnings.
+  r2_val <- if (stats::sd(pred) == 0 || stats::sd(obs) == 0) {
+    NA_real_
+  } else {
+    tryCatch(as.numeric(cor(pred, obs, use = "pairwise.complete.obs"))^2,
+             error = function(e) NA_real_)
+  }
 
   mae_val  <- mean(abs(pred - obs), na.rm = TRUE)
   nse_val  <- 1 - sum((obs - pred)^2, na.rm = TRUE) / sum((obs - mean(obs, na.rm = TRUE))^2, na.rm = TRUE)

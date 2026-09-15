@@ -35,6 +35,9 @@
 #      single best run is NOT the config with the best mean
 #  14. block_subsample(): keeps WHOLE blocks and therefore preserves local
 #      density, where a random subsample of the same size destroys it
+#  15. one_se(): on a fixture where the two rules DISAGREE -- the best mean and
+#      the simplest model within one standard error of it are different
+#      configs, which is the only case where the rule earns its existence
 #
 # Run: source("D:/.../tests/test_resample.R")    (CPU, no torch needed)
 
@@ -100,8 +103,8 @@ meta <- tibble::tibble(
   y          = rep(site_y, each = n_per) + runif(n_site * n_per, -200, 200)
 )
 
-cat("  pontos sinteticos    : ", nrow(meta), " (", n_site, " sitios x ", n_per,
-    ", sitios a 50 km)\n", sep = "")
+cat("  synthetic points     : ", nrow(meta), " (", n_site, " sites x ", n_per,
+    ", sites 50 km apart)\n", sep = "")
 
 # -- 1. the plan carves the test set, by its own criterion --------------------
 
@@ -214,8 +217,8 @@ n_site_cut_rand <- length(intersect(
   meta$site[rp_test], meta$site[setdiff(seq_len(nrow(meta)), rp_test)]))
 ok["random_test_cuts_many_sites"] <- n_site_cut_rand > n_site_cut_test
 
-cat("  sitios em ambos os lados do teste: espacial ", n_site_cut_test,
-    " | aleatorio ", n_site_cut_rand, "  (aleatorio nao promete separar)\n",
+cat("  sites on both sides of the test: spatial ", n_site_cut_test,
+    " | random ", n_site_cut_rand, "  (random makes no separation promise)\n",
     sep = "")
 
 # CHANGING k MUST NOT MOVE THE TEST SET. Two plans that score on different
@@ -236,8 +239,8 @@ ok["frozen_test_rejects_alien_ids"] <- inherits(
   try(spatial_folds(meta, k = 3L, test_ids = c(frozen, 999999L),
                     block_size = 25000), silent = TRUE), "try-error")
 
-cat("  teste carvado pelo plano : espacial ", length(sp_test),
-    " pts (blocos inteiros) | aleatorio ", length(rp_test), " pts\n", sep = "")
+cat("  test carved by the plan  : spatial ", length(sp_test),
+    " pts (whole blocks) | random ", length(rp_test), " pts\n", sep = "")
 
 # -- 5. spatial: a block is never split across folds --------------------------
 
@@ -259,8 +262,8 @@ site_fold <- tibble::tibble(site = meta$site[match(sp$assignment$sample_id,
 n_site_cut <- sum(site_fold$n_folds > 1L)
 ok["blocking_alone_can_cut_a_cluster"] <- n_site_cut > 0L
 
-cat("  sitios cortados por borda: ", n_site_cut, " de ", n_site,
-    "  <- por isso o buffer existe\n", sep = "")
+cat("  sites cut by a boundary  : ", n_site_cut, " of ", n_site,
+    "  <- this is why the buffer exists\n", sep = "")
 
 # -- 6. spatial really is more separated than random (measured) ---------------
 #
@@ -297,7 +300,7 @@ ok["blocking_alone_still_leaks"] <- share_spatial > 0
 # a validation point.
 ok["buffer_closes_the_leak"] <- share_buffered == 0
 
-cat("  vizinho <1 km no treino  : random ",
+cat("  neighbour <1 km in train : random ",
     sprintf("%.1f%%", 100 * share_random), " | spatial ",
     sprintf("%.1f%%", 100 * share_spatial), " | spatial+buffer ",
     sprintf("%.1f%%", 100 * share_buffered), "\n", sep = "")
@@ -424,7 +427,7 @@ ok["buffer_on_holdout_keeps_training"] <-
 # to prevent.
 ok["buffered_random_fold_is_impossible"] <- fails(apply_buffer(rp, meta, 2000))
 
-cat("  random + buffer 2 km     : sem pontos de treino -> erro (correto)\n")
+cat("  random + 2 km buffer     : no training points left -> error (correct)\n")
 
 # A buffer wider than the whole extent leaves nothing to train on, and that
 # must be an error, not an empty training set discovered 5 hours later.
@@ -440,11 +443,11 @@ ok["near_any_is_exact"] <- identical(
   c(TRUE, TRUE)) &&
   identical(.near_any(c(0), c(0), c(1001), c(0), 1000), FALSE)
 
-cat("  buffer 2 km descartou    : ",
+cat("  2 km buffer dropped      : ",
     format(sum(sp_buf$buffer_dropped$n_dropped), big.mark = ","),
-    " pontos de treino (",
+    " training points (",
     sprintf("%.1f%%", mean(sp_buf$buffer_dropped$pct_dropped)),
-    " por fold)\n", sep = "")
+    " per fold)\n", sep = "")
 
 # auto block size must be flagged as a guess, not presented as a choice
 ap <- spatial_folds(meta, k = 4L)
@@ -549,10 +552,10 @@ withCallingHandlers({
 })
 ok["aggregation_emits_no_warnings"] <- length(warns) == 0L
 
-cat("  piso de ruido (fixture)  : sd mediano ",
-    sprintf("%.3f", nf$median_sd), " | amplitude ",
+cat("  noise floor (fixture)    : median sd ",
+    sprintf("%.3f", nf$median_sd), " | range ",
     sprintf("%.3f", nf$max_range),
-    "  <- diferenca menor que isso nao e evidencia\n", sep = "")
+    "  <- a gap smaller than this is not evidence\n", sep = "")
 
 # -- 14. block_subsample() ----------------------------------------------------
 #
@@ -591,9 +594,9 @@ d_rand  <- neigh_density(with_local_seed(3L,
 ok["block_subsample_preserves_density"] <- d_block > 0.8 * d_full
 ok["random_subsample_destroys_density"] <- d_rand  < 0.6 * d_full
 
-cat("  vizinhos <1 km por ponto : completo ", sprintf("%.1f", d_full),
-    " | por bloco ", sprintf("%.1f", d_block),
-    " | aleatorio ", sprintf("%.1f", d_rand), "
+cat("  neighbours <1 km / point : full ", sprintf("%.1f", d_full),
+    " | by block ", sprintf("%.1f", d_block),
+    " | random ", sprintf("%.1f", d_rand), "
 ", sep = "")
 
 ok["subsample_is_reproducible"] <- identical(
@@ -607,5 +610,61 @@ ok["subsample_describes_itself"] <- grepl("blocks of", describe_subsample(sub))
 set.seed(7); b1 <- runif(3)
 set.seed(7); invisible(block_subsample(meta$x, meta$y, 0.3, 25000, seed = 99L))
 ok["subsample_leaves_rng_alone"] <- identical(b1, runif(3))
+
+# -- 15. one_se(): the rule that exists because the ranking does not separate -
+#
+# Fixture built so the two rules DISAGREE, which is the only case worth
+# asserting: cfg_B has the best mean, cfg_A is within one standard error of it
+# and is far simpler. Ranking by the mean takes B; one_se takes A.
+
+bc <- tibble::tibble(
+  config_id    = c("cfg_B", "cfg_A", "cfg_C"),
+  val_ccc_mean = c(0.530,   0.526,   0.480),
+  val_ccc_sd   = c(0.025,   0.022,   0.028),
+  val_ccc_se   = c(0.008,   0.007,   0.009),
+  n_params     = c(11e6,    0.9e6,   0.4e6),
+  n_units      = c(9L, 9L, 9L)
+)
+
+pick <- one_se(bc, complexity = "n_params")
+ok["one_se_picks_the_simpler_tie"] <- pick$config_id == "cfg_A"
+ok["one_se_counts_the_tied"]       <- attr(pick, "within_one_se") == 2L
+ok["one_se_says_it_moved"]         <- isTRUE(attr(pick, "simpler_than_best"))
+ok["one_se_band_is_best_minus_se"] <- isTRUE(all.equal(
+  attr(pick, "band"), 0.530 - 0.008))
+
+# cfg_C is 0.05 below the best -- far outside the band, and much simpler. The
+# rule must NOT reach for it: "within one standard error" is the whole point.
+ok["one_se_does_not_reach_outside"] <- pick$config_id != "cfg_C"
+
+# When the best is also the simplest, the rule changes nothing -- and has to
+# say so, or it looks like it did work it did not do.
+bc2 <- bc
+bc2$n_params <- c(0.4e6, 0.9e6, 11e6)
+pick2 <- one_se(bc2, complexity = "n_params")
+ok["one_se_can_agree_with_the_mean"] <- pick2$config_id == "cfg_B" &&
+  !isTRUE(attr(pick2, "simpler_than_best"))
+
+# For an error metric, lower is better, and the band opens upward.
+bc3 <- dplyr::rename(bc, val_mae_mean = val_ccc_mean, val_mae_se = val_ccc_se)
+bc3$val_mae_mean <- c(4.0, 4.005, 9.0)
+bc3$val_mae_se   <- c(0.01, 0.01, 0.01)
+pick3 <- one_se(bc3, metric = "val_mae", complexity = "n_params")
+ok["one_se_handles_lower_is_better"] <- pick3$config_id == "cfg_A"
+
+# "Simplest" is not something the framework may invent.
+ok["one_se_demands_a_complexity"] <- inherits(
+  try(one_se(dplyr::select(bc, -n_params)), silent = TRUE), "try-error")
+
+# And it cannot tell a tie from a gap without repetitions.
+bc4 <- bc; bc4$val_ccc_se <- NA_real_
+ok["one_se_needs_repetitions"] <- inherits(
+  try(one_se(bc4, complexity = "n_params"), silent = TRUE), "try-error")
+
+cat("  one_se                   : the mean picks cfg_B (", bc$val_ccc_mean[1],
+    "), one_se picks ", pick$config_id, " (",
+    format(pick$n_params / 1e6, digits = 2), "M parameters against 11M)
+",
+    sep = "")
 
 .report(ok, "test_resample")

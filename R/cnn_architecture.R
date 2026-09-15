@@ -367,6 +367,27 @@ dual_branch_cnn <- torch::nn_module(
   }
 )
 
+#' How many learnable parameters a config would build.
+#'
+#' The natural measure of "simpler" for one_se(): between two models that
+#' cannot be told apart, the one with fewer parameters is the one to keep.
+#' It orders the way the domain expects -- gap below flatten, small windows
+#' below large, fewer blocks below more -- without anyone having to hand-write
+#' that ordering.
+#'
+#' Building the module to count it costs milliseconds against minutes of
+#' training, and it is the only way to be right: the count depends on the
+#' window, the pooling and the channel widths together.
+#'
+#' @param cfg        One row of a tune grid.
+#' @param n_channels Number of predictor channels.
+count_model_params <- function(cfg, n_channels) {
+  m <- build_cnn_from_config(cfg, n_channels)
+  n <- sum(vapply(m$parameters, function(p) prod(dim(p)), numeric(1)))
+  rm(m); invisible(gc(verbose = FALSE))
+  n
+}
+
 # ── Constructor helper ────────────────────────────────────────────────────────
 # Builds a dual_branch_cnn from a single named config list (as produced by
 # make_tune_grid), making it easy to loop over grid rows.

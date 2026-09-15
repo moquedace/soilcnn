@@ -848,18 +848,19 @@ seed_noise_floor <- function(comparison, metric = "val_ccc") {
   }
   ok <- comparison[comparison$status == "success", , drop = FALSE]
 
-  # Duas LINHAS nao bastam: duas repeticoes cuja metrica veio NA nao dao
-  # espalhamento nenhum. Sem isto o relatorio anuncia "estimado em 2
-  # combinacoes" com um sd que e NA -- uma afirmacao de cobertura que os dados
-  # nao sustentam, que e pior do que admitir que nao da para estimar.
-  # Repeticao e SEMENTE DISTINTA, nao linha.
+  # A REPETITION IS A DISTINCT SEED, NOT A ROW. Two failures, one cause:
+  # counting rows instead of counting what actually varies.
   #
-  # Duas linhas do mesmo (config, fold) com a MESMA semente nao sao duas
-  # repeticoes -- sao a mesma coisa contada duas vezes, e o sd entre elas sai
-  # 0, anunciando um piso de ruido inexistente. Acontece quando uma tabela
-  # acumula linhas de esquemas diferentes; ver tambem a exigencia de valor
-  # nao-NA logo abaixo. Em ambos os casos o erro e contar a linha em vez de
-  # contar o que de fato varia.
+  # Two rows of the same (config, fold) under the SAME seed are not two
+  # repetitions -- they are one thing counted twice, and the sd between them
+  # comes out 0, announcing a noise floor that does not exist. Zero is the
+  # worst possible value here: it makes any difference between configs look
+  # like evidence.
+  #
+  # Two rows whose metric came back NA are not two repetitions either. Without
+  # the non-NA requirement the report announces "estimated over 2 combinations"
+  # with an sd of NA -- a claim of coverage the data does not support, which is
+  # worse than admitting it cannot be estimated.
   by_config <- ok %>%
     dplyr::group_by(.data$config_id, .data$fold) %>%
     dplyr::filter(
@@ -895,20 +896,114 @@ seed_noise_floor <- function(comparison, metric = "val_ccc") {
   if (length(x) == 0L) NA_real_ else diff(range(x))
 }
 
+# -- selection rules ----------------------------------------------------------
+#
+# Ranking by the best mean is one rule, not the only one, and on this project
+# it is frequently the wrong one: the first spatially-validated run put the top
+# three configs inside 0.019 of each other against a seed noise floor of
+# 0.0275. Picking the top of that list is picking the luckiest draw.
+#
+# one_se() is caret's `selectionFunction = "oneSE"`: among the configs whose
+# mean is within ONE STANDARD ERROR of the best, take the SIMPLEST. It is
+# offered, never imposed -- `run_cnn_resample()` still ranks by the mean, and
+# choosing this rule stays a decision someone makes on purpose.
+
+#' Pick the simplest config within one standard error of the best.
+#'
+#' @param by_config  From summarise_resamples().
+#' @param metric     Metric column stem, e.g. "val_ccc".
+#' @param complexity Column holding the simplicity ordering (lower = simpler),
+#'   or a numeric vector the same length. Defaults to `n_params`, which
+#'   count_model_params() produces.
+#' @param maximise   TRUE when higher is better (CCC, R2); FALSE for an error.
+#' @return One row of `by_config`, with `within_one_se` (how many configs were
+#'   tied) and `simpler_than_best` (whether the rule actually moved the choice)
+#'   attached -- a selection rule that silently returns the same answer as the
+#'   default should say so.
+one_se <- function(by_config, metric = "val_ccc", complexity = "n_params",
+                   maximise = NULL) {
+  mean_col <- paste0(metric, "_mean")
+  se_col   <- paste0(metric, "_se")
+  for (cl in c(mean_col, se_col)) {
+    if (!cl %in% names(by_config)) {
+      stop("by_config has no column '", cl, "' -- one_se() needs the mean AND ",
+           "the standard error, which summarise_resamples() produces only when ",
+           "a config was trained more than once.", call. = FALSE)
+    }
+  }
+  if (is.null(maximise)) maximise <- grepl("ccc|r2|nse|rpd|mqi", metric)
+
+  cx <- if (is.character(complexity) && length(complexity) == 1L) {
+    if (!complexity %in% names(by_config)) {
+      stop("No complexity column '", complexity, "'. \"Simplest\" needs a ",
+           "definition -- add one with count_model_params(), or pass a numeric ",
+           "vector. The framework will not invent an ordering.", call. = FALSE)
+    }
+    by_config[[complexity]]
+  } else {
+    complexity
+  }
+  stopifnot(length(cx) == nrow(by_config))
+
+  mu <- by_config[[mean_col]]
+  se <- by_config[[se_col]]
+  best_i <- if (maximise) which.max(mu) else which.min(mu)
+  if (!is.finite(se[best_i])) {
+    stop("The best config has no standard error (it was trained once). ",
+         "one_se() cannot tell a tie from a gap without repetitions.",
+         call. = FALSE)
+  }
+
+  # The tolerance band comes from the BEST config's own standard error, which
+  # is what makes this "within the noise of the winner" rather than an
+  # arbitrary margin.
+  within <- if (maximise) mu >= mu[best_i] - se[best_i]
+            else          mu <= mu[best_i] + se[best_i]
+  cand <- which(within & is.finite(cx))
+  if (length(cand) == 0L) cand <- best_i
+
+  pick <- cand[which.min(cx[cand])]
+  out  <- by_config[pick, , drop = FALSE]
+  attr(out, "within_one_se")    <- length(cand)
+  attr(out, "simpler_than_best") <- !identical(pick, best_i)
+  attr(out, "band") <- if (maximise) mu[best_i] - se[best_i]
+                       else          mu[best_i] + se[best_i]
+  out
+}
+
+#' Say what one_se() did, including when it did nothing.
+print_one_se <- function(pick, metric = "val_ccc", digits = 4L) {
+  n_tied <- attr(pick, "within_one_se")
+  cat("  one_se (", metric, "): ", n_tied,
+      " config(s) within one standard error of the best",
+      " (threshold ", round(attr(pick, "band"), digits), ")
+", sep = "")
+  cat("    chosen: ", pick$config_id[1], sep = "")
+  if (isTRUE(attr(pick, "simpler_than_best"))) {
+    cat("  -- SIMPLER than the top-ranked config
+")
+  } else {
+    cat("  -- same as the top-ranked config; the rule changed nothing
+")
+  }
+  invisible(pick)
+}
+
 #' Print a noise-floor report in the terms it should be read in.
 print_noise_floor <- function(nf, digits = 4L) {
   if (nf$n_comparable == 0L) {
-    cat("  Piso de ruido: nao estimavel -- nenhuma config foi treinada com ",
-        "mais de uma semente no mesmo fold.\n", sep = "")
+    cat("  Noise floor: not estimable -- no config was trained under more ",
+        "than one seed within the same fold.\n", sep = "")
     return(invisible(NULL))
   }
-  cat("  Piso de ruido (", nf$metric, "), so a semente muda:\n", sep = "")
-  cat("    sd mediano entre sementes : ", round(nf$median_sd, digits), "\n",
+  cat("  Noise floor (", nf$metric, "), with only the seed changing:\n",
       sep = "")
-  cat("    maior amplitude observada : ", round(nf$max_range, digits), "\n",
+  cat("    median sd between seeds : ", round(nf$median_sd, digits), "\n",
       sep = "")
-  cat("    estimado em ", nf$n_comparable, " combinacao(oes) (config x fold)\n",
+  cat("    widest range observed   : ", round(nf$max_range, digits), "\n",
       sep = "")
-  cat("    -> diferenca entre configs menor que isso NAO e evidencia\n")
+  cat("    estimated over ", nf$n_comparable, " (config x fold) combination(s)\n",
+      sep = "")
+  cat("    -> a gap between configs smaller than this is NOT evidence\n")
   invisible(nf)
 }

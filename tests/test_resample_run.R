@@ -131,7 +131,7 @@ type_table <- tibble::tibble(
   is_percentage = FALSE
 )
 
-cat("  store sintetico     : ", n_pts, " pontos x ", n_ch, " canais, janela ",
+cat("  synthetic store     : ", n_pts, " points x ", n_ch, " channels, window ",
     win, "x", win, "\n", sep = "")
 
 # -- a two-config grid, as small as a CNN can be ------------------------------
@@ -214,7 +214,7 @@ ok["by_config_file_written"]  <- file.exists(
 nf <- seed_noise_floor(cmp1)
 ok["noise_floor_estimable"] <- nf$n_comparable == 2L && is.finite(nf$median_sd)
 
-cat("  holdout x 2 sementes: ", nrow(cmp1), " unidades | sd entre sementes ",
+cat("  holdout x 2 seeds   : ", nrow(cmp1), " units | sd between seeds ",
     sprintf("%.4f", nf$median_sd), "\n", sep = "")
 
 # -- 8. resume: finished units are skipped, not retrained --------------------
@@ -274,7 +274,7 @@ ok["resume_reads_rds_not_csv"] <- file.exists(
 
 bad_cols <- shared[cls_before[shared] != cls_after[shared]]
 if (length(bad_cols)) {
-  cat("  colunas com tipo trocado : ",
+  cat("  columns with a swapped type: ",
       paste(sprintf("%s (%s -> %s)", bad_cols, cls_before[bad_cols],
                     cls_after[bad_cols]), collapse = ", "), "
 ", sep = "")
@@ -325,7 +325,7 @@ ok["scaling_written_per_fold"] <- nrow(sc1) == n_ch && nrow(sc2) == n_ch
 ok["scaling_differs_between_folds"] <- !isTRUE(all.equal(sc1$center,
                                                          sc2$center))
 
-cat("  2 folds x 2 configs : ", nrow(cmp2), " unidades | mu do canal 1: ",
+cat("  2 folds x 2 configs : ", nrow(cmp2), " units | channel 1 mu: ",
     sprintf("%.3f vs %.3f", sc1$center[1], sc2$center[1]), "\n", sep = "")
 
 # -- 9. a broken config is recorded, not fatal --------------------------------
@@ -357,7 +357,7 @@ ok["good_config_still_trained"] <- sum(cmp3$status == "success") == 1L
 ok["failed_config_excluded_from_summary"] <-
   nrow(res3$by_config) == 1L && res3$by_config$n_failed[1] == 0L
 
-cat("  config quebrada     : registrada como failed, a outra treinou\n")
+cat("  broken config       : recorded as failed, the other one trained\n")
 
 # -- cleanup ------------------------------------------------------------------
 
