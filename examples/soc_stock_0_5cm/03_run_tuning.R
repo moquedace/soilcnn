@@ -23,16 +23,10 @@ options(width = 200)
 project_root <- "D:/usuario_armazenamento/cassio/R/deep_learning_caret"
 setwd(project_root)
 
-source(file.path(project_root, "R", "utils.R"))
-source(file.path(project_root, "R", "patches.R"))
-source(file.path(project_root, "R", "preprocess.R"))
-source(file.path(project_root, "R", "dataset.R"))
-source(file.path(project_root, "R", "diagnostics.R"))
-source(file.path(project_root, "R", "resample.R"))
-source(file.path(project_root, "R", "metrics.R"))
-source(file.path(project_root, "R", "cnn_architecture.R"))
-source(file.path(project_root, "R", "tune_grid.R"))
-source(file.path(project_root, "R", "train_cnn.R"))
+# One source() instead of ten, in an order that is not guessable. See
+# R/load_all.R -- when this becomes a package, that file disappears and
+# library() takes its place.
+source(file.path(project_root, "R", "load_all.R"))
 
 # ── Settings ──────────────────────────────────────────────────────────────────
 
@@ -141,57 +135,36 @@ windows_needed <- sort(unique(unlist(tune_grid$window_sizes)))
 message("\nWindows required by this grid: ",
         paste(windows_needed, collapse = ", "))
 
-store <- load_patch_store(patch_dir, windows_needed)
+# ONE CALL FOR THE WHOLE PREAMBLE.
+#
+# dsm_load() opens the store, reads the points and the predictor types, aligns
+# the points to the store, reads the raster resolution from the raster itself,
+# and REFUSES if the store was built under a different predictor set, window
+# set, target or resolution.
+#
+# Those were six separate steps here, and three of this project's lost runs
+# came from exactly that stretch: a scaling read from the wrong file, a
+# data_dir one directory off, a resolution written by hand. They are now one
+# call that cannot be half-done.
+data <- dsm_load(
+  patch_dir    = patch_dir,
+  points       = file.path(data_dir, "full_modeling_dataset_raw.csv"),
+  type_table   = file.path(metadata_dir, "predictor_type_table.csv"),
+  raster_table = file.path(metadata_dir, "raster_table_used.csv"),
+  windows      = windows_needed,
+  target_col   = readr::read_csv2(file.path(metadata_dir, "target_config.csv"),
+                                  show_col_types = FALSE)$target_col[1]
+)
+
+# Kept as plain names because the rest of the script reads better for it, and
+# because the leakage report and the snapshot below are script-level work that
+# the framework does not own.
+store      <- data$store
+points     <- data$points
+type_table <- data$type_table
+cell_size  <- data$cell_size
 n_channels <- store$n_channels
 
-# Point values feed the SCALING only -- the patches themselves are already
-# extracted. 02 drops points whose window was not fully valid, so the dataset
-# written by 01 has more rows than the store: align on sample_id rather than
-# trusting row order.
-points <- readr::read_csv2(file.path(data_dir, "full_modeling_dataset_raw.csv"),
-                           show_col_types = FALSE)
-type_table <- readr::read_csv2(file.path(metadata_dir, "predictor_type_table.csv"),
-                               show_col_types = FALSE)
-points <- align_points_to_meta(points, store$meta)
-
-# -- Raster resolution, and the units the coordinates are in ------------------
-#
-# Read from the RASTER ITSELF, never written by hand: block_size and buffer
-# are given in the SAME units as x/y, and here those are DEGREES (lon/lat --
-# WOSIS is global), not metres. A buffer written as "3750" with metres in
-# mind would be 3750 degrees and the plan would abort; a block_size wrong in
-# the other direction would produce a split that only LOOKS spatial, aborting
-# nothing.
-r_ref     <- terra::rast(readr::read_csv2(
-  file.path(metadata_dir, "raster_table_used.csv"),
-  show_col_types = FALSE)$raster_file[1])
-cell_size <- terra::res(r_ref)[1]
-rm(r_ref)
-
-# -- THE STORE LOCK ------------------------------------------------------------
-#
-# Everything from here on is expensive, and every expensive thing assumes the
-# store on disk was built under the configuration this script is running. That
-# assumption has been wrong before, and it never announced itself: a store
-# extracted with one predictor set, read by a script expecting another, trains
-# and converges and produces a map -- of the wrong variable.
-#
-# So it is checked, here, in milliseconds, against what 02 recorded. It costs
-# one file read and refuses in seconds what would otherwise waste hours.
-target_config <- readr::read_csv2(file.path(metadata_dir, "target_config.csv"),
-                                  show_col_types = FALSE)
-
-check_store_spec(
-  store      = store,
-  predictors = type_table$predictor,
-  windows    = windows_needed,
-  target_col = target_config$target_col[1],
-  cell_size  = cell_size
-)
-message("Store spec: OK (predictors, windows, target and resolution match).")
-
-message(sprintf("\nRaster resolution: %.8f per pixel (in x/y units)",
-                cell_size))
 message(sprintf("Buffer floor (window %d x resolution): %.6f",
                 max(windows_needed), max(windows_needed) * cell_size))
 
@@ -200,10 +173,10 @@ message(sprintf("Buffer floor (window %d x resolution): %.6f",
 # ONE cut point, ONE criterion. The plan carves the test set AND the folds, and
 # it carves both the same way. Change this line and nothing below changes.
 #
-#   holdout(meta, validation_frac = , test_frac = )      no folds
-#   random_folds(meta, k = , test_frac = )               ignores geography
-#   spatial_folds(meta, k = , test_frac = , block_size = , buffer = )
-#   region_folds(meta, group = , k = , test_frac = )
+#   holdout_cv(validation_frac = , test_frac = )   no folds
+#   random_cv(k = , test_frac = )                  ignores geography
+#   spatial_cv(k = , block_size = , buffer = )     blocks of ground, buffered
+#   region_cv(group = , k = , test_frac = )        leave-one-region-out
 #
 # WHY THE TEST SET IS CARVED HERE AND NOT IN STAGE 01. It used to be a
 # stratified random draw written into the point table, which then travelled
@@ -238,31 +211,36 @@ frozen_test <- if (file.exists(split_file)) {
 
 k_folds <- 3L
 
-# BLOCK_SIZE IS MEASURED HERE, NOT WRITTEN HERE.
+# THE SPEC SAYS WHAT KIND OF SPLIT; THE PLAN IS WHAT THAT BECOMES ON THESE
+# POINTS. Keeping the two apart is what lets "auto" mean "measure it when you
+# see the data" instead of "guess now".
 #
-# It used to be the literal 2, with a table of measurements from the FULL point
-# set beside it saying 1,279 blocks and a largest block of 4.4%. That number
-# was right for that point set and wrong for this one, in a way nothing would
-# have reported: block-subsampling keeps WHOLE blocks, so a 10% draw has a
-# tenth of the blocks at the SAME size -- and the block that held 4.4% of the
-# full data holds 34% of the subsample. With k = 3 that single block would
-# have decided a fold, and the fold would have been scored on whatever one
-# landscape it happens to be.
+# Swap this one line and nothing below changes:
+#   random_cv(k = 10)                  ignores geography, on purpose
+#   holdout_cv(validation_frac = 0.2)  a single split
+#   region_cv(group = points$biome)    leave-one-region-out
 #
-# Bigger blocks separate better, so suggest_block_size() takes the LARGEST size
-# whose worst block still fits inside the balance constraint. The table it
-# measured is printed, because the choice should be readable, not trusted.
-block_choice <- suggest_block_size(store$meta, k = k_folds, max_share = 0.10)
-print_block_choice(block_choice)
-
-plan <- spatial_folds(
-  store$meta,
+# block_size = "auto" takes the LARGEST block whose worst case still fits the
+# balance constraint, measured on THESE points, and prints the table it
+# measured. It used to be the literal 2, with measurements beside it from the
+# FULL point set -- 1,279 blocks, largest holding 4.4%. On a 10% draw the same
+# 2 degrees gives a largest block holding 34%, because block-subsampling keeps
+# WHOLE blocks: a tenth of the data has a tenth of the blocks at the same
+# width. With k = 3 that one block would have decided a fold.
+#
+# buffer = "auto" is max(window) x cell_size -- the exact SQUARE separation
+# distance. Half of it, or a circular radius, leaves the diagonal sharing
+# pixels while the leakage report shows a clean zero.
+cv <- spatial_cv(
   k          = k_folds,
+  block_size = "auto",
+  buffer     = "auto",
   test_frac  = test_frac,
-  test_ids   = frozen_test,
-  block_size = as.numeric(block_choice),
-  buffer     = max(windows_needed) * cell_size    # 15 px, exact under chebyshev
+  max_share  = 0.10
 )
+
+plan <- resolve_resampling(cv, data, test_ids = frozen_test,
+                           windows = windows_needed)
 
 if (!file.exists(split_file)) {
   test_pos <- plan$folds[[1]]$test
@@ -356,21 +334,29 @@ run_id <- if (is.null(resume_run_id)) {
 # to start at 1, see the grid stand up, and go to 3 without losing anything.
 n_seeds <- 3L
 
+# dsm_train() dispatches on the model's declared input: "patches" goes to
+# run_cnn_resample(), "table" to run_table_resample(). The engine is the same
+# one this script called by hand -- what changes is that the plumbing is in one
+# tested place instead of in every script that wants to fit something.
+#
+# `plan` rather than `cv`: the plan was resolved above so the leakage report
+# could be read BEFORE committing CPU to it. Passing the spec directly works
+# too, and resolves it here.
 results <- do.call(
-  run_cnn_resample,
+  dsm_train,
   c(
     list(
+      data       = data,
+      model      = "cnn",
+      resampling = plan,
       tune_grid  = tune_grid,
-      store      = store,
-      points     = points,
-      type_table = type_table,
-      plan       = plan,
       transform  = expm1,
       output_dir = output_tuning_dir,
       device     = device,
       run_id     = run_id,
       n_seeds    = n_seeds,
-      resume     = TRUE
+      resume     = TRUE,
+      verbose    = FALSE      # the summary below is this script's own
     ),
     training_args
   )

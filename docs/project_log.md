@@ -2056,6 +2056,73 @@ chooses freely, which is what made it dangerous.
 
 ---
 
+## The example pipeline runs on the front end (2026-09-15)
+
+Cassio: *"parece simples tudo funcionando, migra pra API nova que resolve"* --
+and accepted a re-run of 01 if needed.
+
+### 01 and 02 did not need re-running, and could not use the API anyway
+
+Two separate facts, both checked rather than assumed:
+
+**Their outputs are still valid.** The only change to `01` after it wrote them
+is inside a `message()`; `git log -p` over the write lines returns nothing.
+`02` started at 22:31, after the manifest lock was committed at 21:48, and the
+only later change was comments -- which the running process had already parsed.
+
+**There is nothing in the API for them.** `dsm_load`/`dsm_train`/`spatial_cv`
+are about MODELLING: opening a patch store, deciding folds, fitting. Stage 01
+reads a GPKG and writes CSVs; stage 02 reads rasters and writes tensors.
+Neither touches that surface.
+
+### What each script could actually take
+
+| script | what the front end reaches |
+|---|---|
+| 03 | `load_all` + `dsm_load` + `spatial_cv` + `dsm_train` -- full |
+| 03b | the same, three times, one per baseline family |
+| 04 | `load_all` + `dsm_load`; the seed loop stays |
+| 05, 07, 99 | `load_all` only |
+
+**Why 04 keeps its own seed loop.** `dsm_train()` would express it -- one refit
+fold, the selected configs, ten seeds -- but it writes a run directory laid out
+for TUNING, while stage 05 reads a layout laid out for a FITTED MODEL: the
+weights and the scaling together under `<run>/<config_id>/`. Moving both at
+once, before either has run, is the move that costs this project its restarts.
+The loop calls the same `train_one_cnn()` `dsm_train()` would.
+
+### The test that had to come first
+
+`dsm_load()` and `dsm_train()` had never executed. `test_api.R` covers the
+specs and the `"auto"` arguments against a hand-built `dsm_data`; nothing there
+opened a store or fitted anything.
+
+`tests/test_api_run.R` (slow) builds a store on disk with the spec fields stage
+02 records, loads it through `dsm_load()`, trains a two-epoch CNN through
+`dsm_train()`, and asserts:
+
+- the lock fires **through the front door** -- a wrong predictor set or target
+  is refused by `dsm_load()`, not minutes later
+- `cell_size` is recovered from the manifest when no raster table is given
+- `buffer = "auto"` uses the store's own resolution
+- the patch path and the table path produce the **same comparison shape**,
+  which is the whole point of the registry
+- the plan on disk is the plan that was given
+- a run resumes through the front door without retraining
+
+A wrapper is exactly the kind of code that looks obviously right and passes the
+wrong argument. Writing this before migrating was the cheap half of the job.
+
+### What the migration removed
+
+The six-step preamble every script repeated: open the store, read two CSVs,
+align the points, open a raster for its resolution, apply the lock. **Three of
+this project's lost runs came from that stretch** -- a scaling read from the
+wrong file, a `data_dir` one directory off, a block size carried from another
+dataset. It is now one call that cannot be half-done.
+
+---
+
 ## Pendente
 
 | etapa | o quê |

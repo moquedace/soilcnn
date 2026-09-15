@@ -25,15 +25,8 @@ options(width = 200)
 project_root <- "D:/usuario_armazenamento/cassio/R/deep_learning_caret"
 setwd(project_root)
 
-source(file.path(project_root, "R", "utils.R"))
-source(file.path(project_root, "R", "patches.R"))
-source(file.path(project_root, "R", "preprocess.R"))
-source(file.path(project_root, "R", "dataset.R"))
-source(file.path(project_root, "R", "resample.R"))
-source(file.path(project_root, "R", "metrics.R"))
-source(file.path(project_root, "R", "cnn_architecture.R"))
-source(file.path(project_root, "R", "tune_grid.R"))
-source(file.path(project_root, "R", "train_cnn.R"))
+# One source() instead of ten, in a dependency order that is not guessable.
+source(file.path(project_root, "R", "load_all.R"))
 
 # ── Settings ──────────────────────────────────────────────────────────────────
 
@@ -215,14 +208,30 @@ for (cid in selected_config_ids) {
 windows_needed <- sort(unique(unlist(selected_cfgs$window_sizes)))
 message("\nWindows needed: ", paste(windows_needed, collapse = ", "))
 
-store      <- load_patch_store(patch_dir, windows_needed)
+# Same call as stages 03 and 03b, and the same lock: the final model must be
+# fitted on the store the tuning was done on, or the config that won means
+# nothing here.
+data <- dsm_load(
+  patch_dir    = patch_dir,
+  points       = file.path(data_dir, "full_modeling_dataset_raw.csv"),
+  type_table   = file.path(metadata_dir, "predictor_type_table.csv"),
+  raster_table = file.path(metadata_dir, "raster_table_used.csv"),
+  windows      = windows_needed
+)
+
+store      <- data$store
+points     <- data$points
+type_table <- data$type_table
 n_channels <- store$n_channels
 
-points <- readr::read_csv2(file.path(data_dir, "full_modeling_dataset_raw.csv"),
-                           show_col_types = FALSE)
-type_table <- readr::read_csv2(file.path(metadata_dir, "predictor_type_table.csv"),
-                               show_col_types = FALSE)
-points <- align_points_to_meta(points, store$meta)
+# WHY THIS STAGE KEEPS ITS OWN SEED LOOP.
+#
+# dsm_train() would express it -- one refit fold, the selected configs, ten
+# seeds -- but it writes a run directory laid out for TUNING, and stage 05
+# reads a layout laid out for a FITTED MODEL: the weights and the scaling
+# together under <run>/<config_id>/. Moving both at once, before either has
+# run, is the move that costs this project its restarts. The loop below is what
+# produces that layout, and it calls the same train_one_cnn() dsm_train() would.
 
 # The final fit reuses the TUNING plan: same test set, validation carved by the
 # same criterion. Selecting spatially and then stopping on a random validation

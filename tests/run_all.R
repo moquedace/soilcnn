@@ -60,7 +60,8 @@ test_files <- c(
 run_slow <- TRUE
 
 slow_files <- c(
-  "test_resample_run.R"      # end-to-end wiring: store -> folds -> tables
+  "test_resample_run.R",     # end-to-end wiring: store -> folds -> tables
+  "test_api_run.R"           # the same, through dsm_load() and dsm_train()
 )
 
 if (run_slow) test_files <- c(test_files, slow_files)

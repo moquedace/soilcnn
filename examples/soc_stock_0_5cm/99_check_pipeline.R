@@ -18,12 +18,9 @@ setwd(project_root)
 # The generic checks live in R/ (the framework); this script is only the
 # example's orchestrator -- anyone using the framework on other data gets the
 # same checks without copying anything from here.
-source(file.path(project_root, "R", "utils.R"))
-source(file.path(project_root, "R", "patches.R"))
-source(file.path(project_root, "R", "preprocess.R"))
-source(file.path(project_root, "R", "dataset.R"))
-source(file.path(project_root, "R", "diagnostics.R"))
-source(file.path(project_root, "R", "resample.R"))
+# One source() instead of several, in a dependency order that is not
+# guessable. See R/load_all.R.
+source(file.path(project_root, "R", "load_all.R"))
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 99 - pipeline quality checkpoint (check & recheck)

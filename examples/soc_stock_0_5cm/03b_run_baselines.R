@@ -22,21 +22,8 @@ options(width = 200)
 project_root <- "D:/usuario_armazenamento/cassio/R/deep_learning_caret"
 setwd(project_root)
 
-source(file.path(project_root, "R", "utils.R"))
-source(file.path(project_root, "R", "patches.R"))
-source(file.path(project_root, "R", "preprocess.R"))
-source(file.path(project_root, "R", "dataset.R"))
-source(file.path(project_root, "R", "resample.R"))
-source(file.path(project_root, "R", "metrics.R"))
-source(file.path(project_root, "R", "cnn_architecture.R"))
-source(file.path(project_root, "R", "tune_grid.R"))
-source(file.path(project_root, "R", "train_cnn.R"))
-source(file.path(project_root, "R", "model_registry.R"))
-source(file.path(project_root, "R", "baselines.R"))
-source(file.path(project_root, "R", "train_table.R"))
-# Optional: only needed by the caret-borrowed models at the bottom of this
-# script. Sourcing it is free; caret is not loaded until caret_spec() is called.
-source(file.path(project_root, "R", "caret_adapter.R"))
+# One source() instead of ten, in a dependency order that is not guessable.
+source(file.path(project_root, "R", "load_all.R"))
 
 # ══════════════════════════════════════════════════════════════════════════════
 # WHAT THIS SCRIPT IS FOR
@@ -123,23 +110,18 @@ cnn_grid       <- readRDS(file.path(cnn_run_dir, "tune_grid.rds"))
 windows_needed <- sort(unique(unlist(cnn_grid$window_sizes)))
 message("Windows from the CNN grid: ", paste(windows_needed, collapse = ", "))
 
-store <- load_patch_store(patch_dir, windows_needed)
-
-points <- readr::read_csv2(file.path(data_dir, "full_modeling_dataset_raw.csv"),
-                           show_col_types = FALSE)
-type_table <- readr::read_csv2(file.path(metadata_dir, "predictor_type_table.csv"),
-                               show_col_types = FALSE)
-points <- align_points_to_meta(points, store$meta)
-
-target_config <- readr::read_csv2(file.path(metadata_dir, "target_config.csv"),
-                                  show_col_types = FALSE)
-
-# The same lock stage 03 uses. A baseline measured against a store the run
-# cannot serve is worse than no baseline: it is a wrong number with a
-# comparison attached.
-check_store_spec(store, predictors = type_table$predictor,
-                 windows = windows_needed,
-                 target_col = target_config$target_col[1])
+# The same call stage 03 makes, including the same lock. A baseline measured
+# against a store the run cannot serve is worse than no baseline: it is a wrong
+# number with a comparison attached.
+data <- dsm_load(
+  patch_dir    = patch_dir,
+  points       = file.path(data_dir, "full_modeling_dataset_raw.csv"),
+  type_table   = file.path(metadata_dir, "predictor_type_table.csv"),
+  raster_table = file.path(metadata_dir, "raster_table_used.csv"),
+  windows      = windows_needed,
+  target_col   = readr::read_csv2(file.path(metadata_dir, "target_config.csv"),
+                                  show_col_types = FALSE)$target_col[1]
+)
 
 # ── Repetitions ───────────────────────────────────────────────────────────────
 #
@@ -163,9 +145,10 @@ message("\n", strrep("#", 78))
 message("# rf_centre -- the classic DSM baseline")
 message(strrep("#", 78))
 
-results$rf_centre <- run_table_resample(
+results$rf_centre <- dsm_train(
+  data       = data,
   model      = "rf",
-  store      = store, points = points, type_table = type_table, plan = plan,
+  resampling = plan,
   features   = "centre",
   windows    = windows_needed,
   transform  = expm1,                 # inverse of the log1p the target carries
@@ -180,9 +163,10 @@ message("\n", strrep("#", 78))
 message("# rf_context -- the neighbourhood, WITHOUT its arrangement")
 message(strrep("#", 78))
 
-results$rf_context <- run_table_resample(
+results$rf_context <- dsm_train(
+  data       = data,
   model      = "rf",
-  store      = store, points = points, type_table = type_table, plan = plan,
+  resampling = plan,
   features   = c("centre", "window_mean"),
   windows    = windows_needed,
   transform  = expm1,
@@ -197,9 +181,10 @@ message("\n", strrep("#", 78))
 message("# mlp_centre -- is it the architecture, or just the covariates?")
 message(strrep("#", 78))
 
-results$mlp_centre <- run_table_resample(
+results$mlp_centre <- dsm_train(
+  data       = data,
   model      = "mlp",
-  store      = store, points = points, type_table = type_table, plan = plan,
+  resampling = plan,
   features   = "centre",
   windows    = windows_needed,
   transform  = expm1,
@@ -308,9 +293,10 @@ message("\nBoard: ", board_path)
 # To add one -- three lines, and it behaves like every other family:
 #
 #   register_model(caret_spec("xgbTree"), overwrite = TRUE)
-#   results$xgb <- run_table_resample(
+#   results$xgb <- dsm_train(
+#     data       = data,
 #     model      = "xgbTree",
-#     store = store, points = points, type_table = type_table, plan = plan,
+#     resampling = plan,
 #     features   = c("centre", "window_mean"),
 #     windows    = windows_needed,
 #     transform  = expm1,

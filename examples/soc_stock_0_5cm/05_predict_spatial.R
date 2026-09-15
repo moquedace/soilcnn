@@ -26,13 +26,9 @@ options(width = 200)
 project_root <- "D:/usuario_armazenamento/cassio/R/deep_learning_caret"
 setwd(project_root)
 
-source(file.path(project_root, "R", "utils.R"))
-source(file.path(project_root, "R", "patches.R"))
-source(file.path(project_root, "R", "preprocess.R"))
-source(file.path(project_root, "R", "metrics.R"))
-source(file.path(project_root, "R", "cnn_architecture.R"))
-source(file.path(project_root, "R", "tune_grid.R"))
-source(file.path(project_root, "R", "train_cnn.R"))
+# One source() instead of several, in a dependency order that is not
+# guessable. See R/load_all.R.
+source(file.path(project_root, "R", "load_all.R"))
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 05 — Spatial prediction 2D-tiled (block-streaming, seed ensemble)
