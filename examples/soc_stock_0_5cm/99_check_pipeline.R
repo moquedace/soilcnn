@@ -133,8 +133,10 @@ f_crisk   <- file.path(metadata_dir, "channel_risk.csv")
 # A development run writes the SAME files, with the SAME names, on a tenth of
 # the data. Without this in plain sight, a month from now a subsample CCC is
 # indistinguishable from a result.
+run_profile <- "full"
 if (file.exists(f_tconfig)) {
   .tc <- safe_read_csv2(f_tconfig)
+  if ("run_profile" %in% names(.tc)) run_profile <- as.character(.tc$run_profile[1])
   if ("run_profile" %in% names(.tc) && !identical(.tc$run_profile[1], "full")) {
     .say(strrep("!", 90))
     .say("RUN PROFILE: ", toupper(.tc$run_profile[1]),
@@ -227,9 +229,65 @@ if (all_01_exist) {
   crisk    <- safe_read_csv2(f_crisk)
   n_const  <- sum(crisk$risk == "constant", na.rm = TRUE)
   n_withna <- sum(crisk$risk == "has_na",   na.rm = TRUE)
+
+  # A CONSTANT CHANNEL MEANS TWO DIFFERENT THINGS, and only one of them is a
+  # defect.
+  #
+  # At full size, constant is a real statement about the data: the channel
+  # carries no information at any profile while being non-zero somewhere on the
+  # map, so its weights never get a gradient and stay at random init exactly
+  # where the network extrapolates. That is a FAIL.
+  #
+  # On a 10% subsample it is usually a statement about the DRAW. A rare class --
+  # glaciers, evaporites, marine intertidal -- is all-zero at 4k points because
+  # the subsample missed the handful of profiles that carry it. Failing on that
+  # would train people to ignore this check during exactly the runs it is
+  # cheapest to run, and acting on it would change the full run's predictor set
+  # from an artefact of a draw.
+  .const_status <- if (n_const == 0L) "PASS"
+                   else if (identical(run_profile, "full")) "FAIL" else "WARN"
   add_check("01", "no constant channel survived the drop",
-            if (n_const == 0L) "PASS" else "FAIL",
-            sprintf("%d constant(s)", n_const))
+            .const_status,
+            sprintf("%d constant(s)%s", n_const,
+                    if (.const_status == "WARN")
+                      " -- dev profile: re-read this at full size before acting"
+                    else ""))
+
+  # THE CHANNEL THAT ACTUALLY STOPS A RUN IS A CONTINUOUS ONE.
+  #
+  # build_fold_cache() refuses to z-score a channel whose sd is zero over a
+  # fold's TRAINING rows, and it refuses by stopping -- correctly, since a
+  # constant channel cannot be standardised. Dummies are safe: fit_scaling()
+  # gives them centre 0 and scale 1 and never divides by their spread.
+  #
+  # So the killer is a continuous channel with almost no spread: it survives
+  # the global check here, then goes to zero inside one fold and stops stage 03
+  # partway through, after the patches have been extracted. Cheap to see now,
+  # expensive to meet then.
+  #
+  # Relative to the mean, because these channels have wildly different units: a
+  # sd of 0.001 is nothing for elevation and everything for a vegetation index.
+  if (file.exists(f_dataset) && exists("ptype")) {
+    .cont <- ptype$predictor[!ptype$is_dummy & !ptype$is_percentage]
+    .cont <- intersect(.cont, names(safe_read_csv2(f_dataset, n_max = 1)))
+    if (length(.cont) > 0L) {
+      .d  <- safe_read_csv2(f_dataset, col_select = dplyr::all_of(.cont))
+      .sd <- vapply(.d, function(z) stats::sd(z, na.rm = TRUE), numeric(1))
+      .mu <- vapply(.d, function(z) mean(abs(z), na.rm = TRUE), numeric(1))
+      .cv <- .sd / pmax(.mu, .Machine$double.eps)
+      .risky <- names(.cv)[!is.finite(.cv) | .cv < 1e-6]
+      add_check("01", "continuous channels can be z-scored in any fold",
+                if (length(.risky) == 0L) "PASS" else "FAIL",
+                if (length(.risky) == 0L)
+                  sprintf("%d continuous channel(s), smallest sd/mean = %.2e",
+                          length(.cont), min(.cv[is.finite(.cv)]))
+                else
+                  paste0(length(.risky),
+                         " with no usable spread -- stage 03 will STOP on the ",
+                         "first fold where they go flat: ",
+                         paste(utils::head(.risky, 6), collapse = ", ")))
+    }
+  }
   add_check("01", "channels with NA at the points",
             if (n_withna == 0L) "PASS" else "WARN",
             sprintf("%d channel(s) with NA -- see channel_risk.csv", n_withna))

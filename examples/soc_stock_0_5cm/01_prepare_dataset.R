@@ -533,8 +533,32 @@ if (nrow(flagged) == 0L) {
             "gradient, so they stay at")
     message("  random init and apply a seed-dependent bias exactly where the ",
             "network is extrapolating.")
-    message("  Add them to manual_predictor_drop at the top of this script, ",
-            "or keep them deliberately.")
+    # WHETHER THIS IS ACTIONABLE DEPENDS ON THE RUN PROFILE, and acting on it
+    # under the wrong one is worse than ignoring it.
+    #
+    # A rare class -- glaciers, evaporites, marine intertidal -- is constant at
+    # 4k points simply because the subsample missed the handful of profiles
+    # that carry it. Dropping it on that evidence changes the PREDICTOR SET of
+    # the full run based on an artefact of a 10% draw, and the predictor set is
+    # one of the three things a patch store is locked to: the dev store and the
+    # full store would then be incompatible by construction, for no reason.
+    #
+    # The rule: a channel is a drop candidate when it is constant at FULL size.
+    if (identical(run_profile, "dev")) {
+      message("
+  THIS IS A DEV RUN -- do NOT act on this list yet. A rare class is constant ",
+              "at ", format(nrow(dataset_model_split), big.mark = ","),
+              " points")
+      message("  because the subsample missed it, not because it is constant ",
+              "in the data. Dropping it here")
+      message("  would change the predictor set of the FULL run from an ",
+              "artefact of a 10% draw.")
+      message("  Re-read this list after a full run; what is still constant ",
+              "at 41k points is real.")
+    } else {
+      message("  Add them to manual_predictor_drop at the top of this script, ",
+              "or keep them deliberately.")
+    }
   } else {
     message("
   No constant channel survived the drop list.")

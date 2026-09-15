@@ -1504,6 +1504,60 @@ using this framework on their own data.frames hits the identical wall.
 
 ---
 
+## A constant channel means two different things (2026-09-14)
+
+The first dev run of stage 01 flagged 7 constant channels that survived the
+drop list: `change_lulc_*_ocean`, `*_other_change`, `*_stable_natural`,
+`geology_evaporites`, `soil_class_fao_anthrosols`, `soil_class_fao_glaciers`,
+`terrestrial_habitat_marine_intertidal`.
+
+Both the script and the 99 told the user to add them to
+`manual_predictor_drop`. **That advice was wrong under a dev profile**, and
+following it would have been expensive in a way that takes weeks to notice.
+
+### Why
+
+At full size, constant is a statement about the DATA: the channel carries no
+information at any profile while being non-zero somewhere on the map, so its
+weights never receive a gradient and stay at random init exactly where the
+network extrapolates. Real defect.
+
+At 10%, it is usually a statement about the DRAW. Every one of those seven is a
+rare class -- glaciers, evaporites, marine intertidal -- all-zero at 3,766
+points because the subsample missed the handful of profiles that carry it.
+
+Dropping them on that evidence changes the predictor set of the **full** run
+from an artefact of a 10% draw. And the predictor set is one of the three
+things a patch store is locked to (Phase 2), so the dev store and the full
+store would become incompatible by construction, for no reason at all.
+
+**The rule: a channel is a drop candidate when it is constant at FULL size.**
+
+Both the stage 01 warning and the 99 check are now profile-aware. The 99 FAILs
+at `full` and WARNs at `dev`, saying why -- a false FAIL during the runs that
+are cheapest to do is how people learn to ignore a checker.
+
+### The channel that actually stops a run is a continuous one
+
+Following this up found the real risk, which nothing was checking.
+
+`build_fold_cache()` refuses to z-score a channel whose sd is zero over a
+fold's TRAINING rows, and refuses by stopping. Dummies are safe --
+`fit_scaling()` gives them centre 0, scale 1, and never divides by their
+spread, which is why the seven above will not stop anything. A **continuous**
+channel with almost no spread is a different story: it passes every global
+check, then goes flat inside one fold and stops stage 03 partway through, after
+the patches have been extracted.
+
+The 99 now measures sd/mean per continuous channel and FAILs on anything below
+1e-6, naming the channels. Relative to the mean because the units are wildly
+different: sd = 0.001 is nothing for elevation and everything for a vegetation
+index.
+
+Cheap to see between 01 and 02; expensive to meet in the middle of 03.
+
+---
+
 ## Pendente
 
 | etapa | o quê |
