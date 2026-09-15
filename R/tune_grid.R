@@ -92,6 +92,28 @@
   # resolution). Both branches of a dual model share the choice.
   embed_pool = c("flatten", "gap"),
 
+  # ── Convolution padding ───────────────────────────────────────────────────
+  # "same"        pad with a ring of zeros, keeping the spatial size. Every
+  #               output position of a small patch then depends partly on
+  #               invented values -- with window 3 and 2 blocks the centre's
+  #               receptive field is already 5x5, LARGER than the patch, so
+  #               there is no position that does not.
+  # "valid"       no padding: only measured values, and the map shrinks by 2
+  #               per block. Needs window > 2 x blocks or there is nothing
+  #               left, so it is not available to a 3x3 branch.
+  # "valid_large" the useful one: valid on the LARGE branch, same on the small.
+  #               A 15x15 branch loses 4 of 15 pixels and keeps only real data;
+  #               the 3x3 branch, which cannot afford to shrink, is untouched.
+  #
+  # Why the large branch is where the gain is: a w x w patch re-reads each
+  # pixel w^2 times across the dataset, so the 15 branch is 225x redundant and
+  # the 3 branch only 9x. Trading border for honesty is nearly free on one and
+  # expensive on the other.
+  #
+  # "same" is listed first so it remains the default behaviour; the other two
+  # are in the search because the question is open and costs one parameter.
+  conv_padding = c("same", "valid_large"),
+
   # ── Fusion gate type (dual-branch only) ──────────────────────────────────
   # Controls how the two branch embeddings are combined.
   # "vector_featurewise": one gate weight per embedding dimension (most expressive).
@@ -218,6 +240,16 @@ make_tune_grid <- function(tune_length = 20L, seed = NULL, fixed = list()) {
     })
     # Enforce consistency: single window → gate irrelevant
     if (length(row$window_sizes) == 1L) row$gate_type <- "no_gate_concat"
+    # ...and a padding the geometry cannot honour is NOT a different config.
+    #
+    # dual_branch_cnn() resolves "valid_large" to "same" wherever the branch
+    # cannot afford to shrink. Left unnormalised here, two rows that build the
+    # IDENTICAL model survive de-duplication under different names, and the
+    # grid then spends part of its budget training the same thing twice and
+    # reports it as two results.
+    row$conv_padding <- .normalise_conv_padding(row$conv_padding,
+                                                row$window_sizes,
+                                                row$conv_channels)
 
     # Signature over all parameters (config_id not yet assigned)
     sig <- paste(rapply(row, function(z) paste(z, collapse = "-"), how = "unlist"),
@@ -271,10 +303,32 @@ make_manual_tune_grid <- function(...) {
       if (is.list(choices)) choices[[idx]] else choices[idx]
     }, space, as.integer(combos[i, ]), SIMPLIFY = FALSE)
     if (length(row$window_sizes) == 1L) row$gate_type <- "no_gate_concat"
+    row$conv_padding <- .normalise_conv_padding(row$conv_padding,
+                                                row$window_sizes,
+                                                row$conv_channels)
     row$config_id <- sprintf("cfg_%03d", i)
     rows[[i]] <- row
   }
   .rows_to_tibble(rows)
+}
+
+# ── Internal helpers ──────────────────────────────────────────────────────────
+
+# A padding the geometry cannot honour collapses to the one it will actually
+# get. Each 3x3 convolution without padding removes one pixel per side, so a
+# branch needs window > 2 x blocks to survive; "valid_large" applies only to
+# the largest window, so it is that one the rule is asked about.
+#
+# Done in the grid, not only in the model, so that the config table says what
+# WILL be built. A grid row that claims a padding the model silently replaces
+# is a row whose results cannot be explained by reading it.
+.normalise_conv_padding <- function(conv_padding, window_sizes, conv_channels) {
+  if (is.null(conv_padding) || is.na(conv_padding[1])) return("same")
+  cp <- as.character(conv_padding[1])
+  if (identical(cp, "same")) return(cp)
+  nb <- length(conv_channels)
+  w  <- if (identical(cp, "valid")) min(window_sizes) else max(window_sizes)
+  if (w <= 2L * nb) "same" else cp
 }
 
 # ── Internal helper ───────────────────────────────────────────────────────────
@@ -304,6 +358,7 @@ make_manual_tune_grid <- function(...) {
     se_reduction    = as.integer(scalar_df$se_reduction),
     embedding_dim   = as.integer(scalar_df$embedding_dim),
     embed_pool      = as.character(scalar_df$embed_pool),
+    conv_padding    = as.character(scalar_df$conv_padding),
     gate_type       = scalar_df$gate_type,
     dropout         = as.numeric(scalar_df$dropout),
     spatial_dropout = as.numeric(drop_df$spatial_dropout),

@@ -167,13 +167,13 @@ measured under the same folds.
 
 ## Phase 4 — the cheap questions, before anything expensive
 
-- [ ] **4.1** Is the §2.4 bias real? It was to be measured from the per-epoch
+- [~] **4.1** Is the §2.4 bias real? It was to be measured from the per-epoch
       histories of the 27 full-data units, but those were deleted with the rest
       of the outputs — only the summary in `reference_performance.md` survives.
       It now needs the histories of a **dev** run, which cost minutes. Same
       question, same zero-training method, different source. If the bias is
       small, A3 dies and 15% of the training data is saved.
-- [ ] **4.2** Does the large branch accept `valid` padding? One parameter in
+- [x] **4.2** Does the large branch accept `valid` padding? One parameter in
       the grid. Note the constraint found while auditing: with window 3 and 2
       conv blocks the centre's receptive field is already 5×5, larger than the
       patch, so **every** output position depends on the padding — a 3×3 branch
@@ -181,7 +181,7 @@ measured under the same folds.
       The redundancy is w², so the 15 branch is 225× redundant and the 3 branch
       only 9×: applying this to the large branch alone captures nearly all of
       the gain without touching the winning architecture.
-- [ ] **4.3** kNNDM feasibility. Nothing is promised before measuring: the
+- [x] **4.3** kNNDM feasibility. Nothing is promised before measuring: the
       points are global lon/lat, and without a projected CRS `knndm` needs full
       spherical distance matrices over 31k points. Measure, then decide.
 

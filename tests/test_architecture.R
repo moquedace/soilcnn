@@ -9,7 +9,10 @@
 #
 # Run: source("tests/test_architecture.R")   (no GPU needed; runs on CPU)
 
-suppressMessages(library(torch))
+suppressMessages({
+  library(torch)
+  library(purrr)   # pmap_lgl, in the conv_padding block
+})
 
 # -- project root: works under source() in the console AND under Rscript ------
 # commandArgs("--file=") is empty when the file is source()d, so fall back to
@@ -91,11 +94,110 @@ cat(sprintf("  dual c(3,15) params : flatten %s | gap %s (%.1fx lighter)\n",
 cat(sprintf("  single 15x15 params : flatten %s | gap %s (%.1fx lighter)\n",
             format(s_flat, big.mark = ","), format(s_gap, big.mark = ","), s_flat / s_gap))
 
+# =============================================================================
+# conv_padding
+#
+# "valid" removes one pixel per side per 3x3 block. The failure modes are all
+# silent or late: a linear layer sized from the PATCH instead of the feature
+# map blows up on the first forward pass, minutes into a fold; a residual skip
+# added without cropping adds the wrong pixels to the wrong place; and a
+# padding the geometry cannot honour turns two grid rows into one model under
+# two names.
+# =============================================================================
+
+mk <- function(ws, cc, pad, residual = TRUE) {
+  dual_branch_cnn(n_channels = n_ch, window_sizes = ws, conv_channels = cc,
+                  use_residual = residual, use_se_block = TRUE,
+                  embedding_dim = 32L, conv_padding = pad)
+}
+
+fwd_ok <- function(m, ws) {
+  xs <- lapply(ws, function(w)
+    torch::torch_randn(c(4L, n_ch, w, w)))
+  out <- do.call(m, xs)
+  all(dim(out) == c(4L, 1L)) && as.logical(torch::torch_isfinite(out)$all()$item())
+}
+
+ok2 <- c()
+
+# 15x15 through 2 blocks under "valid" -> 11x11, and it must still run.
+m_valid <- mk(15L, c(16L, 32L), "valid")
+ok2["valid_shrinks_as_arithmetic_says"] <- m_valid$branch1$out_size == 11L
+ok2["valid_forwards"] <- fwd_ok(m_valid, 15L)
+
+# The same model under "same" keeps 15x15 -- and is therefore HEAVIER, because
+# the flatten layer is sized C * out^2.
+m_same <- mk(15L, c(16L, 32L), "same")
+np <- function(m) sum(vapply(m$parameters, function(p) prod(dim(p)), numeric(1)))
+ok2["same_keeps_the_patch_size"] <- m_same$branch1$out_size == 15L
+ok2["valid_is_lighter_than_same"] <- np(m_valid) < np(m_same)
+
+# A residual branch has to CROP the skip, or the addition is a shape error.
+ok2["valid_forwards_with_residual"]    <- fwd_ok(mk(15L, c(16L, 32L), "valid", TRUE), 15L)
+ok2["valid_forwards_without_residual"] <- fwd_ok(mk(15L, c(16L, 32L), "valid", FALSE), 15L)
+
+# valid_large: the 15 branch shrinks, the 3 branch is left alone.
+m_vl <- mk(c(3L, 15L), c(16L, 32L), "valid_large")
+ok2["valid_large_spares_the_small_branch"] <-
+  identical(unname(m_vl$conv_padding_used), c("same", "valid"))
+ok2["valid_large_small_branch_keeps_3"]  <- m_vl$branch1$out_size == 3L
+ok2["valid_large_large_branch_shrinks"]  <- m_vl$branch2$out_size == 11L
+ok2["valid_large_forwards"] <- fwd_ok(m_vl, c(3L, 15L))
+
+# A branch that cannot afford to shrink must SAY so, not fail inside torch with
+# a shape error that names no cause. 3x3 through 2 blocks leaves -1.
+ok2["impossible_valid_is_refused_at_build"] <- inherits(
+  tryCatch(mk(3L, c(16L, 32L), "valid"), error = function(e) e), "error")
+ok2["refusal_names_the_constraint"] <- {
+  m <- tryCatch(mk(3L, c(16L, 32L), "valid"),
+                error = function(e) conditionMessage(e))
+  is.character(m) && grepl("window > 2 x blocks", m)
+}
+
+# ...and valid_large on a geometry that cannot honour it silently becomes
+# "same" IN THE MODEL -- which is exactly why the grid normalises it, so the
+# config table says what will actually be built.
+ok2["valid_large_falls_back_when_impossible"] <-
+  identical(unname(mk(3L, c(16L, 32L), "valid_large")$conv_padding_used), "same")
+ok2["grid_normalises_impossible_padding"] <-
+  identical(.normalise_conv_padding("valid_large", 3L, c(16L, 32L)), "same")
+ok2["grid_keeps_a_padding_that_fits"] <-
+  identical(.normalise_conv_padding("valid_large", c(3L, 15L), c(16L, 32L)),
+            "valid_large")
+
+# gap is independent of out_size, so it must work under valid too.
+ok2["valid_works_with_gap"] <- fwd_ok(
+  dual_branch_cnn(n_channels = n_ch, window_sizes = 15L,
+                  conv_channels = c(16L, 32L), embedding_dim = 32L,
+                  embed_pool = "gap", conv_padding = "valid"), 15L)
+
+# Wiring: the grid carries it, and a config row WITHOUT it still builds the
+# model that row used to mean.
+g2 <- make_tune_grid(tune_length = 20L, seed = 11L)
+ok2["grid_carries_conv_padding"] <- "conv_padding" %in% names(g2)
+ok2["grid_samples_more_than_one_padding"] <-
+  length(unique(g2$conv_padding)) > 1L
+ok2["grid_never_claims_an_impossible_padding"] <- all(
+  purrr::pmap_lgl(list(g2$conv_padding, g2$window_sizes, g2$conv_channels),
+                  function(cp, ws, cc)
+                    identical(cp, .normalise_conv_padding(cp, ws, cc))))
+
+row_nopad <- g2[1, ]; row_nopad$conv_padding <- NULL
+ok2["backcompat_defaults_to_same"] <- identical(
+  unname(build_cnn_from_config(row_nopad, n_ch)$conv_padding_used[1]), "same")
+
+cat(sprintf("  valid vs same (15x15): %s vs %s params (%.2fx lighter)
+",
+            format(np(m_valid), big.mark = ","),
+            format(np(m_same),  big.mark = ","),
+            np(m_same) / np(m_valid)))
+
 results <- c(
   forward_valid          = ok_forward,
   gap_lighter            = ok_lighter,
   grid_carries_pool      = ok_grid,
   build_cnn_reads_pool   = ok_cfg,
-  backcompat_flatten     = ok_backcompat
+  backcompat_flatten     = ok_backcompat,
+  ok2
 )
 .report(results, "test_architecture")

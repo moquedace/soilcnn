@@ -1381,6 +1381,100 @@ model's own package must be installed -- caret Suggests them.
 
 ---
 
+## Phase 4 — the cheap questions (2026-09-14)
+
+### 4.2 `conv_padding`: what the border of a patch is worth
+
+`padding = 1` keeps the spatial size by inventing a ring of zeros.
+`padding = 0` uses only measured values and shrinks by 2 per 3x3 block.
+
+The argument for valid is sharper here than it looks. With window 3 and two
+conv blocks the centre's receptive field is already 5x5 -- **larger than the
+patch** -- so under "same" every output position depends on invented zeros, and
+the network spends capacity learning the shape of its own border.
+
+The argument against is that it shrinks, and `w - 2b < 1` is not a model. So
+this is a **per-branch** decision, and the grid carries three values:
+
+| value | meaning |
+|---|---|
+| `same` | the previous behaviour, and still the default |
+| `valid` | no padding anywhere; needs `window > 2 x blocks` |
+| `valid_large` | valid on the LARGE branch, same on the small |
+
+`valid_large` is the useful one. A 15x15 patch re-reads each pixel 225 times
+across the dataset; a 3x3 patch only 9. Trading border pixels for honest ones
+is nearly free on the first and expensive on the second.
+
+**Three places this could have gone wrong quietly, and what was done:**
+
+1. `embed_in_size` is computed from `out_size`, not `window_size`. Sizing the
+   linear layer from the patch is a shape error raised on the first forward
+   pass -- after the fold cache has been built.
+2. A residual block under valid has a main path **smaller** than its skip. A
+   1x1 conv fixes channels, never the spatial size, so the skip is centre
+   cropped in `forward()`. Without the crop the addition either errors or, if
+   the sizes happened to align, adds the wrong pixels to the wrong place.
+3. A padding the geometry cannot honour is normalised **in the grid**
+   (`.normalise_conv_padding()`), not only in the model. The model resolves
+   `valid_large` to `same` where a branch cannot shrink; left unnormalised, two
+   grid rows that build the IDENTICAL model survive de-duplication under
+   different names, and the grid trains the same thing twice and reports it as
+   two results.
+
+A branch asked for a padding it cannot produce **stops at construction** and
+names the constraint, rather than failing inside torch with a shape error that
+names no cause.
+
+Backwards compatible: a config row without `conv_padding` builds with `same` --
+what that row meant when it was written.
+
+### 4.1 `early_stopping_bias()` -- the tool, not yet the answer
+
+Early stopping picks the epoch with the lowest validation loss and the metric
+is read at that epoch, from the same data that chose it. The reported number is
+the minimum of a noisy sequence, which is below its mean by construction.
+
+The estimator treats the epochs in the plateau around the chosen one as
+exchangeable and takes `mean(plateau) - min(plateau)`. It reads histories
+already on disk; **nothing is retrained**.
+
+Its limits are stated in the code and in the printed verdict: it is in LOSS
+units, not CCC; it assumes the plateau has flattened, so it is an upper bound
+whenever training had not converged -- and the function reports what fraction
+of units were still descending, so that case is visible rather than silently
+folded into the number.
+
+What it decides: if the bias is small, no third split, and 15% of the data
+stays in **training**. If it is large, part of each config's score is the luck
+of its best epoch, and the real experiment is worth running.
+
+Needs a dev run's histories. The full-data histories that would have answered
+it were deleted with the rest of the outputs; only the summary in
+`reference_performance.md` survives.
+
+### 4.3 kNNDM: the finding is about the CRS, not the cost
+
+`_measure_knndm.R` measures rather than assumes. The important finding does not
+need CAST installed (it is not, here):
+
+**The points are global lon/lat, and kNNDM must not be run on them directly.**
+A degree of longitude is 111 km at the equator and 0 at the pole; a distance
+computed over that is not a distance. Projecting to an equal-area CRS
+(Mollweide) is correct regardless of cost.
+
+It also happens to settle the cost question. Unprojected, nearest-neighbour
+search needs full pairwise geodesic distances: at n = 31,000 that is 9.6e8
+pairs, ~7.7 GB for one double matrix. Projected, a kd-tree does it in
+O(n log n) and the script measures the actual growth exponent rather than
+trusting the theory.
+
+What this does **not** settle: whether kNNDM folds are better than the block
+folds in use. That is empirical and costs a full run, which is not being spent
+before the pipeline is stable.
+
+---
+
 ## Pendente
 
 | etapa | o quê |

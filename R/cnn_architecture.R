@@ -28,6 +28,9 @@
 
 .valid_gate_types  <- c("vector_featurewise", "scalar_per_sample",
                         "no_gate_concat")
+.valid_conv_paddings       <- c("same", "valid")
+# The model level has a third: apply "valid" only where a branch can afford it.
+.valid_conv_paddings_model <- c("same", "valid", "valid_large")
 .valid_embed_pools <- c("flatten", "gap")
 
 .check_choice <- function(value, choices, what) {
@@ -40,13 +43,35 @@
   as.character(value)
 }
 
+# ── padding: what the border of a patch is worth ──────────────────────────────
+#
+# padding = 1 ("same") keeps the spatial size, by inventing a ring of zeros
+# around the patch. padding = 0 ("valid") uses only real data and loses one
+# pixel on each side per 3x3 conv: after b blocks a w x w patch is (w - 2b).
+#
+# THE CASE FOR "valid": every value the network sees is a measurement. With
+# "same", a 3x3 patch through two blocks has a receptive field of 5x5 at the
+# centre -- larger than the patch -- so EVERY output position depends on
+# invented zeros, and the network spends capacity learning the shape of its own
+# border.
+#
+# THE CASE AGAINST: it shrinks, and a small window cannot afford to. w - 2b < 1
+# is not a model. That is why this is a PER-BRANCH decision resolved by
+# dual_branch_cnn(), not a flag the whole model carries.
+#
+# The redundancy argument is the reason the large branch is where the gain is:
+# a w x w patch re-reads each pixel w^2 times across the dataset, so the 15
+# branch is 225x redundant and the 3 branch only 9x. Trading border pixels for
+# honest ones is nearly free on the first and expensive on the second.
+
 # ── conv_block ────────────────────────────────────────────────────────────────
 # A plain convolutional block: Conv2d → BatchNorm → Activation.
-# kernel_size = 3, padding = 1 preserves spatial dimensions.
+# padding = 1 preserves the spatial size; padding = 0 shrinks it by 2.
 
 conv_block <- torch::nn_module(
-  initialize = function(in_ch, out_ch) {
-    self$conv <- torch::nn_conv2d(in_ch, out_ch, kernel_size = 3, padding = 1)
+  initialize = function(in_ch, out_ch, padding = 1L) {
+    self$conv <- torch::nn_conv2d(in_ch, out_ch, kernel_size = 3,
+                                  padding = as.integer(padding))
     self$bn   <- torch::nn_batch_norm2d(out_ch)
     self$act  <- make_activation()
   },
@@ -60,10 +85,16 @@ conv_block <- torch::nn_module(
 # path saturates, making deeper networks easier to train (He et al., 2016).
 
 residual_conv_block <- torch::nn_module(
-  initialize = function(in_ch, out_ch) {
-    self$conv <- torch::nn_conv2d(in_ch, out_ch, kernel_size = 3, padding = 1)
+  initialize = function(in_ch, out_ch, padding = 1L) {
+    self$conv <- torch::nn_conv2d(in_ch, out_ch, kernel_size = 3,
+                                  padding = as.integer(padding))
     self$bn   <- torch::nn_batch_norm2d(out_ch)
     self$act  <- make_activation()
+    # With padding = 0 the main path is SMALLER than the input, so the skip has
+    # to be cropped to match before the addition -- a 1x1 conv only fixes the
+    # channels, never the spatial size. Done in forward(), where the shrinkage
+    # is known.
+    self$pad_used <- as.integer(padding)
     self$shortcut <- if (in_ch != out_ch) {
       torch::nn_sequential(
         torch::nn_conv2d(in_ch, out_ch, kernel_size = 1),
@@ -73,7 +104,19 @@ residual_conv_block <- torch::nn_module(
       torch::nn_identity()
     }
   },
-  forward = function(x) self$act(self$bn(self$conv(x)) + self$shortcut(x))
+  forward = function(x) {
+    out <- self$bn(self$conv(x))
+    sc  <- self$shortcut(x)
+    if (self$pad_used == 0L) {
+      # Centre crop: the main path lost one pixel on each side, so the skip
+      # must contribute the co-located values, not the corner ones.
+      d <- (sc$size(3L) - out$size(3L)) %/% 2L
+      if (d > 0L) {
+        sc <- sc[, , (d + 1L):(sc$size(3L) - d), (d + 1L):(sc$size(4L) - d)]
+      }
+    }
+    self$act(out + sc)
+  }
 )
 
 # ── se_block ──────────────────────────────────────────────────────────────────
@@ -129,18 +172,38 @@ cnn_branch <- torch::nn_module(
                         embedding_dim   = 256L,
                         spatial_dropout = 0.03,
                         embed_dropout   = 0.0,
-                        embed_pool      = "flatten") {
+                        embed_pool      = "flatten",
+                        conv_padding    = "same") {
 
-    embed_pool <- .check_choice(embed_pool, .valid_embed_pools, "embed_pool")
+    embed_pool   <- .check_choice(embed_pool, .valid_embed_pools, "embed_pool")
+    conv_padding <- .check_choice(conv_padding, .valid_conv_paddings,
+                                  "conv_padding")
 
     n_blocks   <- length(conv_channels)
+    pad        <- if (identical(conv_padding, "valid")) 0L else 1L
+
+    # The output size after every block. With "valid" this SHRINKS, and a
+    # branch asked for a size it cannot produce must say so here rather than
+    # fail inside torch with a shape error that names no cause.
+    out_size <- if (pad == 0L) window_size - 2L * n_blocks else window_size
+    if (out_size < 1L) {
+      stop("conv_padding = 'valid' with a ", window_size, "x", window_size,
+           " window and ", n_blocks, " conv block(s) leaves ", out_size,
+           "x", out_size, " -- there is nothing left to pool.\n",
+           "Each 3x3 convolution without padding removes one pixel per side, ",
+           "so a valid branch needs window > 2 x blocks. Use 'same' for this ",
+           "branch, fewer blocks, or a wider window.", call. = FALSE)
+    }
+    self$conv_padding <- conv_padding
+    self$out_size     <- out_size
+
     block_fn   <- if (use_residual) residual_conv_block else conv_block
     in_channels <- c(n_channels, conv_channels[-length(conv_channels)])
 
     # Build conv blocks as a module list
     blocks <- vector("list", n_blocks)
     for (i in seq_len(n_blocks)) {
-      blocks[[i]] <- block_fn(in_channels[i], conv_channels[i])
+      blocks[[i]] <- block_fn(in_channels[i], conv_channels[i], padding = pad)
     }
     self$blocks <- torch::nn_module_list(blocks)
 
@@ -162,10 +225,13 @@ cnn_branch <- torch::nn_module(
     # Both branches of a dual model use the same choice. Default "flatten" keeps
     # the original behaviour; tuning can compare the two.
     self$embed_pool <- embed_pool
+    # out_size, not window_size: under "valid" the feature map is smaller than
+    # the patch, and sizing the linear layer from the patch is a shape error
+    # raised on the first forward pass -- after the fold cache has been built.
     embed_in_size <- if (identical(embed_pool, "gap")) {
-      conv_channels[n_blocks]                              # GAP → C
+      conv_channels[n_blocks]                        # GAP → C, any out_size
     } else {
-      conv_channels[n_blocks] * window_size * window_size  # flatten → C·w·w
+      conv_channels[n_blocks] * out_size * out_size  # flatten → C·out·out
     }
 
     self$flatten <- torch::nn_flatten()
@@ -237,7 +303,8 @@ dual_branch_cnn <- torch::nn_module(
     gate_dropout    = 0.10,
     head_dropout_1  = 0.20,
     head_dropout_2  = 0.10,
-    embed_pool      = "flatten"  # "flatten" (C·w·w) or "gap" (C). See cnn_branch.
+    embed_pool      = "flatten", # "flatten" (C·w·w) or "gap" (C). See cnn_branch.
+    conv_padding    = "same"     # "same", "valid", or "valid_large"
   ) {
 
     n_branches <- length(window_sizes)
@@ -254,6 +321,31 @@ dual_branch_cnn <- torch::nn_module(
     self$n_branches <- n_branches
     self$gate_type  <- gate_type
 
+    # PADDING IS RESOLVED PER BRANCH, and the resolution is recorded.
+    #
+    # "valid_large" is the useful setting and the reason this is not a single
+    # flag: a 3x3 branch through 2 blocks has nothing left under "valid", while
+    # a 15x15 branch loses 4 pixels of 15 and keeps only measured values. The
+    # option applies the honest padding where it fits and leaves the small
+    # branch alone.
+    #
+    # Resolved here rather than by a silent fallback inside cnn_branch: a
+    # branch that quietly ignores what it was asked for is how a grid comes to
+    # contain two configs that are the same model under different names.
+    conv_padding <- .check_choice(conv_padding, .valid_conv_paddings_model,
+                                  "conv_padding")
+    n_blocks <- length(conv_channels)
+    pad_for  <- function(w) {
+      switch(conv_padding,
+        same        = "same",
+        valid       = "valid",
+        valid_large = if (w > 2L * n_blocks &&
+                          (n_branches == 1L || w == max(window_sizes)))
+                        "valid" else "same")
+    }
+    self$conv_padding      <- conv_padding
+    self$conv_padding_used <- vapply(window_sizes, pad_for, character(1))
+
     branch_args <- list(
       n_channels    = n_channels,
       conv_channels = conv_channels,
@@ -266,10 +358,14 @@ dual_branch_cnn <- torch::nn_module(
       embed_pool    = embed_pool
     )
 
-    self$branch1 <- do.call(cnn_branch, c(branch_args, list(window_size = window_sizes[1])))
+    self$branch1 <- do.call(cnn_branch, c(branch_args,
+      list(window_size = window_sizes[1],
+           conv_padding = self$conv_padding_used[1])))
 
     if (n_branches == 2L) {
-      self$branch2 <- do.call(cnn_branch, c(branch_args, list(window_size = window_sizes[2])))
+      self$branch2 <- do.call(cnn_branch, c(branch_args,
+        list(window_size = window_sizes[2],
+             conv_padding = self$conv_padding_used[2])))
 
       gate_in_dim <- switch(gate_type,
         vector_featurewise = embedding_dim * 4L,
@@ -398,12 +494,16 @@ build_cnn_from_config <- function(cfg, n_channels) {
   # a names() check rather than $: on a tibble, cfg$missing_col returns NULL
   # *and* emits "Unknown or uninitialised column", which is noise on a path
   # that is deliberately optional.
-  ep <- if ("embed_pool" %in% names(cfg)) cfg[["embed_pool"]] else NULL
-  embed_pool <- if (is.null(ep) || length(ep) == 0L || is.na(ep[1])) {
-    "flatten"
-  } else {
-    as.character(ep[1])
+  # A field that did not exist when a grid was written must default to what
+  # that grid MEANT, never to what is fashionable now: "flatten" and "same" are
+  # the behaviours those configs actually had.
+  opt <- function(field, default) {
+    v <- if (field %in% names(cfg)) cfg[[field]] else NULL
+    if (is.null(v) || length(v) == 0L || is.na(v[1])) default else as.character(v[1])
   }
+  embed_pool   <- opt("embed_pool",   "flatten")
+  conv_padding <- opt("conv_padding", "same")
+
   dual_branch_cnn(
     n_channels      = n_channels,
     window_sizes    = cfg$window_sizes[[1]],   # stored as a list-column
@@ -418,6 +518,7 @@ build_cnn_from_config <- function(cfg, n_channels) {
     gate_dropout    = cfg$gate_dropout,
     head_dropout_1  = cfg$head_dropout_1,
     head_dropout_2  = cfg$head_dropout_2,
-    embed_pool      = embed_pool
+    embed_pool      = embed_pool,
+    conv_padding    = conv_padding
   )
 }

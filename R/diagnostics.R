@@ -303,3 +303,137 @@ print_snapshot_diff <- function(cmp, n_show = 40L) {
   }
   invisible(changed)
 }
+
+# ── How much does choosing the best epoch flatter the validation metric? ──────
+#
+# THE QUESTION.
+#
+# Early stopping picks the epoch with the lowest validation loss, and the
+# validation metric is then read AT THAT EPOCH -- from the same data that chose
+# it. The number reported is therefore the minimum of a noisy sequence, and the
+# minimum of a noisy sequence is below its mean by construction. Some of the
+# validation score is selection, not skill.
+#
+# This matters here beyond tidiness: it is the argument for whether a separate
+# early-stopping split is needed. If the bias is small, the current design
+# stands and 15% of the training data stays in training. If it is large, the
+# ranking between configs may partly be a ranking of who got the luckiest
+# epoch.
+#
+# THE ESTIMATOR, AND WHAT IT IS NOT.
+#
+# Around the chosen epoch the trajectory has flattened -- that is what triggers
+# the patience counter. Treating the epochs in that plateau as exchangeable
+# draws from one distribution, the optimism of taking their minimum is
+#
+#     mean(plateau) - min(plateau)
+#
+# It costs nothing: the histories are already on disk, and NOTHING IS
+# RETRAINED.
+#
+# What it is NOT: an unbiased estimate of the bias in CCC. It is measured in
+# LOSS units, on the plateau only, and it assumes the plateau is flat rather
+# than still descending -- an assumption that inflates the estimate whenever
+# training had not really converged. It is a screening measurement: a clear
+# "small" is trustworthy, a clear "large" is a reason to run the real
+# experiment (a third split), and a borderline answer means run it too.
+
+#' Estimate the optimism of early stopping from run histories.
+#'
+#' @param history_dir Directory of *_history.csv written by a run.
+#' @param plateau     How many epochs around the chosen one to treat as
+#'   exchangeable. Defaults to 20; it should be no larger than the patience
+#'   used, or the window reaches back into the part still descending.
+#' @param loss_col    Column holding the validation loss.
+#' @return A tibble, one row per unit, plus the attribute "summary".
+early_stopping_bias <- function(history_dir, plateau = 20L,
+                                loss_col = "val_loss") {
+  files <- list.files(history_dir, pattern = "_history\.csv$", full.names = TRUE)
+  if (length(files) == 0L) {
+    stop("No *_history.csv in: ", history_dir,
+         "\nThis reads the per-epoch histories a run already wrote; it ",
+         "retrains nothing.", call. = FALSE)
+  }
+
+  rows <- lapply(files, function(f) {
+    h <- suppressWarnings(readr::read_csv2(f, show_col_types = FALSE))
+    if (!loss_col %in% names(h) || nrow(h) < 3L) return(NULL)
+    v <- as.numeric(h[[loss_col]])
+    keep <- is.finite(v)
+    v <- v[keep]
+    if (length(v) < 3L) return(NULL)
+
+    best_i <- which.min(v)
+    # The window is centred on the chosen epoch and clipped to the trajectory.
+    # Centred rather than trailing: the epochs just BEFORE the minimum are as
+    # much part of the plateau as those after, and using only what came after
+    # biases the window towards the tail where the loss may be rising again.
+    half <- max(1L, plateau %/% 2L)
+    lo   <- max(1L, best_i - half)
+    hi   <- min(length(v), best_i + half)
+    w    <- v[lo:hi]
+
+    tibble::tibble(
+      unit_id      = sub("_history\.csv$", "", basename(f)),
+      n_epochs     = length(v),
+      best_epoch   = best_i,
+      best_loss    = v[best_i],
+      plateau_n    = length(w),
+      plateau_mean = mean(w),
+      plateau_sd   = stats::sd(w),
+      # The two numbers the question turns on.
+      bias_abs     = mean(w) - v[best_i],
+      bias_rel     = (mean(w) - v[best_i]) / abs(mean(w)),
+      # Did training actually flatten? A plateau still descending steeply makes
+      # the estimate an upper bound rather than an estimate, and saying so is
+      # better than reporting a number that looks the same either way.
+      still_descending = (mean(w[seq_len(length(w) %/% 2L)]) -
+                          mean(w[(length(w) %/% 2L + 1L):length(w)])) >
+                         2 * stats::sd(w)
+    )
+  })
+
+  out <- dplyr::bind_rows(rows)
+  if (nrow(out) == 0L) {
+    stop("No usable histories found (need >= 3 finite epochs of '",
+         loss_col, "').", call. = FALSE)
+  }
+
+  attr(out, "summary") <- list(
+    n_units          = nrow(out),
+    median_bias_abs  = stats::median(out$bias_abs, na.rm = TRUE),
+    median_bias_rel  = stats::median(out$bias_rel, na.rm = TRUE),
+    max_bias_rel     = max(out$bias_rel, na.rm = TRUE),
+    pct_descending   = 100 * mean(out$still_descending, na.rm = TRUE),
+    plateau          = plateau
+  )
+  out
+}
+
+#' Print the verdict from early_stopping_bias().
+print_early_stopping_bias <- function(bias, threshold_rel = 0.02) {
+  s <- attr(bias, "summary")
+  cat("\n-- Optimism of early stopping (from histories, nothing retrained) --\n")
+  cat(sprintf("  units                 : %d\n", s$n_units))
+  cat(sprintf("  plateau window        : %d epochs around the chosen one\n",
+              s$plateau))
+  cat(sprintf("  median bias           : %.6f loss (%.2f%% of the plateau mean)\n",
+              s$median_bias_abs, 100 * s$median_bias_rel))
+  cat(sprintf("  worst unit            : %.2f%%\n", 100 * s$max_bias_rel))
+  cat(sprintf("  still descending      : %.0f%% of units\n", s$pct_descending))
+
+  if (s$pct_descending > 25) {
+    cat("\n  -> A quarter or more of the units had not flattened. These\n",
+        "     numbers are an UPPER BOUND, not an estimate: raise patience or\n",
+        "     n_epochs before reading anything into them.\n", sep = "")
+  } else if (s$median_bias_rel < threshold_rel) {
+    cat("\n  -> SMALL. Choosing the epoch on the validation fold costs about\n",
+        "     this much, and it is not worth a third split: carving one would\n",
+        "     take 15% out of TRAINING to remove a bias of this size.\n", sep = "")
+  } else {
+    cat("\n  -> LARGE ENOUGH TO MATTER. Part of each config's validation score\n",
+        "     is the luck of its best epoch. Worth the real experiment: a\n",
+        "     separate early-stopping split, scored on the untouched fold.\n", sep = "")
+  }
+  invisible(bias)
+}
