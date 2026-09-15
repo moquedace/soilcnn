@@ -275,6 +275,15 @@ dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
   if (is.character(model)) model <- get_model(model)
   stopifnot(inherits(model, "model_spec"))
 
+  # The buffer is derived from the LARGEST window in play. With an explicit
+  # grid that is the largest window the grid asks for; with tune_length the
+  # grid does not exist yet -- it is drawn after the plan, because a default
+  # grid may need the fold's data -- so every loaded window counts.
+  #
+  # That errs WIDE, and wide is the safe direction: a buffer larger than
+  # necessary drops a few more training points, while one that is too small
+  # leaves validation patches sharing pixels with training and reports a clean
+  # zero for it.
   windows_needed <- if (!is.null(tune_grid) && "window_sizes" %in% names(tune_grid)) {
     sort(unique(unlist(tune_grid$window_sizes)))
   } else data$store$window_sizes

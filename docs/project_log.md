@@ -1738,6 +1738,195 @@ case mean something.
 
 ---
 
+# Review night, 2026-09-15
+
+Cassio asked for a review of everything built so far, checked against current
+practice, and hardened. Three things came out of it: a leakage mode this
+framework was open to, a recommendation from the literature it did not follow,
+and a front end that did not exist.
+
+---
+
+## 1. Leave-profile-out: a leakage this framework was open to
+
+**Wang et al. (2025), Geoderma -- "The problematic case of data leakage: a case
+for leave-profile-out cross-validation in 3-dimensional digital soil mapping".**
+
+In 3-D soil mapping one profile yields several rows -- 0-5, 5-15, 15-30 cm --
+at IDENTICAL coordinates, from the same pit, described by the same surveyor on
+the same day. Split those across training and validation and the model is
+scored on a depth of a profile it already learned: the covariates are
+byte-identical and the target is autocorrelated down the column.
+
+`spatial_folds()` and `region_folds()` happened to be safe, because rows at one
+coordinate fall in one block. **`holdout()` and `random_folds()` were not** --
+they treated every row as its own unit, which is exactly the failure the paper
+describes.
+
+### What changed
+
+`.resolve_row_group()` in `R/resample.R`, and a `group` argument on `holdout()`
+and `random_folds()` defaulting to `"auto"`.
+
+**Why the default is `"auto"` and not `NULL`.** Keeping a profile together is
+never wrong: with one row per profile it changes nothing at all, and with
+several it is the only correct answer. Failing to do it is silently wrong. A
+default that is safe in both cases and costs nothing in the common one does not
+deserve to be opt-in. It applies the grouping when it MATTERS -- the column
+exists and has duplicates -- and says so rather than doing it quietly.
+
+This dataset has 3,766 rows in 3,766 profiles, so nothing changes here. It
+changes everything for a package user with depth intervals.
+
+### Proven, not trusted
+
+`check_fold_plan(plan, meta = ...)` now verifies that no group is split across
+roles, and **both runners pass `meta`**, so the property is checked against the
+data on every run. Four constructors are meant to produce it; "meant to" is the
+operative phrase, and the property is what matters, not the arguments intended
+to produce it.
+
+---
+
+## 2. Area of applicability: the literature's standing recommendation
+
+**Meyer & Pebesma (2021), Methods in Ecology and Evolution 12:1620-1633.** The
+recommendation is not that an AOA is nice to have -- it is that *"the AOA should
+be provided alongside the prediction map and complementary to the communication
+of validation performances."* We had none.
+
+The problem it solves is specific: a map has a value at every pixel, including
+pixels whose predictor combination the model never saw, and nothing in the
+raster distinguishes them. The cross-validated CCC printed beside the map does
+not apply to the second kind at all.
+
+### `R/aoa.R`
+
+| function | what it does |
+|---|---|
+| `di_reference()` | summarises the training set: weighted space, mean pairwise distance |
+| `dissimilarity_index()` | nearest-training-point distance / that mean, per row |
+| `aoa_threshold()` | outlier-removed max of the CROSS-VALIDATED training DI |
+| `inside_aoa()` / `print_aoa()` | the mask, and a readable report |
+
+Two decisions worth recording:
+
+**The DI is expressed in units of the training set's own mean pairwise
+distance.** That is what makes a DI comparable between datasets instead of
+being an arbitrary number of metres, and it is why `test_aoa.R` asserts that
+multiplying the entire space by 100 leaves every DI unchanged.
+
+**The threshold comes from ACROSS folds.** For each training point, the
+distance to the nearest training point that is NOT in its fold. This is the
+whole idea: it asks how dissimilar a point can be and still have been predicted
+well during cross-validation, rather than picking a number. A within-fold
+version would use each point's own neighbours -- including ones it trained
+beside -- and come out far too small. The test fixture makes the two answers
+differ by orders of magnitude so an implementation that confuses them cannot
+pass.
+
+**Which feature space, for a CNN.** The model consumes patches, so "predictor
+space" needs a choice. The CENTRE PIXEL: it is the space a soil scientist
+reasons about, it is exactly the space the RF baseline lives in, and it makes
+the DI of the CNN's map comparable with the baseline's. A patch distance would
+be defensible and is not offered, because a number nobody can interpret is
+worse than one that is only mostly right.
+
+**What it is not:** an uncertainty estimate. Inside the AOA means the predictor
+combination resembles the training data, not that the prediction is accurate.
+Outside, the cross-validation error does not apply, and the honest report is
+"not applicable" -- not a wider interval.
+
+---
+
+## 3. The front end
+
+Fitting a model required eight manual steps: ten `source()` lines in an order
+that is not guessable, opening the store, reading two CSVs, aligning points to
+the store, opening a raster for its resolution, computing a buffer, and copying
+a block size. **Three of those have each cost this project a run.**
+
+```r
+source("R/load_all.R")
+
+data <- dsm_load(patch_dir, points, type_table, raster_table = ...)
+cv   <- spatial_cv(k = 5, block_size = "auto", buffer = "auto")
+fit  <- dsm_train(data, model = "cnn", resampling = cv,
+                  tune_length = 30, n_seeds = 3, transform = expm1)
+```
+
+### What is borrowed from caret, and what is not
+
+Borrowed is the SHAPE: one fitting function, a small object describing the
+resampling, a named model, `tune_length` as a budget rather than a lattice.
+
+Not borrowed is `trainControl()`'s thirty arguments. caret carries them because
+caret also owns the preprocessing, the parallel backend, the sampling and the
+summary functions. Here the spec carries the handful of things that decide WHO
+trains and WHO scores, and nothing else.
+
+### A spec is not a plan
+
+`spatial_cv()` returns a description; `resolve_resampling()` turns it into a
+`fold_plan` against real points. Keeping them apart is what lets
+`block_size = "auto"` mean "measure it when you see the data" instead of
+"guess now".
+
+### The one rule
+
+**Every default is either obviously right or computed from the data -- never a
+number someone once measured on another dataset.** That is not a style
+preference; it is the lesson of the block size that was measured on 41,385
+points and carried into a 10% draw.
+
+So `block_size = "auto"` measures, `buffer = "auto"` is
+`max(window) * cell_size` (the exact SQUARE separation distance -- half of it,
+or a radius, leaves the diagonal sharing pixels while the report shows zero),
+both print what they chose, and `"auto"` without a resolution **refuses** rather
+than inventing one.
+
+The buffer errs WIDE when the grid does not exist yet: a buffer larger than
+necessary drops a few more training points; one too small reports a clean zero
+for leakage that is happening.
+
+### Not migrated tonight, on purpose
+
+`03_run_tuning.R` still uses the low-level calls. It runs next, on code that
+has been reviewed, and rewriting the trained path hours before the run is the
+move that caused five restarts. `examples/quickstart.R` shows the new API;
+the numbered scripts migrate after the dev run proves the pipeline.
+
+---
+
+## 4. kNNDM: the feasibility note was too pessimistic
+
+The estimate in Phase 4.3 assumed O(n^2) geodesic distance matrices. Linnenbrink
+et al. (2024) report kNNDM fold assignment **plus model training** on 4,000
+strongly clustered points dropping from 4.8 days (NNDM LOO) to **1.2 minutes**
+(kNNDM). At 3,766 dev points this is not an affordability question at all.
+
+What stands from that note is the part that was never about cost: the points
+are global lon/lat, and **a degree of longitude is 111 km at the equator and 0
+at the pole**. Project to equal-area first. That is correct regardless.
+
+---
+
+## Sources
+
+- Wang et al. (2025). The problematic case of data leakage: a case for
+  leave-profile-out cross-validation in 3-dimensional digital soil mapping.
+  *Geoderma*. https://www.sciencedirect.com/science/article/pii/S0016706125000618
+- Meyer, H. & Pebesma, E. (2021). Predicting into unknown space? Estimating the
+  area of applicability of spatial prediction models. *Methods in Ecology and
+  Evolution* 12:1620-1633. https://arxiv.org/pdf/2005.07939
+- CAST: Area of applicability tutorial.
+  https://hannameyer.github.io/CAST/articles/cast04-AOA-tutorial.html
+- Piikki et al. (2021). Perspectives on validation in digital soil mapping of
+  continuous attributes -- a review. *Soil Use and Management*.
+  https://bsssjournals.onlinelibrary.wiley.com/doi/full/10.1111/sum.12694
+
+---
+
 ## Pendente
 
 | etapa | o quê |

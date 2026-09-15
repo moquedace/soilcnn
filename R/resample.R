@@ -319,7 +319,7 @@ holdout <- function(meta, validation_frac = 0.15, test_frac = 0.15,
   # test cut is: half a profile in training and half in validation is the
   # leakage this argument exists to prevent.
   g_pool <- unique(group[pool])
-  val_g  <- with_local_seed(seed + 1L,
+  val_g  <- with_local_seed(seed,
     g_pool[sample(length(g_pool), max(1L, floor(validation_frac * length(g_pool))))])
   val <- sort(pool[group[pool] %in% val_g])
   trn <- setdiff(pool, val)
