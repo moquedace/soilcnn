@@ -164,7 +164,16 @@ di_reference <- function(x_train, weights = NULL, max_pairs = 2e6, seed = 42L) {
       }
       # Numerical floor: the expansion can return a tiny negative for a point
       # compared with itself, and sqrt() of that is NaN.
-      out[s:e] <- sqrt(pmax(apply(d2, 1L, min), 0))
+      #
+      # rowMins where available: apply(d2, 1, min) is an R-level loop over a
+      # chunk x n_train matrix, and over a raster that is millions of rows.
+      # Same answer, compiled.
+      mins <- if (requireNamespace("matrixStats", quietly = TRUE)) {
+        matrixStats::rowMins(d2)
+      } else {
+        apply(d2, 1L, min)
+      }
+      out[s:e] <- sqrt(pmax(mins, 0))
     }
   }
   out

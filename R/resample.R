@@ -955,6 +955,21 @@ check_fold_plan <- function(plan, meta = NULL, group = "auto") {
   # plan that is correct and a plan that was built by code intended to be.
   if (!is.null(meta)) {
     g <- .resolve_row_group(meta, group)
+
+    # A PLAN BUILT UNGROUPED ON PURPOSE IS NOT A DEFECT.
+    #
+    # holdout() and random_folds() record what they did in params$grouping. If
+    # that says every row was its own unit, the user asked for it -- maybe
+    # their profile_id means something else entirely -- and stopping would be
+    # the framework overruling a deliberate choice. It still says so, loudly,
+    # because "deliberate" and "forgotten" look identical from here.
+    #
+    # A plan that recorded nothing (spatial_folds, region_folds, or one built
+    # before this existed) IS checked strictly: those get the property by
+    # construction, so a violation means the construction is broken.
+    declared   <- plan$params$grouping
+    on_purpose <- !is.null(declared) && grepl("own unit", declared, fixed = TRUE)
+
     if (isTRUE(attr(g, "grouped"))) {
       for (j in seq_along(plan$folds)) {
         f     <- plan$folds[[j]]
@@ -967,14 +982,14 @@ check_fold_plan <- function(plan, meta = NULL, group = "auto") {
                             function(z) length(unique(z)))
         split_g <- names(per_group)[per_group > 1L]
         if (length(split_g) > 0L) {
-          stop("Fold ", j, ": ", length(split_g), " group(s) are split across ",
-               "roles -- e.g. ",
-               paste(utils::head(split_g, 4), collapse = ", "),
-               ".\n  Rows of one profile in both training and scoring is the ",
-               "leakage described by Wang et al. (2025, Geoderma): identical ",
-               "covariates, autocorrelated target.\n  Rebuild the plan with ",
-               "group = \"auto\" (the default) or a grouping of your own.",
-               call. = FALSE)
+          msg <- paste0(
+            "Fold ", j, ": ", length(split_g), " group(s) are split across ",
+            "roles -- e.g. ", paste(utils::head(split_g, 4), collapse = ", "),
+            ".\n  Rows of one profile in both training and scoring is the ",
+            "leakage described by Wang et al. (2025, Geoderma): identical ",
+            "covariates, autocorrelated target.\n  Rebuild the plan with ",
+            "group = \"auto\" (the default) or a grouping of your own.")
+          if (on_purpose) warning(msg, call. = FALSE) else stop(msg, call. = FALSE)
         }
       }
     }
