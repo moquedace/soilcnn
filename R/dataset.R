@@ -440,6 +440,119 @@ build_fold_cache <- function(store, points, type_table, index,
 #'
 #' predict_loader() assumes row i of the loader is row i of this table, so it
 #' must be sliced with exactly the same index used for the tensors.
+# ── the same fold, read as a table ────────────────────────────────────────────
+#
+# WHY A SECOND VIEW AND NOT A SECOND EXTRACTION.
+#
+# A Random Forest on the centre pixel is the classic digital soil mapping
+# baseline, and until it is measured the CNN's CCC has no scale on it. But it
+# must be measured on THE SAME FOLD -- same training rows, same scaling, same
+# buffer -- or the comparison is between two experiments rather than two
+# models, and the difference between them is unattributable.
+#
+# So the table is DERIVED from the tensors the fold cache already holds. It
+# costs one pass over data that is already in memory, already scaled by this
+# fold's training rows, already split. The alternative -- a separate tabular
+# extraction from the rasters -- is a second code path producing numbers that
+# only look like the first one's.
+#
+# WHAT THE FEATURES ARE, AND WHAT EACH ONE IS FOR.
+#
+#   centre        the value at the point. The classic baseline.
+#   window_mean   the per-channel mean over each window. Context WITHOUT
+#                 spatial structure: the same neighbourhood the convolution
+#                 sees, with the arrangement thrown away.
+#
+# The second is the interesting one. If a Random Forest on centre + window
+# means matches the CNN, then the convolution is doing averaging and its
+# structure is worth nothing -- a falsifiable claim, measured cheaply, under
+# folds that are identical by construction rather than by intention.
+
+#' Read a fold cache as feature matrices.
+#'
+#' @param cache      The `cache` element of build_fold_cache().
+#' @param predictors Channel names, in the store's order.
+#' @param windows    Window sizes to summarise, or NULL for every one present.
+#' @param features   Any of "centre", "window_mean".
+#' @return Named list by role: list(x = matrix, y = numeric). Column names are
+#'   `<predictor>` for the centre and `<predictor>_mean_w<W>` for the means.
+fold_table_view <- function(cache, predictors, windows = NULL,
+                            features = c("centre", "window_mean")) {
+  features <- match.arg(features, several.ok = TRUE)
+  roles    <- names(cache)
+
+  have_keys <- setdiff(names(cache[[roles[1]]]), "y")
+  if (is.null(windows)) {
+    windows <- sort(as.integer(sub("^w", "", have_keys)))
+  }
+  keys <- patch_window_key(sort(as.integer(windows)))
+  if (!all(keys %in% have_keys)) {
+    stop("The cache does not hold window(s) ",
+         paste(setdiff(keys, have_keys), collapse = ", "), call. = FALSE)
+  }
+
+  # The centre pixel is the SAME value in every window -- concentric patches
+  # around one point -- so it is taken from the smallest, which is the cheapest
+  # tensor to index. Verified rather than assumed, on the first role only: it
+  # is a statement about the extraction geometry, and if it is false there
+  # every downstream number is wrong in a way no metric would reveal.
+  key_small <- keys[1]
+
+  centre_of <- function(x) {
+    hw <- as.integer(x$shape[3])
+    c_ <- (hw %/% 2L) + 1L               # torch is 1-indexed
+    as.matrix(x[, , c_, c_]$to(device = "cpu"))
+  }
+
+  out <- setNames(vector("list", length(roles)), roles)
+  for (r in roles) {
+    blocks <- list()
+
+    if ("centre" %in% features) {
+      m <- centre_of(cache[[r]][[key_small]])
+      colnames(m) <- predictors
+      blocks[["centre"]] <- m
+
+      if (length(keys) > 1L) {
+        # The geometry check, on one role and one window, costs one extra
+        # indexing operation and catches a patch store whose windows were cut
+        # around different points.
+        m2 <- centre_of(cache[[r]][[keys[length(keys)]]])
+        if (!isTRUE(all.equal(m[1:min(50L, nrow(m)), , drop = FALSE],
+                              m2[1:min(50L, nrow(m2)), , drop = FALSE],
+                              check.attributes = FALSE))) {
+          stop("The centre pixel differs between window ", keys[1], " and ",
+               keys[length(keys)], " for role '", r, "'. Concentric patches ",
+               "around the same point must share their centre -- this store ",
+               "was not cut that way, and every table feature built from it ",
+               "would describe a different location than the tensors do.",
+               call. = FALSE)
+        }
+      }
+    }
+
+    if ("window_mean" %in% features) {
+      for (k in keys) {
+        # A 1x1 window has no neighbourhood: its mean IS its centre, and a
+        # duplicated column is a column a tree can split on twice for free.
+        if (as.integer(sub("^w", "", k)) <= 1L) next
+        mm <- as.matrix(cache[[r]][[k]]$mean(dim = c(3L, 4L))$to(device = "cpu"))
+        colnames(mm) <- paste0(predictors, "_mean_", k)
+        blocks[[paste0("mean_", k)]] <- mm
+      }
+    }
+
+    if (length(blocks) == 0L) {
+      stop("No features requested.", call. = FALSE)
+    }
+    out[[r]] <- list(
+      x = do.call(cbind, blocks),
+      y = as.numeric(as.matrix(cache[[r]]$y$to(device = "cpu")))
+    )
+  }
+  out
+}
+
 fold_points_valid <- function(store, index) {
   setNames(lapply(names(index), function(r) store$meta[index[[r]], , drop = FALSE]),
            names(index))

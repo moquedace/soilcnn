@@ -40,6 +40,7 @@ test_files <- c(
   "test_metrics_reporting.R",# the three functions that lie quietly
   "test_resample.R",         # fold plans: partition, leakage, seed
   "test_store_spec.R",       # the store lock: what it REFUSES
+  "test_model_registry.R",   # registry contract + the tabular fold view
   "test_architecture.R",     # embed_pool wiring
   "test_augmentation.R"      # D4 symmetries
 )

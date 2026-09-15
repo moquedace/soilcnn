@@ -1203,6 +1203,108 @@ exactly the shape of a lock that passes everything.
 
 ---
 
+## Phase 3 — the registry, and the baselines that make it necessary (2026-09-14)
+
+### The problem
+
+"The CNN reached CCC 0.62" is a number with no scale on it. The project's
+central claim -- that a convolution over a neighbourhood beats the same
+predictors read at a point -- had never been measured against anything.
+
+### Four models, one fold plan
+
+| family | input | answers |
+|---|---|---|
+| `rf_centre` | centre pixel | the classic DSM baseline |
+| `rf_context` | centre + per-channel window means | context **without** spatial structure |
+| `mlp_centre` | centre pixel | the architecture, or just the covariates? |
+| `cnn` | the whole patch | context **with** spatial structure |
+
+**The gap between `rf_context` and the CNN is what the convolution is worth.**
+If they match, the convolution is doing averaging -- falsifiable, cheap, and
+measured under folds identical by construction.
+
+### What was built
+
+**`R/model_registry.R`** -- `model_spec()`, `register_model()`, `get_model()`,
+`list_models()`. Five fields: `name`, `input`, `fit`, `predict`,
+`default_grid`, `count_params`. `input` is the one that matters: it says which
+VIEW of the fold cache a model consumes, so adding a model never means editing
+a runner.
+
+The contract is checked at **declaration** time, not at fit time. Minutes into
+a fold is the wrong moment to learn an argument is named `data` instead of `x`.
+
+`register_model()` refuses a silent overwrite. Two different models answering
+to one name in one session produce results carrying no mark of which ran.
+
+**Random Forest forced the design to be honest.** An interface designed against
+one implementation only ever describes that implementation; RF has no epochs,
+no learning rate, no device, and consumes a matrix rather than a 4-D tensor.
+
+**`fold_table_view()` in `R/dataset.R`** derives the table from the tensors the
+fold cache already holds -- same training rows, same scaling fitted on them,
+same buffer. A separate tabular extraction would be a second code path
+producing numbers that only look like the first one's.
+
+It **verifies** that the centre pixel agrees across windows rather than
+assuming it. Concentric patches around one point must share their centre; if
+they do not, every table feature describes a different location than the
+tensors do, and no metric would reveal it.
+
+A 1x1 window contributes no window-mean column: its mean *is* its centre, and a
+duplicated column is one a tree can split on twice for free.
+
+**`R/train_table.R`** -- `run_table_resample()`, same fold loop, same seed
+discipline, **same comparison table shape**, so `summarise_resamples()`,
+`seed_noise_floor()` and `one_se()` work unchanged across families. That shared
+shape is the only thing the two runners need to share.
+
+**`examples/soc_stock_0_5cm/03b_run_baselines.R`** reads `fold_plan.rds` from
+the CNN run rather than rebuilding the plan. Rebuilding it "the same way" makes
+the comparison depend on two call sites staying in step; reading it makes them
+identical by construction. It runs the same `n_seeds` as the CNN -- a baseline
+with one seed against a CNN with three reads as if only one of them were
+uncertain -- and prints the gap **next to the noise floor**.
+
+### Discarded
+
+- **Generalising `run_cnn_resample()` to take a model_spec.** The CNN path
+  carries epoch histories, gate analyses, per-quantile metrics, checkpoints,
+  DataLoaders and a device, none of which a forest has; every one would become
+  an `if` inside the one function this project cannot afford to destabilise.
+  Every restart here has had the same cause -- a defect introduced upstream of
+  where it was noticed -- and rewriting the trained path days before the
+  definitive run is exactly that move. If the two ever converge on what they
+  need, they can be merged then, against two real implementations instead of
+  one imagined interface.
+- **Caret's `modelInfo`.** It carries `library`, `type`, `sort`, `loop`,
+  `levels`, `oob`, `varImp` because it supports 200+ models. Fields get added
+  here when a model needs one.
+- **Tuning `n_trees`.** More trees never overfit a forest and the curve is flat
+  long before 500; tuning it spends budget on the parameter with a known answer.
+- **A separate tabular extraction from the rasters.** Rejected above.
+
+### `ranger` is not installed here
+
+The RF baseline uses `ranger` when present and falls back to `randomForest`.
+They are not equivalent in cost: on 30k rows and ~360 features `randomForest`
+is single-threaded and slow enough to dominate a run that also trains neural
+networks. The fallback exists so the baseline RUNS, and the comparison table
+records which backend produced it.
+
+    install.packages("ranger")
+
+### Tests
+
+`tests/test_model_registry.R`, registered in `run_all.R`. The fake cache is
+filled so that the centre and the mean are two DIFFERENT known numbers -- a
+function that confuses them cannot pass both. It also checks that a reordered
+prediction table is refused: a forest reads features by position, and that is
+the case that produces a confident answer from the wrong covariates.
+
+---
+
 ## Pendente
 
 | etapa | o quê |

@@ -130,9 +130,9 @@ Not a hand-written file of our values: stage 02 records what it extracted, and
 the 99 compares what the **current configuration asks for** against what the
 store **has**.
 
-- [ ] **2.1** 02 writes the spec it extracted under: predictor list (+ hash),
+- [x] **2.1** 02 writes the spec it extracted under: predictor list (+ hash),
       windows, target and transform.
-- [ ] **2.2** 99 **FAILS** on mismatch, naming the fix: "the store has windows
+- [x] **2.2** 99 **FAILS** on mismatch, naming the fix: "the store has windows
       3, 9, 15 and this grid asks for 21 — re-extract, or change the grid."
 
 Dynamic by construction: a package user changing windows gets a clear failure
@@ -146,11 +146,11 @@ Random Forest is not a torch model, so it forces the registry to handle
 genuinely different `fit`/`predict` contracts. That is the right pressure on
 the design.
 
-- [ ] **3.1** Minimal registry: a model declares `build`, `param_space`, and
+- [x] **3.1** Minimal registry: a model declares `build`, `param_space`, and
       what input it consumes (`patches` or `table`).
-- [ ] **3.2** The fold cache can produce a **tabular** view (centre pixel, and
+- [x] **3.2** The fold cache can produce a **tabular** view (centre pixel, and
       per-channel window means) alongside the tensor view.
-- [ ] **3.3** Three baselines under identical folds, seeds and noise floor:
+- [x] **3.3** Three baselines under identical folds, seeds and noise floor:
 
 | model | input | answers |
 |---|---|---|
