@@ -220,7 +220,11 @@ if (requireNamespace("torch", quietly = TRUE)) {
     g$n_trees <- 20L                     # a contract test, not a fit quality one
 
     spec <- get_model("rf")
-    fitted <- spec$fit(x = xs, y = ys, cfg = g[1, ])
+    # suppressWarnings: randomForest objects to a response with five or fewer
+    # unique values, and the fixture has four ON PURPOSE. What is being tested
+    # is the spec's CONTRACT -- fit takes (x, y, cfg), predict takes
+    # (object, x) -- not whether a forest of four points is any good.
+    fitted <- suppressWarnings(spec$fit(x = xs, y = ys, cfg = g[1, ]))
     p <- spec$predict(fitted, tv$validation$x)
 
     ok["rf_fits_through_the_spec"]  <- inherits(fitted, "rf_fitted")

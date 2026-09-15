@@ -357,7 +357,14 @@ ok["spatial_folds_leaves_rng_alone"] <- identical(before, after2)
 
 # -- 11. bad arguments fail loudly --------------------------------------------
 
-fails <- function(expr) inherits(try(expr, silent = TRUE), "try-error")
+# suppressWarnings, deliberately: fails() asserts that an expression ERRORS,
+# and a warning raised on the way there is not part of that claim. The
+# block_size = 1e9 case below legitimately warns ("one block decides a fold")
+# before it errors -- printing that here would put a warning in a green test
+# run, which is how people learn to scroll past warnings.
+fails <- function(expr) {
+  inherits(try(suppressWarnings(expr), silent = TRUE), "try-error")
+}
 
 ok["k_below_2_fails"]        <- fails(random_folds(meta, k = 1L))
 ok["k_above_pool_fails"]     <- fails(random_folds(meta, k = 10000L))
