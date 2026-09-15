@@ -616,6 +616,12 @@ run_cnn_tuning <- function(
   done_ids <- done_ids[file.exists(file.path(run_dir, "models",
                                              paste0(done_ids, "_best.pt")))]
 
+  # ...and a third condition, of a different kind: the cached unit must still
+  # DESCRIBE the config its name claims. The checkpoint test above proves the
+  # unit finished; this one proves it finished on the hyperparameters the grid
+  # now asks for. See .resumable_units() for the run where that came apart.
+  done_ids <- .resumable_units(done_ids, comparison, tune_grid)
+
   # ── The unit of work is (config, seed), not config ──────────────────────────
   # Flattened into one table instead of nested loops so that resume, ordering
   # and reporting all see the same list of things to do. Seeds run INNERMOST:

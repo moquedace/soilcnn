@@ -2238,3 +2238,74 @@ new code was exercised on purpose, before it was trusted.
 | 8 | paralelismo sobre configs (medir antes) |
 | 9 | virar pacote |
 | 10 | importância de variáveis |
+
+---
+
+## rf_grid drew the same config four times; resume matched on the label
+
+**What broke.** The 03b board showed `rf_001`, `rf_003` and `rf_004` with CCC
+identical to four decimals. They were identical *models*: `rf_grid()` sampled
+`mtry_frac` and `min_node_size` with replacement and never de-duplicated, and
+with `tune_length = 4` it drew `mtry_frac = 0.1` every time. Each RF family
+therefore tested two distinct forests, not four, and spent 75% of its budget
+re-measuring one of them.
+
+`make_tune_grid()` de-duplicates explicitly and says why in a comment. The
+baseline grids were written later and did not inherit it.
+
+**Why it mattered beyond the wasted budget.** Every draw landed on the
+*smallest* `mtry` in the pool, 0.1p, against a regression default of p/3. The
+baseline the CNN was measured against was not merely narrow, it was weak -- in
+the direction that confirms the project's hypothesis. A baseline that is
+accidentally handicapped does not fail loudly; it agrees with you.
+
+**Fix.** `rf_grid()` no longer draws. A forest has two parameters with a handful
+of sensible values each, so the space is *covered*, ordered outward from the
+defaults: `tune_length = 1` gives the textbook forest (`mtry = p/3`,
+`min.node.size = 5`) and each increment adds the next most informative setting.
+Reproducible, cheaper, and the seed argument is now vestigial. `mlp_grid()`
+stays a random draw -- four interacting axes are what random search is for --
+but de-duplicates.
+
+*Discarded:* keeping the draw and raising `max_tries` the way `make_tune_grid()`
+does. It works, but it buys nothing here: the space has 28 points, so drawing
+from it is strictly worse than enumerating it, and a random baseline is harder
+to defend in a paper than a default one.
+
+**The second defect, found while fixing the first.** Renumbering the configs
+changed what `rf_001` *means*. Both runners resume by `unit_id`, which is built
+from `config_id` -- so resuming would have matched the old rows by name, skipped
+the work, and reported results for hyperparameters that were never fitted. No
+error, plausible CCC.
+
+`.resumable_units()` (in `R/utils.R`) now matches on the hyperparameters and
+lets the label follow: a cached unit is reusable only if the config it recorded
+still equals the config the grid asks for under that name. Anything else is
+refitted, with a message saying how many and why. It refits rather than stops,
+because changing a grid is normal and stopping would punish it.
+
+The same hazard was latent in the CNN: `make_tune_grid()` draws sequentially, so
+raising `tune_length` preserves the earlier configs and resume works -- but only
+while the parameter space is unchanged. Adding one value to one axis shifts
+every subsequent draw, silently. That is now checked rather than assumed, which
+matters immediately: the next step is exactly a larger CNN grid resuming the
+existing 27 units.
+
+*Near-miss worth recording:* the first version of the guard compared the grid's
+`window_sizes` list-column `c(5L, 7L)` against the comparison row's flattened
+`"5x7"`. Every CNN unit ever written would have been declared stale and
+retrained -- hours of GPU time, looking exactly like a successful resume. A
+guard against a silent wrong answer had become a guarantee of expensive
+pointless work. Both sides are now reduced to the same tokens, and there is a
+test for that specific representation mismatch.
+
+**Statistics.** 03b compared two means against the seed noise floor. The floor
+is the spread of one family across seeds -- not the standard error of a
+difference -- so it can hide a real effect as easily as invent one. Every family
+runs on the *same* folds with the *same* seeds, so the units are matched pairs
+and most of the between-unit spread is fold difficulty that both families feel
+together. `paired_family_test()` subtracts it out and reports a difference with
+a confidence interval, on both CCC and MAE, because the first run ranked the
+families in opposite orders on the two metrics. The interval is the point: with
+9 pairs, "not significant" cannot distinguish "there is nothing" from "we could
+not see it", and the interval says how large an effect is still permitted.

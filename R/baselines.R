@@ -57,21 +57,52 @@
 #'   as a FRACTION. An mtry written as a count is wrong the moment the feature
 #'   set changes -- and adding the window means triples it.
 rf_grid <- function(tune_length = 4L, seed = 42L, n_features = NULL) {
-  with_local_seed(seed, {
-    mtry_frac <- sample(c(0.1, 0.2, 0.33, 0.5), tune_length, replace = TRUE)
-    min_node  <- sample(c(1L, 5L, 10L, 20L),    tune_length, replace = TRUE)
-  })
-  g <- tibble::tibble(
-    config_id     = sprintf("rf_%03d", seq_len(tune_length)),
-    mtry_frac     = mtry_frac,
-    min_node_size = min_node,
+  tune_length <- max(1L, as.integer(tune_length))
+
+  # A SPREAD, NOT A DRAW -- and this is a correction, not a preference.
+  #
+  # The first version sampled mtry_frac and min_node_size from four values
+  # each. With tune_length = 4 it drew 0.1 FOUR TIMES, so the "four-config
+  # grid" tested two distinct settings, both at the smallest mtry, and three
+  # of the four units trained the same model. make_tune_grid() de-duplicates
+  # for exactly this reason; this did not.
+  #
+  # A random draw earns its place when the space is large and the axes
+  # interact -- that is the CNN's grid. A forest has two parameters with a
+  # handful of sensible values each, so the space can simply be COVERED, and
+  # covering it is both cheaper and reproducible.
+  #
+  # The order is outward from the defaults, so tune_length = 1 gives the
+  # textbook forest and every increment adds the next most informative
+  # setting. mtry = p/3 is the regression default; min.node.size = 5 is
+  # ranger's and randomForest's.
+  frac_cand <- c(1/3, 0.10, 0.50, 0.05, 0.75, 0.20, 1.00)
+  node_cand <- c(5L, 20L, 1L, 10L)
+
+  g <- expand.grid(mtry_frac = frac_cand, min_node_size = node_cand,
+                   KEEP.OUT.ATTRS = FALSE)
+  # Rank by how far the pair is from the default pair, so the budget is spent
+  # near what is known to work before it is spent at the extremes.
+  g <- g[order(match(g$mtry_frac, frac_cand) + match(g$min_node_size, node_cand)), ]
+  g <- unique(g)[seq_len(min(tune_length, nrow(g))), , drop = FALSE]
+
+  out <- tibble::tibble(
+    config_id     = sprintf("rf_%03d", seq_len(nrow(g))),
+    mtry_frac     = g$mtry_frac,
+    min_node_size = as.integer(g$min_node_size),
     # Fixed, not tuned. More trees never overfit a forest; they only cost time,
     # and the curve is flat long before 500. Tuning it would spend the budget
     # on the one parameter with a known answer.
     n_trees       = 500L
   )
-  if (!is.null(n_features)) g$mtry <- pmax(1L, as.integer(round(g$mtry_frac * n_features)))
-  g
+  if (!is.null(n_features)) {
+    out$mtry <- pmax(1L, as.integer(round(out$mtry_frac * n_features)))
+    # Two fractions can round to the same mtry on a narrow feature set, and two
+    # rows that fit the identical forest are one row that wastes a fold.
+    out <- out[!duplicated(out[, c("mtry", "min_node_size")]), , drop = FALSE]
+    out$config_id <- sprintf("rf_%03d", seq_len(nrow(out)))
+  }
+  out
 }
 
 #' The Random Forest baseline.
@@ -176,14 +207,20 @@ mlp_grid <- function(tune_length = 6L, seed = 42L) {
     base_lr <- 10^stats::runif(tune_length, -4, -2.5)
     batch   <- sample(c(64L, 128L, 256L), tune_length, replace = TRUE)
   })
-  tibble::tibble(
-    config_id   = sprintf("mlp_%03d", seq_len(tune_length)),
+  out <- tibble::tibble(
     hidden      = hidden,
     dropout     = dropout,
     base_lr     = signif(base_lr, 4),
     batch_size  = batch,
     loss_fn     = "smooth_l1"
   )
+  # De-duplicated, for the reason rf_grid() spells out: two identical rows are
+  # one row that trains twice and reports twice. The draw stays a draw here --
+  # four interacting axes are what random search is for -- but a repeat is
+  # waste, not coverage.
+  out <- unique(out)
+  out$config_id <- sprintf("mlp_%03d", seq_len(nrow(out)))
+  dplyr::relocate(out, config_id)
 }
 
 .mlp_module <- torch::nn_module(

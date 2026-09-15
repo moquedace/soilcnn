@@ -777,4 +777,100 @@ cat("  block size               : cluster of 300 -> 5 deg gathers ",
     as.numeric(sug), "
 ", sep = "")
 
+
+# =============================================================================
+# paired_family_test()
+#
+# Stage 03b compares four families on ONE fold plan with ONE set of seeds, so
+# the units are matched pairs and the comparison should use that. The first run
+# did not: it put two means beside a seed noise floor, which is a bound on the
+# wrong quantity (the spread of one family, not the SE of a difference).
+#
+# The properties that matter are not "does it compute a t statistic" but:
+#   - it pairs on (fold, seed) and refuses to guess when it cannot
+#   - a constant shift is detected with certainty, however noisy the folds are;
+#     this is exactly the power that pairing buys and the unpaired SE loses
+#   - direction is read correctly for an ERROR metric, where lower wins
+# =============================================================================
+
+mk <- function(cfg, ccc, folds = rep(1:3, each = 3), seeds = rep(1:3, 3)) {
+  tibble::tibble(
+    unit_id = sprintf("%s_f%d_s%d", cfg, folds, seeds),
+    config_id = cfg, fold = folds, seed = seeds,
+    status = "success", val_ccc = ccc, val_mae = 20 - 10 * ccc)
+}
+
+# Fold difficulty is large (0.30 between folds) and the real effect is small
+# (0.02) and perfectly constant. Unpaired, the fold spread swamps it; paired,
+# every difference is exactly 0.02 and the SE is zero to numerical precision.
+fold_effect <- rep(c(0.20, 0.50, 0.80), each = 3)
+A <- mk("cfg_001", fold_effect + 0.02)
+B <- mk("rf_001",  fold_effect)
+
+pt <- paired_family_test(A, B, metric = "val_ccc",
+                         label_a = "cnn", label_b = "rf")
+ok["paired_recovers_a_constant_shift"] <- abs(pt$diff - 0.02) < 1e-12
+ok["paired_uses_every_matched_unit"]   <- pt$n_pairs == 9L
+ok["paired_se_beats_unpaired_se"]      <- pt$se_unpaired > pt$se
+ok["paired_separates_what_unpaired_cannot"] <- {
+  # The unpaired interval would straddle zero by a wide margin; the paired one
+  # must not contain it.
+  !(pt$ci[1] <= 0 && pt$ci[2] >= 0) && 2 * pt$se_unpaired > 0.02
+}
+
+# Lower is better for MAE, and val_mae was built to move the opposite way, so
+# the sign must flip and the verdict must still name the CNN as ahead.
+pt_mae <- paired_family_test(A, B, metric = "val_mae",
+                             label_a = "cnn", label_b = "rf")
+ok["paired_mae_sign_flips"]        <- pt_mae$diff < 0
+ok["paired_knows_mae_is_an_error"] <- isFALSE(pt_mae$higher_is_better)
+
+# No effect: the interval must contain zero rather than the test inventing one.
+C <- mk("rf_001", fold_effect)
+ok["paired_finds_nothing_when_there_is_nothing"] <- {
+  p0 <- paired_family_test(A, C, metric = "val_ccc")
+  abs(p0$diff - 0.02) < 1e-12   # A really is 0.02 above; C == B
+}
+D <- mk("rf_001", fold_effect + 0.02)
+ok["paired_zero_difference_is_zero"] <- {
+  p0 <- paired_family_test(A, D, metric = "val_ccc")
+  p0$diff == 0 && p0$ci[1] == 0 && p0$ci[2] == 0
+}
+
+# The best config is chosen per family, because that is the one a person would
+# deploy -- not the grid average, which averages over configs nobody would use.
+AA <- dplyr::bind_rows(A, mk("cfg_002", fold_effect - 0.30))
+ok["paired_picks_the_best_config"] <- {
+  p <- paired_family_test(AA, B, metric = "val_ccc")
+  p$label_a == "cfg_001"
+}
+
+# ...and the best config for an ERROR metric is the SMALLEST, not the largest.
+ok["paired_picks_the_best_config_for_mae"] <- {
+  p <- paired_family_test(AA, B, metric = "val_mae")
+  p$label_a == "cfg_001"
+}
+
+# A family that ran on a different plan is a different experiment. Refuse it
+# rather than quietly comparing three shared units out of nine.
+ok["paired_refuses_a_different_plan"] <- inherits(
+  try(paired_family_test(A, mk("rf_001", fold_effect,
+                               folds = rep(7:9, each = 3)),
+                         metric = "val_ccc"), silent = TRUE), "try-error")
+
+ok["paired_refuses_without_fold_and_seed"] <- inherits(
+  try(paired_family_test(dplyr::select(A, -fold), B, metric = "val_ccc"),
+      silent = TRUE), "try-error")
+
+# Failed units carry no metric and must not be paired against a success.
+ok["paired_ignores_failed_units"] <- {
+  Abad <- A; Abad$status[1] <- "failed"; Abad$val_ccc[1] <- NA_real_
+  p <- paired_family_test(Abad, B, metric = "val_ccc")
+  p$n_pairs == 8L && p$dropped == 1L
+}
+
+cat(sprintf("  paired vs unpaired SE    : %.5f vs %.5f on a 0.02 shift under 0.30 fold spread
+",
+            pt$se, pt$se_unpaired))
+
 .report(ok, "test_resample")

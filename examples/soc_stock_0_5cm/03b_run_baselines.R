@@ -266,6 +266,64 @@ if (nrow(cnn_best) > 0L && "rf_context" %in% board$family) {
   }
 }
 
+# ══════════════════════════════════════════════════════════════════════════════
+# THE SAME QUESTION, PAIRED
+#
+# The block above compares two means against the seed noise floor. That is a
+# useful sanity bound, but it is not the right test, and it under-uses the
+# design: every family ran on the SAME folds with the SAME seeds, so the units
+# come in matched pairs. Most of the spread between units is fold difficulty,
+# which both families feel together -- subtracting it out is free power.
+#
+# What comes out is a difference with a confidence interval. That is the honest
+# form of the answer here, because the expected finding is "no difference", and
+# a bare "not significant" over 9 pairs cannot distinguish "there is nothing"
+# from "we could not see it". The interval says how large an effect the data
+# still permit.
+# ══════════════════════════════════════════════════════════════════════════════
+
+message("
+", strrep("=", 78))
+message("PAIRED TESTS -- same folds, same seeds, difference per unit")
+message(strrep("=", 78))
+
+cnn_cmp <- if (file.exists(cnn_comparison)) readRDS(cnn_comparison) else NULL
+
+pairs_to_test <- list(
+  # The headline: structure vs the same neighbourhood with structure removed.
+  list(a = cnn_cmp,                  b = results$rf_context,
+       la = "cnn",        lb = "rf_context"),
+  # Is it the architecture, or just the covariates? Same recipe, no convolution.
+  list(a = cnn_cmp,                  b = results$mlp_centre,
+       la = "cnn",        lb = "mlp_centre"),
+  # And does the neighbourhood help a forest at all? If not, the window means
+  # carry nothing and the first test was never going to show anything either.
+  list(a = results$rf_context,       b = results$rf_centre,
+       la = "rf_context", lb = "rf_centre")
+)
+
+for (metric in c("val_ccc", "val_mae")) {
+  for (p in pairs_to_test) {
+    if (is.null(p$a) || is.null(p$b)) next
+    res <- tryCatch(
+      paired_family_test(p$a, p$b, metric = metric,
+                         label_a = p$la, label_b = p$lb),
+      error = function(e) {
+        message("  ", p$la, " vs ", p$lb, " (", metric, "): ",
+                conditionMessage(e))
+        NULL
+      })
+    if (!is.null(res)) print(res)
+  }
+}
+
+# BOTH METRICS, DELIBERATELY. The first run ranked the families one way on CCC
+# and the OPPOSITE way on MAE -- rf_context had the best MAE and the CNN the
+# worst, while the CCC order was reversed. That is not a contradiction: CCC
+# rewards spread agreement, MAE rewards typical closeness, and a model that
+# stretches its predictions to match the observed variance buys CCC with MAE.
+# Reporting one of them alone would have hidden that entirely.
+
 board_path <- file.path(tuning_base, run_id, "family_board.csv")
 safe_write_csv2(board, board_path)
 message("\nBoard: ", board_path)

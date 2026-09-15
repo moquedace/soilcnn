@@ -1285,3 +1285,153 @@ print_noise_floor <- function(nf, digits = 4L) {
   cat("    -> a gap between configs smaller than this is NOT evidence\n")
   invisible(nf)
 }
+
+# ── Comparing two families on the same folds ──────────────────────────────────
+
+#' Paired comparison between two model families.
+#'
+#' WHY PAIRED, AND WHY IT MATTERS HERE.
+#'
+#' Every family in stage 03b runs on the SAME fold plan with the SAME seeds, by
+#' construction. So each family's units come in matched pairs: rf_context on
+#' fold 2 seed 3 and the CNN on fold 2 seed 3 saw the identical training rows.
+#'
+#' Comparing the two MEANS and their separate spreads throws that away. Most of
+#' the spread across units is the fold -- some folds are simply harder, and both
+#' families suffer on them together. A paired comparison subtracts that shared
+#' difficulty out before asking whether anything is left.
+#'
+#' The first 03b run made exactly this mistake in the reader's favour: it
+#' reported +0.0091 CCC against a seed noise floor of 0.0383 and concluded
+#' "smaller than the noise". The conclusion happened to hold, but the reasoning
+#' did not -- the noise floor is the spread of ONE family across seeds, which is
+#' not the standard error of a DIFFERENCE, and comparing a difference to it can
+#' hide a real effect as easily as it can invent one.
+#'
+#' What is reported is a mean difference with its own standard error and a
+#' paired t interval. Not a p-value on its own: with 9 pairs, "not significant"
+#' is mostly a statement about 9, and the interval says how large an effect is
+#' still compatible with the data -- which is the actual question when the
+#' answer is "the convolution buys nothing".
+#'
+#' @param a,b       Comparison tibbles (or the `comparison` element of a fit).
+#' @param metric    Column to compare. Higher-is-better is assumed for the
+#'   verdict text unless the name matches a known error metric.
+#' @param config_a,config_b Which config of each family to compare. Defaults to
+#'   the best by mean `metric`, which is the config someone would deploy.
+#' @param label_a,label_b Names for the report.
+#' @param conf      Interval level.
+#' @return An object of class "paired_comparison".
+paired_family_test <- function(a, b, metric = "val_ccc",
+                               config_a = NULL, config_b = NULL,
+                               label_a = "a", label_b = "b", conf = 0.95) {
+  pick <- function(d, cfg, who) {
+    if (inherits(d, "dsm_fit")) d <- d$comparison
+    if (!is.data.frame(d)) stop("`", who, "` is not a comparison table.", call. = FALSE)
+    need <- c("fold", "seed", "config_id", metric)
+    miss <- setdiff(need, names(d))
+    if (length(miss)) {
+      stop("`", who, "` has no column(s): ", paste(miss, collapse = ", "),
+           ".\n  A paired comparison needs fold and seed to pair ON.",
+           call. = FALSE)
+    }
+    if ("status" %in% names(d)) d <- d[d$status == "success", , drop = FALSE]
+    d <- d[is.finite(d[[metric]]), , drop = FALSE]
+    if (is.null(cfg)) {
+      m <- tapply(d[[metric]], d$config_id, mean, na.rm = TRUE)
+      # Error metrics are better when small; everything else here is a score.
+      cfg <- names(m)[if (.metric_is_error(metric)) which.min(m) else which.max(m)]
+    }
+    d <- d[d$config_id == cfg, , drop = FALSE]
+    if (nrow(d) == 0L) {
+      stop("config '", cfg, "' has no successful units in `", who, "`.",
+           call. = FALSE)
+    }
+    list(cfg = cfg, d = d)
+  }
+
+  A <- pick(a, config_a, "a"); B <- pick(b, config_b, "b")
+
+  key <- function(d) paste(d$fold, d$seed, sep = "_")
+  ka  <- key(A$d); kb <- key(B$d)
+  if (anyDuplicated(ka) || anyDuplicated(kb)) {
+    stop("A (fold, seed) pair appears twice within one config. ",
+         "Pairing would be ambiguous.", call. = FALSE)
+  }
+
+  common <- intersect(ka, kb)
+  # UNPAIRED UNITS ARE DROPPED, LOUDLY. Silently falling back to an unpaired
+  # comparison because one family lost a fold to a failure is how a run reports
+  # a difference between two different experiments.
+  if (length(common) < 3L) {
+    stop("Only ", length(common), " (fold, seed) pair(s) are shared by the two ",
+         "families.\n  A paired comparison needs the same plan on both sides.",
+         call. = FALSE)
+  }
+  dropped <- length(union(ka, kb)) - length(common)
+
+  va <- A$d[[metric]][match(common, ka)]
+  vb <- B$d[[metric]][match(common, kb)]
+  d  <- va - vb
+
+  n  <- length(d)
+  md <- mean(d)
+  se <- stats::sd(d) / sqrt(n)
+  tq <- stats::qt(1 - (1 - conf) / 2, df = n - 1)
+
+  # The unpaired SE, reported alongside, so the gain from pairing is visible
+  # rather than asserted. When the folds dominate, this is much the larger.
+  se_unpaired <- sqrt(stats::var(va) / n + stats::var(vb) / n)
+
+  structure(list(
+    metric = metric, label_a = A$cfg, label_b = B$cfg,
+    name_a = label_a, name_b = label_b,
+    n_pairs = n, dropped = dropped,
+    mean_a = mean(va), mean_b = mean(vb),
+    diff = md, se = se, se_unpaired = se_unpaired,
+    ci = c(md - tq * se, md + tq * se),
+    t = if (se > 0) md / se else NA_real_,
+    p = if (se > 0) 2 * stats::pt(-abs(md / se), df = n - 1) else NA_real_,
+    conf = conf, differences = d, pairs = common,
+    higher_is_better = !.metric_is_error(metric)
+  ), class = "paired_comparison")
+}
+
+.metric_is_error <- function(metric) {
+  grepl("(^|_)(mae|rmse|mse|loss|bias|error)($|_)", tolower(metric))
+}
+
+#' @export
+print.paired_comparison <- function(x, ...) {
+  cat("\nPaired comparison --", x$metric, "\n")
+  cat(strrep("-", 62), "\n")
+  cat(sprintf("  %-14s %-10s mean = %.4f\n", x$name_a, x$label_a, x$mean_a))
+  cat(sprintf("  %-14s %-10s mean = %.4f\n", x$name_b, x$label_b, x$mean_b))
+  cat(sprintf("  paired on %d (fold, seed) unit(s)%s\n", x$n_pairs,
+              if (x$dropped > 0) sprintf("; %d unpaired dropped", x$dropped) else ""))
+  cat("\n")
+  cat(sprintf("  difference   = %+.4f  (SE %.4f)\n", x$diff, x$se))
+  cat(sprintf("  %g%% CI       = [%+.4f, %+.4f]\n", 100 * x$conf, x$ci[1], x$ci[2]))
+  cat(sprintf("  t(%d)        = %+.2f   p = %.3f\n", x$n_pairs - 1L, x$t, x$p))
+  cat(sprintf("  unpaired SE  = %.4f  (pairing is worth %.1fx here)\n",
+              x$se_unpaired,
+              if (x$se > 0) x$se_unpaired / x$se else NA_real_))
+  cat("\n")
+
+  crosses <- x$ci[1] <= 0 && x$ci[2] >= 0
+  if (crosses) {
+    # The interval, not the p-value, is the useful statement: it bounds what is
+    # still possible. "No difference" and "we could not resolve one" look the
+    # same in a p-value and are not the same claim.
+    big <- max(abs(x$ci))
+    cat(sprintf("  -> NOT SEPARATED. The data are compatible with anything from\n"))
+    cat(sprintf("     %+.4f to %+.4f, so an effect as large as %.4f %s cannot be\n",
+                x$ci[1], x$ci[2], big, x$metric))
+    cat(sprintf("     ruled out -- and neither can zero.\n"))
+  } else {
+    better <- if (xor(x$diff > 0, !x$higher_is_better)) x$name_a else x$name_b
+    cat(sprintf("  -> SEPARATED at %g%%: %s is ahead, by %.4f to %.4f.\n",
+                100 * x$conf, better, min(abs(x$ci)), max(abs(x$ci))))
+  }
+  invisible(x)
+}

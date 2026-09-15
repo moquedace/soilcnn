@@ -302,3 +302,97 @@ print_wide <- function(x, n = NULL) {
   if (is.null(n)) print(x, width = Inf) else print(x, n = n, width = Inf)
   invisible(x)
 }
+
+# ── Resume: a config_id is a LABEL, not an identity ───────────────────────────
+#
+# WHY THIS EXISTS.
+#
+# Every runner resumes by unit_id, and a unit_id is built from the config_id:
+# "cfg_002_f1_s3". That is correct only while config_id means the same thing it
+# meant when the unit was fitted -- and nothing was enforcing that.
+#
+# It broke for real. rf_grid() drew its configs with replacement and never
+# de-duplicated, so 03b fitted three identical forests under the names rf_001,
+# rf_003 and rf_004. Fixing the grid changed what those names denote: the new
+# rf_001 is mtry = p/3, the old one was mtry = 0.1p. Resuming would have read
+# the old rows, matched the names, skipped the work, and reported results for
+# hyperparameters that were never fitted -- with no error and a plausible CCC.
+#
+# The same hazard is latent in the CNN grid. make_tune_grid() draws
+# sequentially, so raising tune_length keeps the earlier configs and resume
+# works; but that holds only while the parameter space is unchanged. Add one
+# value to one axis and every subsequent draw shifts, silently.
+#
+# So: match on the HYPERPARAMETERS, and let the label follow. A cached unit is
+# reusable only if the config it recorded still equals the config the grid now
+# asks for under that name. Anything else is refitted.
+#
+# Refit rather than stop, because a changed grid is a normal thing to do and
+# stopping would punish it. The message says how many and why, so a resume that
+# silently retrains everything cannot be mistaken for a resume that worked.
+.resumable_units <- function(done_ids, comparison, tune_grid, verbose = TRUE) {
+  if (length(done_ids) == 0L || nrow(comparison) == 0L) return(done_ids)
+  if (!"config_id" %in% names(comparison)) return(done_ids)
+
+  # Only the columns the grid and the record share: the record also carries
+  # outcomes (val_ccc, runtime_min, ...) which are results, not identity.
+  pars <- setdiff(intersect(names(tune_grid), names(comparison)), "config_id")
+  if (length(pars) == 0L) return(done_ids)
+
+  # ONE CANONICAL FORM FOR BOTH SIDES.
+  #
+  # The grid and the record do not store the multi-valued parameters the same
+  # way, and they never did: the grid keeps window_sizes as a list-column
+  # c(5L, 7L), while the comparison row flattens it for the CSV as "5x7"
+  # (conv_channels as "32_64"). Compared literally, every CNN unit ever
+  # written looks stale, and a guard against a silent wrong answer becomes a
+  # guarantee of a pointless full retrain -- a worse failure than the one it
+  # was built to prevent, because it costs hours and looks like it worked.
+  #
+  # So both sides are reduced to the same tokens: split on the separators the
+  # writers use, and compare the values. format() over as.character() because
+  # a list-column element is a VECTOR, and as.character() on it returns one
+  # string per element rather than one string per config.
+  tok <- function(v) {
+    z <- if (is.character(v) && length(v) == 1L) {
+      strsplit(v, "[x_|,]")[[1]]
+    } else {
+      format(v, digits = 12, trim = TRUE)
+    }
+    z <- trimws(z)
+    # "7" and "7L" and 7 are one value; a number written either way must match.
+    num <- suppressWarnings(as.numeric(z))
+    ifelse(is.na(num), z, format(num, digits = 12, trim = TRUE))
+  }
+  sig <- function(df) {
+    vapply(seq_len(nrow(df)), function(i) {
+      paste(vapply(pars, function(p) paste(tok(df[[p]][[i]]), collapse = ","),
+                   character(1)), collapse = "|")
+    }, character(1))
+  }
+
+  want <- stats::setNames(sig(tune_grid), tune_grid$config_id)
+  have <- sig(comparison)
+
+  keep <- vapply(seq_len(nrow(comparison)), function(i) {
+    id <- comparison$config_id[i]
+    # A cached config the grid no longer names is not stale, it is simply not
+    # asked for; it never matches a unit_id the loop generates, so leaving it
+    # alone costs nothing and keeps the record of what was run.
+    if (!id %in% names(want)) return(TRUE)
+    identical(have[i], unname(want[id]))
+  }, logical(1))
+
+  stale <- comparison$unit_id[!keep]
+  out   <- setdiff(done_ids, stale)
+
+  if (verbose && length(stale) > 0L) {
+    ids <- unique(comparison$config_id[!keep])
+    message("Resume: ", length(stale), " cached unit(s) describe hyperparameters ",
+            "that no longer\n  match the grid under the same name (",
+            paste(utils::head(ids, 6), collapse = ", "),
+            if (length(ids) > 6) ", ..." else "", "). They will be REFITTED.\n",
+            "  A config_id is a label; the configuration is the identity.")
+  }
+  out
+}

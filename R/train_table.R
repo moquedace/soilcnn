@@ -154,6 +154,7 @@ run_table_resample <- function(model, tune_grid = NULL, store, points,
   }
 
   windows_needed <- if (is.null(windows)) store$window_sizes else windows
+  grid_checked   <- FALSE
 
   for (j in seq_along(plan$folds)) {
     idx <- plan$folds[[j]]
@@ -192,6 +193,14 @@ run_table_resample <- function(model, tune_grid = NULL, store, points,
       message("Grid: ", nrow(tune_grid), " config(s) x ", plan$n_folds,
               " fold(s) x ", n_seeds, " seed(s) = ",
               nrow(tune_grid) * plan$n_folds * n_seeds, " units")
+    }
+
+    # The grid exists now (generated here, or supplied by the caller), so this
+    # is the first moment the cached units can be checked against it. Once, on
+    # the first fold: the grid does not change afterwards.
+    if (!grid_checked) {
+      done_ids <- .resumable_units(done_ids, comparison, tune_grid)
+      grid_checked <- TRUE
     }
 
     for (i in seq_len(nrow(tune_grid))) {

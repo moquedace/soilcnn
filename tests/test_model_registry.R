@@ -207,6 +207,146 @@ if (requireNamespace("torch", quietly = TRUE)) {
              error = function(e) e), "error")
 
   # ===========================================================================
+  # 5a. RESUME MATCHES ON THE CONFIGURATION, NOT ON ITS NAME
+  #
+  # Both runners skip a unit whose unit_id is already in the comparison table,
+  # and a unit_id is "<config_id>_f<fold>_s<seed>". That is sound only while
+  # config_id denotes the same hyperparameters it denoted when the unit was
+  # fitted. Fixing rf_grid() changed exactly that: rf_001 used to be
+  # mtry_frac = 0.1 and is now 1/3. Resuming on the name alone would have
+  # reported results for a forest that was never fitted.
+  #
+  # The second case here is the one that makes the guard dangerous rather than
+  # merely useful. The grid holds window_sizes as a list-column c(5L, 7L); the
+  # comparison row holds the string "5x7". Compared literally, every CNN unit
+  # ever written is stale, and the guard silently triggers a full retrain --
+  # hours of GPU time, and it looks exactly like a successful resume.
+  # ===========================================================================
+
+  grid_a <- tibble::tibble(config_id = c("rf_001", "rf_002"),
+                           mtry_frac = c(1/3, 0.10),
+                           min_node_size = c(5L, 5L))
+  cmp_a  <- tibble::tibble(
+    unit_id   = c("rf_001_f1_s1", "rf_001_f1_s2", "rf_002_f1_s1"),
+    config_id = c("rf_001", "rf_001", "rf_002"),
+    status    = "success",
+    mtry_frac = c(0.10, 0.10, 0.10),          # the OLD rf_001, and rf_002 matches
+    min_node_size = c(5L, 5L, 5L),
+    val_ccc   = c(0.46, 0.47, 0.46))          # an outcome: not part of identity
+  done_a <- cmp_a$unit_id
+
+  keep_a <- suppressMessages(.resumable_units(done_a, cmp_a, grid_a))
+  ok["resume_drops_a_renamed_config"] <-
+    identical(sort(keep_a), "rf_002_f1_s1")
+
+  # Nothing changed: nothing may be dropped. A guard that refits what is
+  # already correct is indistinguishable, from the outside, from no resume.
+  ok["resume_keeps_an_unchanged_config"] <- {
+    g <- tibble::tibble(config_id = c("rf_001", "rf_002"),
+                        mtry_frac = c(0.10, 0.10),
+                        min_node_size = c(5L, 5L))
+    identical(sort(suppressMessages(.resumable_units(done_a, cmp_a, g))),
+              sort(done_a))
+  }
+
+  # THE EXPENSIVE FALSE POSITIVE: list-column vs flattened string.
+  ok["resume_matches_across_representations"] <- {
+    g <- tibble::tibble(config_id = c("cfg_001", "cfg_002"),
+                        window_sizes  = list(c(5L, 7L), 7L),
+                        conv_channels = list(c(32L, 64L), c(16L, 32L)),
+                        base_lr = c(1e-4, 3e-4))
+    cmp <- tibble::tibble(
+      unit_id   = c("cfg_001_f1_s1", "cfg_002_f1_s1"),
+      config_id = c("cfg_001", "cfg_002"),
+      status    = "success",
+      window_sizes  = c("5x7", "7"),
+      conv_channels = c("32_64", "16_32"),
+      base_lr = c(1e-4, 3e-4))
+    identical(sort(suppressMessages(
+      .resumable_units(cmp$unit_id, cmp, g))), sort(cmp$unit_id))
+  }
+
+  # ...and it must still SEE a real change hiding in that representation.
+  ok["resume_sees_a_changed_window"] <- {
+    g <- tibble::tibble(config_id = "cfg_001", window_sizes = list(c(5L, 9L)))
+    cmp <- tibble::tibble(unit_id = "cfg_001_f1_s1", config_id = "cfg_001",
+                          status = "success", window_sizes = "5x7")
+    length(suppressMessages(.resumable_units(cmp$unit_id, cmp, g))) == 0L
+  }
+
+  # A cached config the grid no longer mentions is not stale -- it is simply
+  # not asked for, and its unit_id can never be generated. Leave the record.
+  ok["resume_ignores_configs_not_in_the_grid"] <- {
+    g <- tibble::tibble(config_id = "rf_002", mtry_frac = 0.10,
+                        min_node_size = 5L)
+    "rf_001_f1_s1" %in% suppressMessages(.resumable_units(done_a, cmp_a, g))
+  }
+
+  ok["resume_survives_an_empty_history"] <-
+    identical(.resumable_units(character(0), tibble::tibble(), grid_a),
+              character(0))
+
+  # ===========================================================================
+  # 5b. THE GRIDS MUST NOT REPEAT THEMSELVES
+  #
+  # This is a post-mortem test. 03b ran four RF configs per family and three of
+  # them were the SAME config: rf_grid() drew mtry_frac from four values with
+  # replacement and never de-duplicated, so the run spent 75% of the forest
+  # budget re-measuring one setting, and the "four-point" baseline the CNN was
+  # compared against rested on two distinct forests.
+  #
+  # Worse, every draw landed on the smallest mtry (0.1p), well below the p/3
+  # regression default -- so the baseline was not merely narrow, it was
+  # HANDICAPPED, in the direction that flatters the CNN. A baseline that is
+  # accidentally weak does not fail loudly; it quietly confirms the hypothesis.
+  #
+  # Hence three properties, checked for every tune_length a person might use:
+  #   rows are distinct, the count is what was asked for, and the first row is
+  #   the textbook default rather than an arbitrary corner of the space.
+  # ===========================================================================
+
+  source(file.path(root, "R", "baselines.R"))
+
+  ok["rf_grid_rows_are_distinct"] <- all(vapply(1:6, function(k) {
+    g <- rf_grid(k, seed = 1L)
+    nrow(unique(g[, c("mtry_frac", "min_node_size")])) == nrow(g)
+  }, logical(1)))
+
+  ok["rf_grid_gives_what_was_asked"] <- all(vapply(1:6, function(k) {
+    nrow(rf_grid(k, seed = 1L)) == k
+  }, logical(1)))
+
+  # tune_length = 1 must be the forest everyone else would have fitted, so a
+  # single-config baseline is a FAIR baseline and not a random one.
+  ok["rf_grid_starts_at_the_default"] <- {
+    g <- rf_grid(1L)
+    isTRUE(all.equal(g$mtry_frac[1], 1/3)) && g$min_node_size[1] == 5L
+  }
+
+  # With n_features the fractions become counts, and two fractions can round to
+  # one count on a narrow table. Distinct rows must stay distinct AS FITTED.
+  ok["rf_grid_distinct_after_rounding"] <- all(vapply(c(9L, 20L, 181L, 724L),
+    function(p) {
+      g <- rf_grid(6L, n_features = p)
+      nrow(unique(g[, c("mtry", "min_node_size")])) == nrow(g)
+    }, logical(1)))
+
+  ok["rf_grid_mtry_is_within_the_table"] <- {
+    g <- rf_grid(6L, n_features = 181L); all(g$mtry >= 1L & g$mtry <= 181L)
+  }
+
+  # The MLP grid is a genuine random draw over four interacting axes -- that is
+  # what random search is for -- but a repeated draw is still waste.
+  ok["mlp_grid_rows_are_distinct"] <- all(vapply(c(2L, 4L, 8L), function(k) {
+    g <- mlp_grid(k, seed = 7L)
+    nrow(unique(g[, setdiff(names(g), "config_id")])) == nrow(g)
+  }, logical(1)))
+
+  ok["mlp_grid_ids_are_unique"] <- {
+    g <- mlp_grid(8L, seed = 7L); !anyDuplicated(g$config_id)
+  }
+
+  # ===========================================================================
   # 6-7. A real model through the registry's contract
   # ===========================================================================
 

@@ -181,3 +181,45 @@ answering it needs a grid that varies padding while holding the rest.
 encouraging — a tenth of the data costs ~0.03 CCC, so volume is not the binding
 constraint at this scale — but it is a comparison ACROSS profiles, which this
 file exists to warn against.
+
+---
+
+## Stage 03b -- the baselines (dev run, 10% of the points)
+
+Same fold plan, same seeds, same scaling as stage 03. Best config of each
+family, 9 units each (3 folds x 3 seeds):
+
+| family     | config  | val_ccc | val_ccc_sd | val_mae |
+|------------|---------|---------|------------|---------|
+| cnn        | cfg_002 | 0.489   | 0.0370     | 17.6    |
+| mlp_centre | mlp_001 | 0.484   | 0.0348     | 17.2    |
+| rf_context | rf_001  | 0.479   | 0.0307     | 16.3    |
+| rf_centre  | rf_001  | 0.464   | 0.0348     | 16.5    |
+
+CNN - rf_context = +0.0091 CCC. Against the standard error of the difference
+(~0.016 unpaired), that is 0.57 SE. The whole range across the four families
+is 0.025, which is smaller than the CNN's own seed noise floor of 0.0383.
+
+**Nothing separates the four families on CCC**, and MAE ranks them in the
+opposite order (rf_context best at 16.3, cnn worst at 17.6, against a median
+SOC stock of 29.3 ton/ha). A model that stretches its predictions to match the
+observed spread buys CCC at the cost of MAE; that is what the reversal is.
+
+Three caveats, in order of how much they should change the reading:
+
+1. **The RF baseline was handicapped.** `rf_grid()` drew `mtry_frac` with
+   replacement and never de-duplicated: all four configs drew 0.1, and three
+   were literally identical. So each RF family tested TWO distinct forests, both
+   at `mtry = 0.1p` -- far below the `p/3` regression default (18 features
+   instead of 60 on centre, 72 instead of 241 on centre+window). The error runs
+   in the direction that flatters the CNN. Fixed; 03b must be re-run before
+   these RF numbers are quoted.
+2. **This is 10% of the data.** Deep models typically gain more from added data
+   than forests do. "The convolution buys nothing at 3,728 points" does not
+   imply the same at ~37,000.
+3. **The CNN grid was 9 configs.** A family represented by its best of 9 draws
+   is not the same as a family at its ceiling.
+
+The result that is robust to all three: `mlp_centre` reaches 0.484 from the 181
+centre values alone, indistinguishable from the CNN on full patches. Whatever
+the neighbourhood is worth here, the evidence for it is not yet visible.
