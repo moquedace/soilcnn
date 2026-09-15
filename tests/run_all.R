@@ -32,6 +32,10 @@ root <- (function() {
 
 # Fast: ~3 seconds for all of them. Run after every edit, without thinking.
 test_files <- c(
+  # FIRST, always: a file that cannot be parsed makes every test in it fail for
+  # a reason that has nothing to do with what they test. One bad escape in
+  # R/diagnostics.R once stopped the 99 before its first check.
+  "test_sources_parse.R",    # every .R file under R/, examples/ and tests/
   "test_patch_geometry.R",   # geometry of the patches, both extraction paths
   "test_transform_loss.R",   # early-stopping loss vs the real torch loss
   "test_validation.R",       # clamp contract + option-set validation

@@ -348,7 +348,7 @@ print_snapshot_diff <- function(cmp, n_show = 40L) {
 #' @return A tibble, one row per unit, plus the attribute "summary".
 early_stopping_bias <- function(history_dir, plateau = 20L,
                                 loss_col = "val_loss") {
-  files <- list.files(history_dir, pattern = "_history\.csv$", full.names = TRUE)
+  files <- list.files(history_dir, pattern = "_history\\.csv$", full.names = TRUE)
   if (length(files) == 0L) {
     stop("No *_history.csv in: ", history_dir,
          "\nThis reads the per-epoch histories a run already wrote; it ",
@@ -374,7 +374,7 @@ early_stopping_bias <- function(history_dir, plateau = 20L,
     w    <- v[lo:hi]
 
     tibble::tibble(
-      unit_id      = sub("_history\.csv$", "", basename(f)),
+      unit_id      = sub("_history\\.csv$", "", basename(f)),
       n_epochs     = length(v),
       best_epoch   = best_i,
       best_loss    = v[best_i],

@@ -1558,6 +1558,38 @@ Cheap to see between 01 and 02; expensive to meet in the middle of 03.
 
 ---
 
+## One bad escape stopped the 99 before its first check (2026-09-14)
+
+    Erro: '\.' is an unrecognized escape in character string
+    (R/diagnostics.R:351:56)
+
+`early_stopping_bias()` was appended to `R/diagnostics.R` through a shell
+heredoc, which collapsed `\.` to `\.`. R does not compile a file lazily: a
+single invalid escape makes the WHOLE file unparseable, so one character took
+down every function in `diagnostics.R` -- and the 99 refused to start, one line
+into a check that had nothing to do with it.
+
+This is the second time a heredoc has corrupted a file this way (the first
+turned `
+` into a real newline). The tool is the problem, not the typo:
+**write a script file and run it, never a heredoc containing backslashes.**
+
+### The guard, which is what actually matters
+
+`tests/test_sources_parse.R` parses every `.R` file under `R/`, `examples/` and
+`tests/`. It runs **first** in `run_all.R`.
+
+`parse()` answers exactly this question and touches nothing -- no package
+loaded, no code run, nothing evaluated -- at milliseconds per file. There is no
+point testing behaviour in a file that cannot be read, and a syntax error
+should not be delivered to whoever next sources the file, minutes into a run,
+pointing at a file they were not editing.
+
+It covers `examples/` too: a pipeline script that cannot parse wastes the same
+day as a framework file that cannot, and the scripts are what get edited most.
+
+---
+
 ## Pendente
 
 | etapa | o quê |
