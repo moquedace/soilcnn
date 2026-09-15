@@ -406,15 +406,45 @@ if (nrow(top_blame) == 0L) {
   message("\n  Channels responsible (top 15):")
   print_wide(dplyr::slice_head(top_blame, n = 15), n = Inf)
 
-  if (top_blame$pct_invalidated[1] > 1) {
-    message("\n  WARNING: '", top_blame$predictor[1], "' alone invalidated ",
-            top_blame$pct_invalidated[1], "% of points.")
+  # ALONE IS THE WORD THAT MATTERS, AND IT HAS ITS OWN COLUMN.
+  #
+  # pct_invalidated counts every point where this channel was non-finite --
+  # including points where all 181 were. pct_sole_cause counts the points this
+  # channel ALONE lost, and only that number says anything about the channel.
+  #
+  # The two look identical in the table and mean opposite things:
+  #
+  #   a high SOLE cause  -> sparse NA over land. The full-window rule turns
+  #                         each NA pixel into a hole of up to WxW in the MAP,
+  #                         which costs far more there than in training.
+  #                         Actionable: check that channel's coverage.
+  #   a high INVALIDATED with zero sole causes -> those points sit where the
+  #                         whole stack is nodata (coast, water, the raster's
+  #                         own edge). Nothing to do with any channel, and
+  #                         dropping one would fix nothing.
+  #
+  # This distinction was written into the table and then ignored by the
+  # message, which used pct_invalidated while saying "alone".
+  worst_sole <- top_blame[which.max(top_blame$pct_sole_cause), ]
+
+  if (nrow(worst_sole) > 0L && worst_sole$pct_sole_cause[1] > 0.1) {
+    message("\n  WARNING: '", worst_sole$predictor[1], "' is the SOLE cause of ",
+            round(worst_sole$pct_sole_cause[1], 3), "% of the losses.")
     message("  A channel with sparse NA does far more damage to the MAP than ",
             "to the training set: the")
     message("  full-window rule turns each NA pixel into a hole of up to ",
             max(window_sizes_to_extract), "x", max(window_sizes_to_extract),
             " around it. Check its coverage")
     message("  over land BEFORE committing to a full prediction run.")
+  } else if (max(top_blame$pct_invalidated) > 1) {
+    message("\n  NOTE: ", round(max(top_blame$pct_invalidated), 2),
+            "% of points were lost, but NO channel is the sole cause of any ",
+            "of them.")
+    message("  That is the signature of locations where the whole stack is ",
+            "nodata -- coastline,")
+    message("  inland water, or the raster's own edge -- not of a channel ",
+            "with patchy coverage.")
+    message("  Dropping a predictor would recover none of them.")
   }
 }
 

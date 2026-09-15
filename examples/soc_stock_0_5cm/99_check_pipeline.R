@@ -373,15 +373,37 @@ if (all_02_exist) {
   # channel lost it. valid_common is an AND over every channel, so on its own
   # it can never name the culprit -- and without a culprit, a channel with
   # sparse NA only shows up as a hole in the map, weeks later.
+  # THE THRESHOLD GOES ON THE SOLE-CAUSE COLUMN, NOT ON pct_invalidated.
+  #
+  # pct_invalidated counts every point where a channel was non-finite,
+  # including points where all 181 were. When a point sits on a coastline the
+  # whole stack is nodata there, so EVERY channel scores that point and every
+  # channel ties -- which made this check WARN at 1.01% on the dev run while
+  # no channel was responsible for anything.
+  #
+  # pct_sole_cause is the number that describes a CHANNEL: points lost to it
+  # and nothing else. That is the sparse-NA case, and it is the one that turns
+  # into holes in the map.
   blame <- safe_read_csv2(f_blame)
-  worst <- if (nrow(blame) > 0) max(blame$pct_invalidated, na.rm = TRUE) else 0
-  check_threshold("02", "worst channel, % of points invalidated",
-                  worst, warn_above = 1, fail_above = 5)
-  if (worst > 0) {
-    top <- blame[which.max(blame$pct_invalidated), ]
-    add_check("02", "channel invalidating the most points", "PASS",
-              sprintf("%s (%s): %.3f%%", top$predictor[1], top$type[1],
-                      top$pct_invalidated[1]))
+  has_sole <- "pct_sole_cause" %in% names(blame) && nrow(blame) > 0
+  worst_sole <- if (has_sole) max(blame$pct_sole_cause, na.rm = TRUE) else 0
+  worst_any  <- if (nrow(blame) > 0) max(blame$pct_invalidated, na.rm = TRUE) else 0
+
+  check_threshold("02", "worst channel, % of points it ALONE invalidated",
+                  worst_sole, warn_above = 0.5, fail_above = 2)
+
+  if (has_sole && worst_sole > 0) {
+    top <- blame[which.max(blame$pct_sole_cause), ]
+    add_check("02", "channel with the most sole-cause losses", "PASS",
+              sprintf("%s (%s): %.3f%% alone", top$predictor[1], top$type[1],
+                      top$pct_sole_cause[1]))
+  } else if (worst_any > 0) {
+    # Reported as information, not as a warning: nothing here is actionable,
+    # and a WARN that cannot be acted on is one people learn to scroll past.
+    add_check("02", "points lost where the WHOLE stack is nodata", "PASS",
+              sprintf(paste0("%.2f%% of points, no channel the sole cause -- ",
+                             "coastline / water / raster edge, not patchy ",
+                             "coverage"), worst_any))
   }
 
   # Patches stored unscaled: stage 03 applies the fold's scaling. A
@@ -951,12 +973,27 @@ if (exists("crisk")) {
   add_snap("01_canais_com_na",     sum(crisk$risk == "has_na",   na.rm = TRUE))
 }
 if (exists("manifest") && "n_points_valid" %in% names(manifest)) {
-  add_snap("02_n_pontos_validos", manifest$n_points_valid[1])
-  add_snap("02_pct_removido",     manifest$pct_removed[1])
+  add_snap("02_n_points_valid", manifest$n_points_valid[1])
+  add_snap("02_pct_removed",    manifest$pct_removed[1])
 }
 if (exists("blame") && nrow(blame) > 0L) {
-  add_snap("02_pior_canal",     blame$predictor[which.max(blame$pct_invalidated)])
-  add_snap("02_pior_canal_pct", max(blame$pct_invalidated, na.rm = TRUE))
+  # SNAPSHOTTED BY SOLE CAUSE, and only when there is one.
+  #
+  # Under pct_invalidated every channel ties at the same value whenever the
+  # losses are nodata locations, so which.max() returns whichever channel comes
+  # first alphabetically. That is not a measurement: rename a predictor and the
+  # snapshot reports a change that did not happen.
+  if ("pct_sole_cause" %in% names(blame) &&
+      max(blame$pct_sole_cause, na.rm = TRUE) > 0) {
+    add_snap("02_worst_sole_cause_channel",
+             blame$predictor[which.max(blame$pct_sole_cause)])
+    add_snap("02_worst_sole_cause_pct",
+             max(blame$pct_sole_cause, na.rm = TRUE))
+  } else {
+    add_snap("02_worst_sole_cause_channel", "(none)")
+    add_snap("02_worst_sole_cause_pct", 0)
+  }
+  add_snap("02_pct_lost_any_channel", max(blame$pct_invalidated, na.rm = TRUE))
 }
 if (exists("cc") && !inherits(cc, "try-error")) {
   add_snap("02_centros_divergentes", cc$n_mismatch)

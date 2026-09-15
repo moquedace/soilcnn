@@ -1927,6 +1927,62 @@ at the pole**. Project to equal-area first. That is correct regardless.
 
 ---
 
+## The blame report said "alone" while reporting the not-alone number (2026-09-15)
+
+Stage 02 finished the dev extraction and ended on this:
+
+    WARNING: 'aboveground_biomass_carbon' alone invalidated 1.009% of points.
+    ... Check its coverage over land BEFORE committing to a full prediction run.
+
+The table printed directly above it said `n_sole_cause = 0` for every channel.
+
+### The two situations that look identical and mean the opposite
+
+`pct_invalidated` counts every point where a channel was non-finite --
+**including points where all 181 were**. So:
+
+| pattern | what it means | actionable? |
+|---|---|---|
+| one channel with a high **sole** cause | sparse NA over land; the full-window rule turns each NA pixel into a hole of up to 15x15 in the MAP | yes -- check that channel |
+| every channel tied on `pct_invalidated`, zero sole causes | those points sit where the WHOLE stack is nodata: coastline, inland water, the raster's own edge | no -- dropping a predictor recovers none of them |
+
+This run is the second case: 38 points, all 181 channels, **zero** sole causes.
+The message named a channel anyway -- and it named the one that sorts first
+alphabetically, because all 181 tie.
+
+### Fixed in three places
+
+- **02** now branches on `pct_sole_cause`. With a real sole cause it warns as
+  before; with none it prints a NOTE saying what the losses actually are.
+- **The 99** thresholded `pct_invalidated` at warn > 1, so it would have WARNed
+  at 1.01% about nothing. It now thresholds the sole-cause column
+  (warn > 0.5, fail > 2) and reports the nodata case as information --
+  a WARN nobody can act on is one people learn to scroll past.
+- **The snapshot** recorded `02_pior_canal` as
+  `blame$predictor[which.max(blame$pct_invalidated)]`. Under a tie that is
+  whichever predictor sorts first: rename one and the snapshot reports a change
+  that did not happen. It now records the sole-cause channel, or `"(none)"`.
+
+The snapshot keys changed name (`02_pior_canal` -> `02_worst_sole_cause_channel`
+and friends, also out of Portuguese), so the first comparison after this will
+list them as removed and new. That is correct: the quantity changed.
+
+### What the extraction itself reported
+
+3,766 -> 3,728 points, **1.01% removed**, well under the 2% warn line. Reading
+plan: 42 of 64 chunks held a point, 66.8% of the raster's rows, 7,602 strip
+reads, **4.09 hours**. The store is 1.7 GB across three windows, all three
+verified by size.
+
+And a number worth recording: the rasters are at **0.00224579811 degrees**, not
+the 1/480 = 0.00208333 assumed in conversation. That is 250 m at the equator
+(250/111320), so the data was right and the mental arithmetic was not. It moves
+the auto buffer from 0.03125 to **0.0336870** degrees. Nothing in the code
+changed -- `cell_size` is read from the raster, which is why this was a comment
+error rather than a defect.
+
+---
+
 ## Pendente
 
 | etapa | o quê |
