@@ -97,23 +97,33 @@ run_table_resample <- function(model, tune_grid = NULL, store, points,
   n_seeds <- as.integer(n_seeds)
   stopifnot(n_seeds >= 1L)
 
-  if (is.null(tune_grid)) {
-    if (is.null(model$default_grid)) {
-      stop("Model '", model$name, "' has no default_grid(); pass tune_grid.",
-           call. = FALSE)
-    }
-    tune_grid <- model$default_grid(tune_length, base_seed)
-  }
-  if (!"config_id" %in% names(tune_grid)) {
+  # THE GRID MAY NOT EXIST YET, AND THAT IS DELIBERATE.
+  #
+  # A default grid can need the real training data -- mtry is a fraction of
+  # ncol(x), and glmnet's lambda path is computed from the values themselves.
+  # The data only exists once the first fold's table is built, so generation is
+  # deferred to there rather than faked here against a synthetic matrix.
+  #
+  # An explicit tune_grid skips all of this and is validated immediately: a
+  # missing config_id should not be found one fold into the run.
+  if (!is.null(tune_grid) && !"config_id" %in% names(tune_grid)) {
     stop("tune_grid must have a config_id column.", call. = FALSE)
+  }
+  if (is.null(tune_grid) && is.null(model$default_grid)) {
+    stop("Model '", model$name, "' has no default_grid(); pass tune_grid.",
+         call. = FALSE)
   }
 
   fold_sizes <- check_fold_plan(plan)
   message("\n-- Resampling plan --")
   print(plan)
-  message("\nModel: ", model$name, " | ", nrow(tune_grid), " config(s) x ",
-          plan$n_folds, " fold(s) x ", n_seeds, " seed(s) = ",
-          nrow(tune_grid) * plan$n_folds * n_seeds, " units")
+  if (!is.null(tune_grid)) {
+    message("\nModel: ", model$name, " | ", nrow(tune_grid), " config(s) x ",
+            plan$n_folds, " fold(s) x ", n_seeds, " seed(s) = ",
+            nrow(tune_grid) * plan$n_folds * n_seeds, " units")
+  } else {
+    message("\nModel: ", model$name, " | grid generated from fold 1's data")
+  }
 
   run_dir <- file.path(output_dir, run_id)
   create_output_dirs(file.path(run_dir, c("comparison", "predictions",
@@ -122,9 +132,12 @@ run_table_resample <- function(model, tune_grid = NULL, store, points,
   # Written BEFORE any fitting: results whose folds cannot be reconstructed are
   # results that cannot be defended.
   safe_save_rds(plan, file.path(run_dir, "fold_plan.rds"), compress = FALSE)
-  safe_save_rds(tune_grid, file.path(run_dir, "tune_grid.rds"), compress = FALSE)
   safe_write_csv2(dplyr::mutate(fold_sizes, method = plan$method),
                   file.path(run_dir, "fold_sizes.csv"))
+  if (!is.null(tune_grid)) {
+    safe_save_rds(tune_grid, file.path(run_dir, "tune_grid.rds"),
+                  compress = FALSE)
+  }
 
   comparison_csv <- file.path(run_dir, "comparison", "comparison_all.csv")
   comparison_rds <- file.path(run_dir, "comparison", "comparison_all.rds")
@@ -162,6 +175,24 @@ run_table_resample <- function(model, tune_grid = NULL, store, points,
 
     message("Table view: ", ncol(tab[[1]]$x), " features (",
             paste(features, collapse = " + "), ")")
+
+    # Generated ONCE, from fold 1, and reused for every fold after it. A grid
+    # regenerated per fold would tune a different set of configs on each one,
+    # and the per-config means every decision is read from would then average
+    # over configs that are not the same config.
+    if (is.null(tune_grid)) {
+      tune_grid <- model$default_grid(tune_length, base_seed,
+                                      x = tab$train$x, y = tab$train$y)
+      if (!"config_id" %in% names(tune_grid)) {
+        stop("default_grid() for '", model$name,
+             "' returned no config_id column.", call. = FALSE)
+      }
+      safe_save_rds(tune_grid, file.path(run_dir, "tune_grid.rds"),
+                    compress = FALSE)
+      message("Grid: ", nrow(tune_grid), " config(s) x ", plan$n_folds,
+              " fold(s) x ", n_seeds, " seed(s) = ",
+              nrow(tune_grid) * plan$n_folds * n_seeds, " units")
+    }
 
     for (i in seq_len(nrow(tune_grid))) {
       cfg <- tune_grid[i, ]

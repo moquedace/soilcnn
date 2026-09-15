@@ -20,7 +20,8 @@
 #   input         "patches" (N x C x H x W tensors) or "table" (N x P matrix)
 #   fit           function(x, y, cfg, ...) -> fitted object
 #   predict       function(object, x, ...) -> numeric vector, length nrow(x)
-#   default_grid  function(tune_length, seed) -> tibble of configs, or NULL
+#   default_grid  function(tune_length, seed, x, y) -> tibble of configs,
+#                 or NULL
 #   count_params  function(object) -> integer, for one_se()'s complexity rule
 #
 # `input` is the field that matters. It says which VIEW of the fold cache the
@@ -49,8 +50,19 @@
 #'   model consumes.
 #' @param fit          function(x, y, cfg, ...) returning a fitted object.
 #' @param predict      function(object, x, ...) returning a numeric vector.
-#' @param default_grid function(tune_length, seed) returning a tibble with a
-#'   config_id column, or NULL if the model has nothing to tune.
+#' @param default_grid function(tune_length, seed, x, y) returning a tibble
+#'   with a config_id column, or NULL if the model has nothing to tune.
+#'
+#'   x AND y ARE THE REAL TRAINING DATA OF THE FIRST FOLD, and they are in the
+#'   signature because some grid generators need them. mtry is a fraction of
+#'   ncol(x); glmnet's lambda path is computed from the VALUES. A grid built
+#'   against a synthetic matrix of the right width is correct for the first
+#'   kind and quietly wrong for the second, so the framework hands over the
+#'   real thing and a generator takes what it needs.
+#'
+#'   A generator that needs neither still has to accept them -- an argument it
+#'   ignores costs nothing, and a signature that varies per model is a
+#'   signature the runner cannot call.
 #' @param count_params function(object) returning the number of free
 #'   parameters, used as the complexity axis in one_se(). NULL means the model
 #'   cannot report it and one_se() falls back to its other rule.

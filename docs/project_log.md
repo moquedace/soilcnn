@@ -1305,6 +1305,82 @@ the case that produces a confident answer from the wrong covariates.
 
 ---
 
+## Borrowing caret's model library (2026-09-14)
+
+Cassio asked whether the extra families should come from caret rather than be
+hand-written, so caret does the heavy lifting as more models are added.
+
+**Yes -- as an adapter, not as the foundation.**
+
+### What caret is worth here
+
+Its `modelInfo` objects carry, for ~230 methods, the parameter NAMES, a grid
+generator that knows sensible ranges, the fit and predict closures, and which
+package to load. That is the expensive part of supporting many models, and
+re-deriving it once per family is how ranges quietly end up slightly wrong.
+
+### What caret does not get to do: resample
+
+The fold plan carves the test set and the folds by one criterion, with block
+structure and a Chebyshev buffer. `trainControl` *can* express arbitrary folds
+through `index`/`indexOut`, so this is not impossible -- it is undesirable. It
+would mean translating our plan into caret's index lists, reading our metrics
+back through a `summaryFunction`, and having two objects that each believe they
+own the resampling. `seed_noise_floor()` and `one_se()` are already ours and
+already tested.
+
+So: `trainControl(method = "none")` with a one-row `tuneGrid`. caret is a
+fit/predict adapter; our loop stays in charge of folds, seeds, scaling and
+metrics.
+
+### Three settings that are not negotiable
+
+| setting | why |
+|---|---|
+| `returnData = FALSE` | `train()` otherwise stores the training data in the fitted object: ~85 MB per unit at 30k x 360, and a run holds many units |
+| no `preProcess` | the fold cache is already scaled on this fold's training rows; a second scaling is harmless until someone changes one of the two, and then the network and the baseline are standardised differently while every table still says they were compared |
+| `allowParallel = FALSE` | the parallelism belongs to the model (ranger's threads, xgboost's nthread); nesting a foreach backend oversubscribes the cores |
+
+### The one thing that forced a contract change
+
+caret's grid generators need the **real** training data. Some use only
+`ncol(x)` (mtry), but `glmnet` computes its lambda path from the VALUES. A grid
+built against a synthetic matrix of the right width is correct for the first
+kind and quietly wrong for the second.
+
+So `default_grid` became `function(tune_length, seed, x, y)`, and
+`run_table_resample()` generates the grid **inside fold 1**, where the table
+exists -- once, then reused for every fold after it. A grid regenerated per
+fold would tune a different set of configs on each one, and the per-config
+means every decision is read from would average over configs that are not the
+same config.
+
+A generator that needs neither argument still has to accept them: a signature
+that varies per model is one the runner cannot call.
+
+### caret is a SUGGESTS, never a dependency
+
+caret Depends on ggplot2 and lattice and Imports recipes, plyr, pROC,
+ModelMetrics, reshape2, foreach -- a heavy tree for someone installing this to
+fit a CNN. `R/caret_adapter.R` sources like any other file and nothing fails
+until `caret_spec()` is actually called.
+
+### What stays hand-written, and why
+
+`rf` (ranger's native API is faster than going through caret) and `mlp` (it has
+to use the CNN's own training recipe, or the control answers nothing). Adding
+anything else is now three lines:
+
+```r
+register_model(caret_spec("xgbTree"), overwrite = TRUE)
+results$xgb <- run_table_resample(model = "xgbTree", ...)   # tune_grid = NULL
+```
+
+`caret_available("boost|forest|svm|glmnet")` lists what is on offer. The
+model's own package must be installed -- caret Suggests them.
+
+---
+
 ## Pendente
 
 | etapa | o quê |

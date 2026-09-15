@@ -34,6 +34,9 @@ source(file.path(project_root, "R", "train_cnn.R"))
 source(file.path(project_root, "R", "model_registry.R"))
 source(file.path(project_root, "R", "baselines.R"))
 source(file.path(project_root, "R", "train_table.R"))
+# Optional: only needed by the caret-borrowed models at the bottom of this
+# script. Sourcing it is free; caret is not loaded until caret_spec() is called.
+source(file.path(project_root, "R", "caret_adapter.R"))
 
 # ══════════════════════════════════════════════════════════════════════════════
 # WHAT THIS SCRIPT IS FOR
@@ -278,3 +281,47 @@ if (nrow(cnn_best) > 0L && "rf_context" %in% board$family) {
 board_path <- file.path(tuning_base, run_id, "family_board.csv")
 safe_write_csv2(board, board_path)
 message("\nBoard: ", board_path)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ADDING A FOURTH FAMILY: BORROWING IT FROM caret
+#
+# The three families above are hand-written because we want exact control over
+# them -- ranger's native API is faster than going through caret, and the MLP
+# has to use the CNN's own training recipe or it answers nothing.
+#
+# Everything ELSE should be borrowed. caret already carries, for ~230 methods,
+# the parameter names, a grid generator that knows sensible ranges, the fit and
+# predict closures, and which package to load. Re-deriving that per family is
+# the work caret already did.
+#
+# What caret does NOT get to do is resample: the fold plan stays ours, and
+# caret is called with trainControl(method = "none") and a one-row grid. See
+# the header of R/caret_adapter.R.
+#
+# To see what is on offer:
+#
+#   caret_available("boost|forest|svm|glmnet")
+#
+# To add one -- three lines, and it behaves like every other family:
+#
+#   register_model(caret_spec("xgbTree"), overwrite = TRUE)
+#   results$xgb <- run_table_resample(
+#     model      = "xgbTree",
+#     store = store, points = points, type_table = type_table, plan = plan,
+#     features   = c("centre", "window_mean"),
+#     windows    = windows_needed,
+#     transform  = expm1,
+#     output_dir = tuning_base,
+#     run_id     = file.path(run_id, "xgb_context"),
+#     base_seed  = base_seed, n_seeds = n_seeds,
+#     tune_length = 6L
+#   )
+#
+# tune_grid is left NULL on purpose: caret's generator needs the REAL training
+# data (mtry is a fraction of ncol(x); glmnet's lambda path is computed from
+# the values), so the runner builds the grid from fold 1's table rather than
+# against a synthetic matrix of the right width.
+#
+# The model's own package must be installed -- caret Suggests them rather than
+# depending on them. xgbTree needs xgboost, ranger needs ranger, and so on.
+# ══════════════════════════════════════════════════════════════════════════════

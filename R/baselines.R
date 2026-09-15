@@ -127,7 +127,12 @@ rf_spec <- function() {
       }
     },
 
-    default_grid = function(tune_length, seed) rf_grid(tune_length, seed),
+    # n_features comes from the real table, so mtry is resolved from the
+    # feature set that actually exists rather than from a fraction carried
+    # around and multiplied later.
+    default_grid = function(tune_length, seed, x = NULL, y = NULL) {
+      rf_grid(tune_length, seed, n_features = if (!is.null(x)) ncol(x) else NULL)
+    },
 
     # A forest's size is its total node count -- the honest complexity axis for
     # one_se(), and comparable across configs of the same family. It is not
@@ -293,7 +298,11 @@ mlp_spec <- function(n_epochs = 300L, patience = 40L) {
       })
     },
 
-    default_grid = function(tune_length, seed) mlp_grid(tune_length, seed),
+    # x and y are accepted and ignored: nothing in this grid depends on the
+    # data, but a signature that varies per model is one the runner cannot call.
+    default_grid = function(tune_length, seed, x = NULL, y = NULL) {
+      mlp_grid(tune_length, seed)
+    },
 
     count_params = function(object) {
       as.integer(sum(vapply(object$model$parameters,
@@ -347,7 +356,7 @@ cnn_spec <- function() {
            call. = FALSE)
     },
 
-    default_grid = function(tune_length, seed) {
+    default_grid = function(tune_length, seed, x = NULL, y = NULL) {
       make_tune_grid(tune_length = tune_length, seed = seed)
     },
 

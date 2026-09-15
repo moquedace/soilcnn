@@ -241,6 +241,75 @@ if (requireNamespace("torch", quietly = TRUE)) {
     cat("  RF skipped               : neither ranger nor randomForest installed\n")
   }
 
+  # ===========================================================================
+  # 8. The caret adapter
+  #
+  # caret is borrowed for its model LIBRARY, never for its resampling. What
+  # must hold is that a borrowed method arrives as an ordinary model_spec and
+  # that nothing downstream can tell the difference.
+  # ===========================================================================
+
+  if (requireNamespace("caret", quietly = TRUE)) {
+    source(file.path(root, "R", "caret_adapter.R"))
+
+    ok["caret_lists_regression_methods"] <- {
+      av <- caret_available("^rf$|^ranger$|^glmnet$")
+      is.data.frame(av) && nrow(av) > 0
+    }
+
+    ok["caret_refuses_an_unknown_method"] <- inherits(
+      tryCatch(caret_model_info("definitely_not_a_method"),
+               error = function(e) e), "error")
+
+    sp_c <- caret_spec("rf", name = "caret_rf")
+    ok["caret_spec_is_a_model_spec"] <- inherits(sp_c, "model_spec")
+    ok["caret_spec_consumes_a_table"] <- identical(sp_c$input, "table")
+
+    # The generator needs real data, and says so rather than inventing some.
+    ok["caret_default_grid_refuses_without_x"] <- inherits(
+      tryCatch(sp_c$default_grid(3L, 42L), error = function(e) e), "error")
+
+    if (requireNamespace("randomForest", quietly = TRUE)) {
+      # 12 rows: caret::train needs enough to fit, and the point is the
+      # contract, not the fit.
+      set.seed(7)
+      xc <- matrix(stats::rnorm(12 * 4), nrow = 12,
+                   dimnames = list(NULL, c("p1", "p2", "p3", "p4")))
+      yc <- as.numeric(xc[, 1] * 2 + stats::rnorm(12, sd = 0.1))
+
+      gc_ <- sp_c$default_grid(2L, 42L, x = xc, y = yc)
+      ok["caret_grid_has_config_id"] <- "config_id" %in% names(gc_)
+      ok["caret_grid_has_the_methods_parameters"] <- "mtry" %in% names(gc_)
+      ok["caret_grid_config_ids_are_unique"] <-
+        !anyDuplicated(gc_$config_id)
+
+      fc <- sp_c$fit(x = xc, y = yc, cfg = gc_[1, ])
+      pc <- sp_c$predict(fc, xc)
+      ok["caret_fits_through_the_spec"]  <- inherits(fc, "caret_fitted")
+      ok["caret_predicts_one_per_row"]   <- length(pc) == nrow(xc)
+      ok["caret_predictions_are_finite"] <- all(is.finite(pc))
+
+      # caret is NOT allowed to hold the training data: at 30k x 360 that is
+      # ~85 MB per unit, and a run holds many units.
+      ok["caret_does_not_keep_the_data"] <- is.null(fc$fit$trainingData)
+
+      ok["caret_refuses_reordered_columns"] <- inherits(
+        tryCatch(sp_c$predict(fc, xc[, c(2, 1, 3, 4), drop = FALSE]),
+                 error = function(e) e), "error")
+
+      # A config row missing the method's parameters must fail AT FIT, naming
+      # the fix -- not reach caret and come back as a cryptic tuneGrid error.
+      ok["caret_refuses_a_grid_missing_parameters"] <- inherits(
+        tryCatch(sp_c$fit(x = xc, y = yc,
+                          cfg = tibble::tibble(config_id = "x", nonsense = 1)),
+                 error = function(e) e), "error")
+
+      cat("  caret adapter            : rf borrowed, fitted and predicted\n")
+    }
+  } else {
+    cat("  caret adapter skipped    : caret not installed\n")
+  }
+
 } else {
   cat("  table view skipped       : torch not available\n")
 }
