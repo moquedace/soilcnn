@@ -1640,6 +1640,45 @@ ignore warnings.
 
 ---
 
+## A 10% subsample does not make stage 02 ten times faster (2026-09-14)
+
+Measured from the dev run's own `point_metadata.csv` before launching 02, so
+the expectation would be a number rather than a hope.
+
+Stage 02 costs RASTER READING, not points: one strip per band per chunk, with
+empty chunks skipped. A subsample is faster by whatever fraction of the raster
+its points happen to MISS -- which depends on how they are spread, not on how
+many there are.
+
+The 3,766 dev points span latitude -47 to +70. At `chunk_nrows = 1000` that is
+43 of 87 chunks and **50.5%** of the raster rows: roughly half the full run's
+reading, not a tenth.
+
+### The lever, and why it was not pulled
+
+| chunk_nrows | chunks with points | % of raster read |
+|---|---|---|
+| 250 | 112 | 34.2 |
+| 500 | 71 | 42.2 |
+| **1000 (current)** | **43** | **50.5** |
+| 2000 | 25 | 58.3 |
+
+Smaller chunks read fewer rows and issue more GDAL calls. The note in `02`
+records that raising 200 -> 1000 was a win precisely because it cut the call
+count five-fold -- which makes sense at full density, where almost every chunk
+holds a point and shrinking skips nothing.
+
+For a sparse subsample the sign flips. **Which wins here depends on the
+per-call overhead, which has never been measured**, so the setting was left
+alone rather than gambling a run on a guess.
+
+What was added instead is the number: 02 now prints, before the loop, how many
+chunks hold a point, what share of the raster will be read, and how many strip
+reads that is. Deciding whether to wait should not require watching progress
+lines and extrapolating.
+
+---
+
 ## Pendente
 
 | etapa | o quê |

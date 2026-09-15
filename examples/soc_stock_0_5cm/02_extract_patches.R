@@ -266,6 +266,37 @@ n_chunks     <- length(chunk_starts)
 n_done       <- 0L
 t_extract    <- Sys.time()
 
+# HOW MUCH OF THE RASTER THIS RUN WILL ACTUALLY READ.
+#
+# The reading, not the point count, is what stage 02 costs: one strip per band
+# per chunk, and a chunk with no point in it is skipped entirely. So a 10%
+# subsample does NOT make this ten times faster -- it makes it faster by
+# whatever fraction of the raster its points happen to miss, which depends on
+# how they are spread, not on how many there are.
+#
+# Printed before the loop so the number is available when deciding whether to
+# wait, rather than inferred from watching the progress lines. chunk_nrows is
+# the lever: smaller chunks skip more empty raster but issue more GDAL calls
+# (see the note where chunk_nrows is set -- going 200 -> 1000 was a win on
+# FULL data, where almost every chunk has a point and shrinking saves nothing).
+.rows_planned <- 0L
+.chunks_hit   <- 0L
+for (.cs in chunk_starts) {
+  .ce <- min(.cs + chunk_nrows - 1L, n_rows_rast)
+  if (!any(valid_common & !is.na(row_ids) & row_ids >= .cs & row_ids <= .ce)) next
+  .chunks_hit   <- .chunks_hit + 1L
+  .rows_planned <- .rows_planned +
+    (min(n_rows_rast, .ce + half_w_max) - max(1L, .cs - half_w_max) + 1L)
+}
+message(sprintf(
+  "\nReading plan: %d of %d chunks hold a point -- %s of %s raster rows (%.1f%%)",
+  .chunks_hit, n_chunks, format(.rows_planned, big.mark = ","),
+  format(n_rows_rast, big.mark = ","), 100 * .rows_planned / n_rows_rast))
+message(sprintf("  %d chunk(s) x %d band(s) = %s strip reads",
+                .chunks_hit, n_channels,
+                format(.chunks_hit * n_channels, big.mark = ",")))
+rm(.rows_planned, .chunks_hit, .cs, .ce)
+
 for (ci in seq_along(chunk_starts)) {
   cs <- chunk_starts[ci]
   ce <- min(cs + chunk_nrows - 1L, n_rows_rast)
