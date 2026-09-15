@@ -2360,3 +2360,58 @@ to differ from the default.
 reports test metrics from runs made under the old buffer. They are not wrong as
 records of what happened; they answer a weaker question than their names imply,
 and are marked accordingly.
+
+---
+
+## Spatial occlusion: asking the trained network whether it uses the neighbourhood
+
+Item 9 of the September review (§D3), and the one it called "the question the
+whole project needs to answer, and it has not been asked yet."
+
+Stage 03b answers it from the outside, by racing the CNN against a forest fed
+the same neighbourhood as per-channel means. `spatial_occlusion()` answers it
+from the inside: hide part of the patch, re-predict, and see what the loss of
+that part costs. Per Chebyshev ring, so the report also says *how far out* the
+neighbourhood still matters — which is what should set the window size of the
+next run. Inference only; nothing is retrained.
+
+**Permutation, not zeros.** After scaling, zero is the training mean, so zeroing
+reads as "the average landscape" — but a patch whose rim is exactly the mean
+everywhere is a landscape that does not exist. A drop measured that way
+confounds "this region mattered" with "this input is off-distribution", and the
+second effect grows with the area hidden, which is precisely the comparison
+being made. So the occluded region is taken whole from another sample: each
+channel keeps its marginal and its texture, and only the association with *this*
+target is destroyed. `method = "zero"` is kept because the two disagreeing is
+itself a finding — a large zero-effect with a small permutation-effect says the
+network is sensitive to the input being unusual, not to the content.
+
+### Three defects found writing it, all mine, in order of seriousness
+
+**1. The cache holds torch tensors, not base R arrays.** The function was
+written against arrays and would have failed on real data. The test fixture was
+written against arrays too, so both were wrong the same way and the test could
+not see it. *A fixture that does not match the real representation tests the
+fixture.* `occlude_patch_array()` now refuses a base array rather than accepting
+one silently.
+
+**2. Row-major versus column-major.** The natural fix — flatten `[n, c, w, w]`
+to `[n, c, w*w]` and index with `as.vector(mask)` — is wrong: torch is
+row-major, R arrays are column-major, so the two walk the pixels in different
+orders. It would have worked anyway here, because `patch_ring_index()` is
+symmetric (`outer(d, d, pmax)`), so the bug would have hidden behind exactly the
+masks this file uses and appeared on the first asymmetric one. Replaced by
+`torch_where()` broadcasting a `[w, w]` mask, where there is no linear index to
+get backwards.
+
+**3. `predict_loader()` floors predictions at zero.** Correct for a stock, wrong
+for anything that can go negative. Left implicit, the diagnostic would floor
+half the predictions of such a target and report a collapse the model never had
+— and the collapse would look like a finding. `clamp` is now an argument of
+`spatial_occlusion()`, with tests for both settings.
+
+*Test-design note:* the end-to-end tests use models whose answer is known by
+construction — one that reads only the centre pixel, one that reads only ring 1.
+Each must report the mirror image of the other. A diagnostic that answers this
+question wrongly is worse than not having it, because the answer is the sort
+nobody double-checks: it agrees with whatever the reader already suspected.

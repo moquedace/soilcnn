@@ -48,6 +48,7 @@ test_files <- c(
   "test_aoa.R",              # dissimilarity index + area of applicability
   "test_api.R",              # the front end: specs, "auto", dispatch
   "test_selection_order.R",  # the test set is scored only after the choice
+  "test_occlusion.R",        # does the model use the neighbourhood?
   "test_architecture.R",     # embed_pool wiring
   "test_augmentation.R"      # D4 symmetries
 )
