@@ -173,65 +173,102 @@ message(sprintf("\nResolucao do raster: %.8f por pixel (unidades de x/y)",
 message(sprintf("Piso do buffer (janela %d x resolucao): %.6f",
                 max(windows_needed), max(windows_needed) * cell_size))
 
-# ── PLANO DE REAMOSTRAGEM ─────────────────────────────────────────────────────
+# ── RESAMPLING PLAN ───────────────────────────────────────────────────────────
 #
-# Troque UMA linha aqui para mudar como o modelo e validado. Nada abaixo muda.
+# ONE cut point, ONE criterion. The plan carves the test set AND the folds, and
+# it carves both the same way. Change this line and nothing below changes.
 #
-#   holdout(meta)     o split fixo que o 01 escreveu. DEFAULT.
-#   random_folds(meta, k = 5)
-#   spatial_folds(meta, k = 5, block_size = ..., buffer = ...)
-#   region_folds(meta, group = meta$<coluna>)
+#   holdout(meta, validation_frac = , test_frac = )      no folds
+#   random_folds(meta, k = , test_frac = )               ignores geography
+#   spatial_folds(meta, k = , test_frac = , block_size = , buffer = )
+#   region_folds(meta, group = , k = , test_frac = )
 #
-# POR QUE O DEFAULT E O HOLDOUT: ele reproduz exatamente o que este pipeline
-# fazia antes de existir reamostragem, entao ligar CV e uma escolha sua. E e o
-# unico plano cuja validacao e a que o 01 escreveu, o que e o que torna os
-# numeros comparaveis com os runs anteriores.
+# WHY THE TEST SET IS CARVED HERE AND NOT IN STAGE 01. It used to be a
+# stratified random draw written into the point table, which then travelled
+# inside the 16 GB patch store -- so changing it cost a re-extraction. And it
+# was random even when the validation was spatial, which put two numbers in
+# one table that cannot be compared: measured on the full data, the random
+# test came out 0.042 CCC EASIER than the spatial validation, while carrying
+# the name that suggests it is the stricter of the two.
 #
-# O CUSTO DE LIGAR: k folds custam k vezes o tempo do grid. Com 24 configs x 3
-# sementes x 5 folds sao 360 treinos, nao 24. Comece pelo holdout com 3
-# sementes para medir o piso de ruido -- ele ja diz se o grid tem sinal --
-# antes de multiplicar por k.
+# THE TEST SET IS FROZEN ON FIRST USE. A test set redrawn on every run is not
+# a test set. The first run writes data_split.csv; every run after reads it.
+# Delete that file to draw a new one -- deliberately, not by accident.
 #
-# O BUFFER, e por que ele nao e opcional no espacial.
-#
-# Dois patches de largura w a resolucao res dividem pelo menos um pixel quando
-# os centros estao a menos de w * res um do outro. Por isso o buffer e escrito
-# como `max(windows_needed) * cell_size` e nao como um numero: ele acompanha a
-# janela e a resolucao sozinho, e nas unidades certas.
-#
-# Nesta escala a garantia e EXATA, nao aproximada: o raster tambem esta em
-# graus, entao "dividir pixel" e uma pergunta em graus. (Como medida de
-# DISTANCIA um grau de longitude encolhe com a latitude -- o que significa que
-# o buffer e conservador longe do equador, que e o lado seguro do erro.)
-#
-# Blocar e bufferizar nao sao alternativas. Sem bloco o buffer nao deixa ponto
-# de treino nenhum de pe: todo cluster tem ponto de treino e de validacao,
-# entao todo ponto de treino tem um vizinho de validacao (veja apply_buffer()
-# em R/resample.R -- isso e medido, nao suposto).
-#
-# BLOCK_SIZE: medido sobre estes 31.179 pontos do pool.
-#   0,25 graus (~27 km)  -> 9.541 blocos, maior = 0,7% do pool
-#   1,0  graus (~111 km) -> 2.788 blocos, maior = 2,5%
-#   2,0  graus (~222 km) -> 1.279 blocos, maior = 4,4%   <- escolhido
-#   3,0  graus (~333 km) ->   778 blocos, maior = 8,9%   (comeca a desbalancear)
-# Blocos maiores separam mais; blocos grandes demais fazem um unico bloco
-# dominar um fold. 2 graus e o ponto onde os dois ainda cabem.
+# THE BUFFER. Two patches of width w at resolution res share a pixel when their
+# centres are within w-1 cells in BOTH axes -- a SQUARE condition, which is why
+# the buffer metric is chebyshev and `max(window) * cell_size` is exact. Under
+# a circular buffer the diagonal escapes: on the previous run that left 0.5% to
+# 1% of validation points still sharing patch pixels with training, while the
+# report showed a clean 0% for "same raster cell".
 
-plan <- spatial_folds(store$meta,
-                      k          = 3,
-                      block_size = 2,                                # ~222 km
-                      buffer     = max(windows_needed) * cell_size)  # 15 px
+test_frac <- 0.15
 
-# Para voltar ao split fixo do 01 (mais barato, sem folds):
-# plan <- holdout(store$meta)
+split_file <- file.path(metadata_dir, "data_split.csv")
+frozen_test <- if (file.exists(split_file)) {
+  ds <- readr::read_csv2(split_file, show_col_types = FALSE)
+  message("Frozen test set read from data_split.csv: ",
+          sum(ds$role == "test"), " points")
+  ds$sample_id[ds$role == "test"]
+} else {
+  NULL
+}
 
-message("\n-- Plano de reamostragem --")
+plan <- spatial_folds(
+  store$meta,
+  k          = 3,
+  test_frac  = test_frac,
+  test_ids   = frozen_test,
+  block_size = 2,                                 # ~222 km; see below
+  buffer     = max(windows_needed) * cell_size    # 15 px, exact under chebyshev
+)
+
+# BLOCK_SIZE, measured over the full point set:
+#   0.25 deg (~27 km)  -> 9,541 blocks, largest = 0.7% of the points
+#   1.0  deg (~111 km) -> 2,788 blocks, largest = 2.5%
+#   2.0  deg (~222 km) -> 1,279 blocks, largest = 4.4%   <- chosen
+#   3.0  deg (~333 km) ->   778 blocks, largest = 8.9%   (starts to unbalance)
+# Larger blocks separate more; blocks that are too large let one of them
+# dominate a fold. Re-measure if the point set changes.
+
+if (!file.exists(split_file)) {
+  test_pos <- plan$folds[[1]]$test
+  safe_write_csv2(
+    tibble::tibble(
+      sample_id = store$meta$sample_id,
+      role      = ifelse(seq_len(nrow(store$meta)) %in% test_pos,
+                         "test", "modelling")
+    ),
+    split_file
+  )
+  message("Test set frozen to: ", split_file)
+}
+
+message("\n-- Resampling plan --")
 print(plan)
 
+# How much this plan still leaks, in the SAME metric the 99 reports for the
+# whole dataset -- so a number here is comparable with a number there.
 leak <- fold_leakage_report(plan, store$meta, cell_size = cell_size,
                             windows = windows_needed)
-message("\n-- Vazamento por fold (mesma celula / patches sobrepostos) --")
-print(dplyr::filter(leak, criterion == "same raster cell"), n = Inf, width = Inf)
+# IDENTICAL PATCHES are a defect under any plan: two points in the same pixel
+# feed the network the same input, so one can be scored on exactly what the
+# other trained on.
+#
+# SHARED PIXELS between neighbours are NOT a defect. Under a random plan they
+# are the condition being measured -- "how well does this predict at new points
+# drawn from the same spatial distribution" -- so reporting them as leakage
+# would misstate the question the plan was chosen to answer. They are printed
+# only when the plan claims to be spatial, where they describe how well the
+# separation held.
+message("\n-- Identical patches, train vs validation, per fold --")
+print(dplyr::filter(leak, matters), n = Inf, width = Inf)
+
+if (grepl("spatial|region", plan$method)) {
+  message("\n-- Shared pixels between neighbours (context, not a defect) --")
+  print(dplyr::filter(leak, !matters, window == max(windows_needed)),
+        n = Inf, width = Inf)
+}
 
 # O escalonamento e ajustado no treino de CADA fold, dentro do
 # run_cnn_resample() -- e por isso que os patches sao guardados CRUS. Um fold

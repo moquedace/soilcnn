@@ -46,7 +46,20 @@ project produced.
 
 ## Leakage, as measured
 
-| split | same raster cell | patches overlap 15×15 |
+Two different things, never to be conflated again:
+
+**Identical patch (same raster cell)** — two points in one 250 m pixel feed the
+network the same input, bit for bit. A defect under ANY plan, because it is
+about duplicate inputs, not about geography.
+
+**Shares pixels** — two nearby points have some surrounding cells in common.
+**Not a defect.** Under a random plan it is the condition being measured; a
+random split is answering "how well does this predict at new points drawn from
+the same spatial distribution", and neighbours sharing context is what that
+question is made of. It is worth looking at only under a plan that claims to be
+spatial, where it describes how well the separation held.
+
+| split | identical patch | shares pixels 15×15 |
 |---|---|---|
 | validation (fixed split from 01) | 27.06% | 54.2% |
 | test (fixed split from 01) | 28.08% | 55.0% |
@@ -63,9 +76,14 @@ execution plan fixes it.
 These are the checks that matter in development mode. They are about structure,
 not magnitude, so they should hold at any data volume or resolution.
 
-1. **The random test set is EASIER than the spatial validation: +0.042 CCC.**
-   Consistent across all three configs. If a rebuilt pipeline shows the test
-   harder than spatial validation, something in the split logic is wrong.
+1. **The random test set scores HIGHER than the spatial validation: +0.042 CCC.**
+   Consistent across all three configs.
+
+   This is not an error in the test set. The two numbers answer two different
+   questions -- interpolation near known samples, and prediction on unvisited
+   ground -- and the gap is the distance between them, which is worth knowing.
+   It is listed here as a control: if a rebuilt pipeline reverses the sign, the
+   split logic changed behaviour.
 
 2. **The seed noise floor exceeds the gap between configs.** Seed sd 0.0275
    against a 1st-to-2nd gap of 0.0086 — 3.2× larger. The ranking does not

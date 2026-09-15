@@ -394,7 +394,10 @@ if (n_valid == 0L) stop("No points valid after the window rule.")
 #      a crash then costs the extraction but not the writes.
 
 meta_valid <- points_all[valid_idx, ] %>%
-  dplyr::select(profile_id, sample_id, dataset_role, split_bin, x, y,
+  # No role column: the store says WHERE the points are and WHAT they are
+  # worth, never who trains. That is what lets the split change for free --
+  # see the fold plans in R/resample.R.
+  dplyr::select(profile_id, sample_id, x, y,
                 target_native, target_log1p) %>%
   dplyr::rename(target_transform = target_log1p)
 

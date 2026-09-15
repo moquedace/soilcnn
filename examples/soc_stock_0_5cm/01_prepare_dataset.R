@@ -26,8 +26,38 @@ setwd(project_root)
 
 source(file.path(project_root, "R", "utils.R"))
 source(file.path(project_root, "R", "preprocess.R"))
+source(file.path(project_root, "R", "resample.R"))
 
 set.seed(123)
+
+# ── Run profile ───────────────────────────────────────────────────────────────
+#
+# "full" uses every profile. "dev" keeps a fraction of them so the whole
+# pipeline -- 01 through prediction -- runs end to end in minutes instead of a
+# day. A pipeline you can run completely is a pipeline you can fix without
+# fear, and that is the only reason this exists.
+#
+# WHAT A DEV NUMBER IS COMPARABLE WITH. Only another dev number. Comparing a
+# 10% run against the full run measures data volume, not correctness. What
+# must survive a subsample is the SHAPE of the result -- see
+# docs/reference_performance.md for the four relations that hold at any volume.
+#
+# WHY WHOLE BLOCKS. Dropping profiles at random thins the spatial clusters:
+# leakage falls, the buffer discards less, and the folds look cleaner than the
+# data is. Measured on the test fixture: a random subsample of the same size
+# left each point with 9.4 neighbours within 1 km where the full data has 29.0,
+# while the block subsample kept 28.8. A spatial bug would hide behind that.
+#
+# The profile is written into the metadata and the 99 announces it, so a dev
+# result can never be mistaken for a real one later.
+
+run_profile <- "dev"           # "dev" or "full"
+
+dev_subsample <- list(
+  frac       = 0.10,           # of POINTS, not of blocks
+  block_size = 2,              # degrees -- same grid the spatial folds use
+  seed       = 20260914L
+)
 
 # ── Settings ──────────────────────────────────────────────────────────────────
 
@@ -35,10 +65,6 @@ target_col   <- "soc_stock_ton_ha_0_5cm"
 target_label <- "soc_stock_0_5cm"
 target_unit  <- "ton_ha"
 
-train_fraction      <- 0.70
-validation_fraction <- 0.15
-test_fraction       <- 0.15
-split_n_bins        <- 10
 
 soc_gpkg_file <- file.path(
   project_root,
@@ -92,10 +118,6 @@ percentage_predictor_patterns <- c(
 # percentage class as a dummy once profiles start hitting it.
 force_as_percentage <- janitor::make_clean_names(character(0))
 
-stopifnot(
-  abs(train_fraction + validation_fraction + test_fraction - 1) < 1e-8
-)
-
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
 output_data_dir     <- file.path(project_root, "data",    "processed", "soc_stock_modeling", target_label)
@@ -125,6 +147,31 @@ if (!target_col %in% names(soc_sf)) {
 }
 
 message("Profiles read: ", nrow(soc_sf))
+
+# ── Development subsample ─────────────────────────────────────────────────────
+# Applied HERE, before terra::extract() touches 181 rasters: this is where the
+# time is, so subsampling anywhere later would save nothing.
+
+subsample_note <- "full dataset"
+
+if (identical(run_profile, "dev")) {
+  xy <- sf::st_coordinates(sf::st_geometry(soc_sf))
+  keep <- block_subsample(xy[, 1], xy[, 2],
+                          frac       = dev_subsample$frac,
+                          block_size = dev_subsample$block_size,
+                          seed       = dev_subsample$seed)
+  subsample_note <- describe_subsample(keep)
+  soc_sf <- soc_sf[keep, , drop = FALSE]
+
+  message("\n", strrep("!", 78))
+  message("RUN PROFILE: dev -- this is NOT a result run")
+  message("  ", subsample_note)
+  message("  Comparable only with another dev run. See ",
+          "docs/reference_performance.md")
+  message(strrep("!", 78), "\n")
+} else {
+  message("RUN PROFILE: full -- ", nrow(soc_sf), " profiles")
+}
 
 # ── List raster predictors ────────────────────────────────────────────────────
 # Ignores any subdirectory (e.g. 'nused') — only .tif files at the root level
@@ -340,89 +387,54 @@ message(
   " | continuous: ", length(predictor_cols_continuous)
 )
 
-# ── Stratified train/validation/test split ────────────────────────────────────
-# Bins by target quantile → samples within each bin are randomly assigned
-# to splits in the requested proportions. This ensures that the distribution
-# of the target variable is similar across splits (important for skewed SOC).
+# ── Row key ───────────────────────────────────────────────────────────────────
+#
+# THIS STAGE DECIDES NO ROLES.
+#
+# It used to cut a stratified 70/15/15 here, and that decision then travelled
+# inside the patch store -- so changing the split meant five hours of
+# re-extraction. It is now made by a fold plan in stage 03, from coordinates,
+# in seconds: `spatial_folds(meta, k = 3, test_frac = 0.15, ...)` carves the
+# test set AND the folds by one criterion.
+#
+# What stays here is what is expensive to produce and independent of any
+# split: the point values, the coordinates, the target, and the predictor
+# TYPES. Everything downstream is then free to change its mind for free.
 
-dataset_model_split <- dataset_model_raw %>%
-  dplyr::mutate(
-    sample_id = dplyr::row_number(),
-    split_bin = dplyr::ntile(target_native, split_n_bins)
-  ) %>%
-  dplyr::group_by(split_bin) %>%
-  dplyr::mutate(
-    split_order        = sample(dplyr::n()),
-    n_bin              = dplyr::n(),
-    n_train_bin        = floor(n_bin * train_fraction),
-    n_validation_bin   = floor(n_bin * validation_fraction),
-    dataset_role = dplyr::case_when(
-      split_order <= n_train_bin                         ~ "train",
-      split_order <= n_train_bin + n_validation_bin      ~ "validation",
-      TRUE                                               ~ "test"
-    )
-  ) %>%
-  dplyr::ungroup() %>%
-  dplyr::select(-split_order, -n_bin, -n_train_bin, -n_validation_bin)
+dataset_model_split <- dplyr::mutate(dataset_model_raw,
+                                     sample_id = dplyr::row_number())
 
-train_raw      <- dplyr::filter(dataset_model_split, dataset_role == "train")
-validation_raw <- dplyr::filter(dataset_model_split, dataset_role == "validation")
-test_raw       <- dplyr::filter(dataset_model_split, dataset_role == "test")
+# ── Degenerate predictors ─────────────────────────────────────────────────────
+#
+# A predictor with zero variance over the points cannot be z-scored, and a
+# channel that is constant at every profile teaches the network nothing while
+# still applying an arbitrary weight to the map. Checked over ALL rows, because
+# whether a channel is constant does not depend on who trains.
+#
+# NOTE ON WHAT IS NOT HERE ANY MORE: the scaling table. Scaling is estimated
+# from the training rows OF A FOLD, so it belongs to the fitted model, not to
+# the dataset -- see R/preprocess.R and the note in stage 04. Keeping a global
+# copy here is what let the map be built with one set of constants while the
+# model had been trained with another.
 
-# ── Scaling ───────────────────────────────────────────────────────────────────
-# All scaling parameters are derived from the TRAIN set only and applied
-# identically to validation and test to prevent data leakage.
+pred_sd <- vapply(predictor_cols_final,
+                  function(nm) stats::sd(dataset_model_split[[nm]], na.rm = TRUE),
+                  numeric(1))
+bad_scaling <- names(pred_sd)[is.na(pred_sd) | !is.finite(pred_sd) |
+                              (pred_sd <= 0 &
+                               !(names(pred_sd) %in% predictor_cols_dummy))]
 
-predictor_scaling <- predictor_type_table %>%
-  dplyr::mutate(
-    scaling_method = dplyr::case_when(
-      predictor %in% predictor_cols_dummy      ~ "none_dummy_0_1",
-      predictor %in% predictor_cols_percentage ~ "percentage_0_100_to_0_1",
-      TRUE                                     ~ "zscore_train"
-    ),
-    train_mean = purrr::map_dbl(predictor, function(nm) {
-      if (nm %in% predictor_cols_dummy)      return(0)
-      if (nm %in% predictor_cols_percentage) return(0)
-      mean(train_raw[[nm]], na.rm = TRUE)
-    }),
-    train_sd = purrr::map_dbl(predictor, function(nm) {
-      if (nm %in% predictor_cols_dummy)      return(1)
-      if (nm %in% predictor_cols_percentage) return(100)
-      sd(train_raw[[nm]], na.rm = TRUE)
-    })
-  )
-
-# Drop predictors with degenerate scaling (zero or NA sd)
-bad_scaling <- dplyr::filter(
-  predictor_scaling,
-  is.na(train_mean) | !is.finite(train_mean) |
-    is.na(train_sd) | !is.finite(train_sd) | train_sd <= 0
-)
-
-if (nrow(bad_scaling) > 0) {
-  message("\nDropping predictors with degenerate scaling (zero variance or NA):")
-  print(bad_scaling$predictor)
-
-  predictor_cols_final  <- setdiff(predictor_cols_final, bad_scaling$predictor)
-  predictor_type_table  <- dplyr::filter(predictor_type_table,  predictor %in% predictor_cols_final)
-  predictor_scaling     <- dplyr::filter(predictor_scaling,     predictor %in% predictor_cols_final)
+if (length(bad_scaling) > 0) {
+  message("\nDropping predictors with degenerate variance over the points:")
+  print(bad_scaling)
+  predictor_cols_final <- setdiff(predictor_cols_final, bad_scaling)
+  predictor_type_table <- dplyr::filter(predictor_type_table,
+                                        predictor %in% predictor_cols_final)
   predictor_cols_dummy      <- dplyr::filter(predictor_type_table, is_dummy)$predictor
   predictor_cols_percentage <- dplyr::filter(predictor_type_table, is_percentage)$predictor
-  predictor_cols_continuous <- dplyr::filter(predictor_type_table, !is_dummy, !is_percentage)$predictor
+  predictor_cols_continuous <- dplyr::filter(predictor_type_table,
+                                             !is_dummy, !is_percentage)$predictor
 }
-
-apply_scaling <- function(df, scaling_table, cols) {
-  for (i in seq_len(nrow(scaling_table))) {
-    nm  <- scaling_table$predictor[i]
-    if (!nm %in% cols) next
-    df[[nm]] <- (df[[nm]] - scaling_table$train_mean[i]) / scaling_table$train_sd[i]
-  }
-  df
-}
-
-train_scaled      <- apply_scaling(train_raw,      predictor_scaling, predictor_cols_final)
-validation_scaled <- apply_scaling(validation_raw, predictor_scaling, predictor_cols_final)
-test_scaled       <- apply_scaling(test_raw,       predictor_scaling, predictor_cols_final)
 
 # ── Checks ────────────────────────────────────────────────────────────────────
 
@@ -444,49 +456,15 @@ dataset_check <- dataset_model_split %>%
     n_continuous_predictors = length(predictor_cols_continuous)
   )
 
-split_check <- dataset_model_split %>%
-  dplyr::group_by(dataset_role) %>%
-  dplyr::summarise(
-    n             = dplyr::n(),
-    n_profiles    = dplyr::n_distinct(profile_id),
-    min_target    = min(target_native, na.rm = TRUE),
-    median_target = median(target_native, na.rm = TRUE),
-    mean_target   = mean(target_native, na.rm = TRUE),
-    max_target    = max(target_native, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  dplyr::arrange(factor(dataset_role, levels = c("train", "validation", "test")))
 
-split_bin_check <- dataset_model_split %>%
-  dplyr::count(split_bin, dataset_role) %>%
-  tidyr::pivot_wider(names_from = dataset_role, values_from = n, values_fill = 0L)
 
-scaled_extreme_check <- purrr::map_dfr(predictor_cols_final, function(nm) {
-  tibble::tibble(
-    predictor          = nm,
-    scaling_method     = predictor_scaling$scaling_method[match(nm, predictor_scaling$predictor)],
-    max_abs_train      = max(abs(train_scaled[[nm]]), na.rm = TRUE),
-    max_abs_validation = max(abs(validation_scaled[[nm]]), na.rm = TRUE),
-    max_abs_test       = max(abs(test_scaled[[nm]]), na.rm = TRUE),
-    train_mean_raw     = mean(train_raw[[nm]], na.rm = TRUE),
-    train_sd_raw       = sd(train_raw[[nm]], na.rm = TRUE)
-  )
-}) %>%
-  dplyr::arrange(dplyr::desc(max_abs_train))
-
-message("\n── Dataset summary ──────────────────────────")
+message("\n-- Dataset summary --------------------------")
 print(dataset_check, width = Inf)
-message("\n── Split summary ────────────────────────────")
-print(split_check, width = Inf)
-message("\n── Split × bin check ────────────────────────")
-print(split_bin_check, n = Inf, width = Inf)
-message("\n── Top scaled extremes ──────────────────────")
-print(dplyr::slice_head(scaled_extreme_check, n = 20), width = Inf)
 
 # ── Export ────────────────────────────────────────────────────────────────────
 
 export_cols <- c(
-  "profile_id", "sample_id", "dataset_role", "split_bin", "x", "y",
+  "profile_id", "sample_id", "x", "y",
   target_col, "target_native", "target_log1p",
   predictor_cols_final
 )
@@ -496,13 +474,9 @@ safe_write_csv2(
   file.path(output_data_dir, "full_modeling_dataset_raw.csv")
 )
 
-# The per-split CSVs (train/validation/test x raw/scaled) are NOT written any
-# more. The *_raw ones were a filter() of full_modeling_dataset_raw.csv, and
-# nothing ever read the *_scaled ones -- script 02 explicitly read the raw
-# files because the pre-scaled columns "would just be ignored". More
-# importantly, once scaling is estimated per fold there IS no single "the
-# scaled dataset", so writing one would be a file asserting something that
-# stopped being true. The split now travels as an index (split_metadata.csv).
+# The per-split CSVs are gone, and so is the split itself: this stage writes
+# ONE dataset and one point table. Who trains, who scores and who is held out
+# is decided by a fold plan in stage 03, from coordinates, in seconds.
 
 # ── Channel risk report ───────────────────────────────────────────────────────
 # Three families of channel have shipped a broken map before, and none of them
@@ -589,30 +563,26 @@ QC rules: ", sum(!is.na(qc_table$na_below)), " channel(s) with an NA floor, ",
 # Metadata
 safe_write_csv2(qc_summary,            file.path(output_metadata_dir, "qc_summary.csv"))
 safe_write_csv2(predictor_type_table,  file.path(output_metadata_dir, "predictor_type_table.csv"))
-safe_write_csv2(predictor_scaling,     file.path(output_metadata_dir, "predictor_scaling.csv"))
 safe_write_csv2(raster_table_all,      file.path(output_metadata_dir, "raster_table_all.csv"))
 safe_write_csv2(raster_table_use,      file.path(output_metadata_dir, "raster_table_used.csv"))
 safe_write_csv2(dataset_check,         file.path(output_metadata_dir, "dataset_check.csv"))
-safe_write_csv2(split_check,           file.path(output_metadata_dir, "split_check.csv"))
-safe_write_csv2(split_bin_check,       file.path(output_metadata_dir, "split_bin_check.csv"))
-safe_write_csv2(scaled_extreme_check,  file.path(output_metadata_dir, "scaled_extreme_check.csv"))
 
 safe_write_csv2(
   dataset_model_split %>%
-    dplyr::select(profile_id, sample_id, dataset_role, split_bin, x, y,
+    dplyr::select(profile_id, sample_id, x, y,
                   target_native, target_log1p),
-  file.path(output_metadata_dir, "split_metadata.csv")
+  file.path(output_metadata_dir, "point_metadata.csv")
 )
 
 safe_write_csv2(
   tibble::tibble(
+    # The run profile travels with the data, so no downstream stage and no
+    # future reader has to guess whether a number came from a subsample.
+    run_profile                 = run_profile,
+    subsample                   = subsample_note,
     target_label                = target_label,
     target_col                  = target_col,
     target_unit                 = target_unit,
-    train_fraction              = train_fraction,
-    validation_fraction         = validation_fraction,
-    test_fraction               = test_fraction,
-    split_n_bins                = split_n_bins,
     predictor_raster_dir        = predictor_raster_dir,
     manual_predictor_drop       = paste(drop_present, collapse = ";"),
     temperature_min_valid_celsius = temperature_min_valid_celsius,
@@ -629,65 +599,28 @@ safe_write_csv2(
 
 # ── Figures ───────────────────────────────────────────────────────────────────
 
-p_count <- ggplot2::ggplot(split_check, ggplot2::aes(x = dataset_role, y = n)) +
-  ggplot2::geom_col() +
-  ggplot2::labs(x = "Dataset role", y = "Number of profiles",
-                title = paste(target_label, "– split sizes")) +
-  ggplot2::theme_bw()
+# ── Figures ───────────────────────────────────────────────────────────────────
+# Split-based figures are gone with the split: this stage no longer knows who
+# trains. What it can still show is the target itself.
 
-p_dens_native <- ggplot2::ggplot(
-  dataset_model_split,
-  ggplot2::aes(x = target_native, linetype = dataset_role)
-) +
+p_dens_native <- ggplot2::ggplot(dataset_model_split,
+                                 ggplot2::aes(x = target_native)) +
   ggplot2::geom_density(linewidth = 0.8) +
   ggplot2::labs(x = paste0("SOC stock, ", target_unit), y = "Density",
-                linetype = "Split",
-                title = paste(target_label, "– native distribution by split")) +
+                title = paste(target_label, "- native distribution")) +
   ggplot2::theme_bw()
 
-p_dens_log1p <- ggplot2::ggplot(
-  dataset_model_split,
-  ggplot2::aes(x = target_log1p, linetype = dataset_role)
-) +
+p_dens_log1p <- ggplot2::ggplot(dataset_model_split,
+                                ggplot2::aes(x = target_log1p)) +
   ggplot2::geom_density(linewidth = 0.8) +
-  ggplot2::labs(x = paste0("log1p(SOC stock, ", target_unit, ")"), y = "Density",
-                linetype = "Split",
-                title = paste(target_label, "– log1p distribution by split")) +
+  ggplot2::labs(x = "log1p(SOC stock)", y = "Density",
+                title = paste(target_label, "- log1p distribution")) +
   ggplot2::theme_bw()
 
-p_boxplot <- ggplot2::ggplot(
-  dataset_model_split,
-  ggplot2::aes(x = dataset_role, y = target_native)
-) +
-  ggplot2::geom_boxplot(outlier.alpha = 0.2) +
-  ggplot2::labs(x = "Split", y = paste0("SOC stock, ", target_unit),
-                title = paste(target_label, "– boxplot by split")) +
-  ggplot2::theme_bw()
+for (p in list(p_dens_native, p_dens_log1p)) print(p)
 
-p_scaled_extreme <- scaled_extreme_check %>%
-  dplyr::slice_head(n = 30) %>%
-  dplyr::mutate(predictor = factor(predictor, levels = rev(predictor))) %>%
-  ggplot2::ggplot(ggplot2::aes(x = max_abs_train, y = predictor)) +
-  ggplot2::geom_col() +
-  ggplot2::labs(x = "Max |scaled value| in train", y = NULL,
-                title = paste(target_label, "– top scaled predictor extremes")) +
-  ggplot2::theme_bw()
+ggplot2::ggsave(file.path(output_figure_dir, "target_density_native.png"),
+                p_dens_native, width = 7, height = 5, dpi = 300)
+ggplot2::ggsave(file.path(output_figure_dir, "target_density_log1p.png"),
+                p_dens_log1p, width = 7, height = 5, dpi = 300)
 
-for (p in list(p_count, p_dens_native, p_dens_log1p, p_boxplot, p_scaled_extreme)) {
-  print(p)
-}
-
-ggplot2::ggsave(file.path(output_figure_dir, "split_count.png"),
-                p_count, width = 7, height = 5, dpi = 300)
-ggplot2::ggsave(file.path(output_figure_dir, "target_native_density_by_split.png"),
-                p_dens_native, width = 8, height = 5, dpi = 300)
-ggplot2::ggsave(file.path(output_figure_dir, "target_log1p_density_by_split.png"),
-                p_dens_log1p, width = 8, height = 5, dpi = 300)
-ggplot2::ggsave(file.path(output_figure_dir, "target_boxplot_by_split.png"),
-                p_boxplot, width = 8, height = 5, dpi = 300)
-ggplot2::ggsave(file.path(output_figure_dir, "scaled_extreme_predictors.png"),
-                p_scaled_extreme, width = 9, height = 7, dpi = 300)
-
-message("\nDataset saved to:  ", output_data_dir)
-message("Metadata saved to: ", output_metadata_dir)
-message("Figures saved to:  ", output_figure_dir)

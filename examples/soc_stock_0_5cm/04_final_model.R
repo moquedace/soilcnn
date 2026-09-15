@@ -29,6 +29,7 @@ source(file.path(project_root, "R", "utils.R"))
 source(file.path(project_root, "R", "patches.R"))
 source(file.path(project_root, "R", "preprocess.R"))
 source(file.path(project_root, "R", "dataset.R"))
+source(file.path(project_root, "R", "resample.R"))
 source(file.path(project_root, "R", "metrics.R"))
 source(file.path(project_root, "R", "cnn_architecture.R"))
 source(file.path(project_root, "R", "tune_grid.R"))
@@ -207,7 +208,17 @@ type_table <- readr::read_csv2(file.path(metadata_dir, "predictor_type_table.csv
                                show_col_types = FALSE)
 points <- align_points_to_meta(points, store$meta)
 
-index        <- split_index_from_meta(store$meta)
+# The final fit reuses the TUNING plan: same test set, validation carved by the
+# same criterion. Selecting spatially and then stopping on a random validation
+# set would change the question between the two stages.
+tuning_plan <- readRDS(file.path(tuning_dir, "fold_plan.rds"))
+refit       <- refit_split(tuning_plan, store$meta, validation_frac = 0.15)
+index       <- refit$folds[[1]]
+
+message("
+-- Final-fit split (from the tuning plan) --")
+print(refit)
+
 fold         <- build_fold_cache(store, points, type_table, index, windows_needed)
 points_valid <- fold_points_valid(store, index)
 tensor_cache <- fold$cache
@@ -230,6 +241,17 @@ train_config_all_seeds <- function(cfg, config_id) {
   create_output_dirs(file.path(cfg_out_dir,
                                c("models", "history", "predictions",
                                  "metrics", "gates")))
+
+  # THE SCALING TRAVELS WITH THE WEIGHTS.
+  #
+  # It is estimated from the training rows of THIS fit, so it is part of the
+  # fitted model, not a property of the dataset. Stage 05 reads it from here.
+  #
+  # It used to read a global table written by stage 01 instead -- a second copy
+  # of the same fact, free to drift. After patches became raw and scaling
+  # became per-fold, the two stopped agreeing: the map was being built with one
+  # set of constants while the network had been trained with another, silently.
+  safe_write_csv2(fold$scaling, file.path(cfg_out_dir, "predictor_scaling.csv"))
 
   seed_rows <- vector("list", length(seeds))
 

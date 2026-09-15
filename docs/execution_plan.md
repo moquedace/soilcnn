@@ -55,8 +55,19 @@ immediately instead of five hours in.
 
 ## Phase 0 — armour (changes no artefact, forces no rerun)
 
+- [x] **0.0** Development profile. `run_profile <- "dev"` in stage 01 keeps 10%
+      of the points by WHOLE 2-degree blocks, so the whole pipeline runs end to
+      end in minutes. Patches stay at 250 m -- a 20 km window changes what the
+      window means, which was tried before and caused problems. Only the
+      prediction stage uses the 20 km rasters, and only to exercise the code:
+      those values are a machinery test, not a map. The profile travels in
+      `target_config.csv` and the 99 opens with a banner, so a 10% number can
+      never be read as a result.
+      *Measured:* neighbours within 1 km per point, full 29.0, block subsample
+      28.8, random subsample of the same size 9.4.
+
 - [x] **0.1** Commit everything. Two weeks of refactor existed only on disk.
-- [ ] **0.2** Delete `_test_gpu/R/` and `scripts/` — three core modules and a
+- [x] **0.2** Delete `_test_gpu/R/` and `scripts/` — three core modules and a
       whole pre-refactor pipeline, diverged from the real ones. Traps.
       *Verified by:* `run_all` still 9/9.
 - [ ] **0.3** English everywhere in code, tests, examples **and user-facing
@@ -156,9 +167,12 @@ measured under the same folds.
 
 ## Phase 4 — the cheap questions, before anything expensive
 
-- [ ] **4.1** Is the §2.4 bias real? Measurable from the per-epoch histories of
-      the 27 units **already on disk** — zero training. If it is small, A3
-      dies and 15% of the training data is saved.
+- [ ] **4.1** Is the §2.4 bias real? It was to be measured from the per-epoch
+      histories of the 27 full-data units, but those were deleted with the rest
+      of the outputs — only the summary in `reference_performance.md` survives.
+      It now needs the histories of a **dev** run, which cost minutes. Same
+      question, same zero-training method, different source. If the bias is
+      small, A3 dies and 15% of the training data is saved.
 - [ ] **4.2** Does the large branch accept `valid` padding? One parameter in
       the grid. Note the constraint found while auditing: with window 3 and 2
       conv blocks the centre's receptive field is already 5×5, larger than the
@@ -179,6 +193,12 @@ measured under the same folds.
 script.
 
 ---
+
+## Open questions
+
+- `_scratch_1km_test/` (7 scripts, 124 KB): delete like the other stale
+  scaffolding, or keep? It is tracked, so deleting is reversible.
+- Commit cadence: one commit per verified step, or in batches?
 
 ## Rules that hold for the rest of the project
 

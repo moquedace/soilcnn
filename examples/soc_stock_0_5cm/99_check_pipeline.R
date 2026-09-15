@@ -114,11 +114,11 @@ check_equal <- function(stage, label, a, b, name_a = "a", name_b = "b") {
 
 f_qc      <- file.path(metadata_dir, "qc_summary.csv")
 f_dscheck <- file.path(metadata_dir, "dataset_check.csv")
-f_split   <- file.path(metadata_dir, "split_check.csv")
+
 f_ptype   <- file.path(metadata_dir, "predictor_type_table.csv")
-f_scaling <- file.path(metadata_dir, "predictor_scaling.csv")
+
 f_rtable  <- file.path(metadata_dir, "raster_table_used.csv")
-f_smeta   <- file.path(metadata_dir, "split_metadata.csv")   # traz x, y
+f_pmeta   <- file.path(metadata_dir, "point_metadata.csv")   # sample_id, x, y
 f_tconfig <- file.path(metadata_dir, "target_config.csv")
 
 # Os 6 CSVs por split (train/validation/test x raw/scaled) sairam: os *_scaled
@@ -130,18 +130,39 @@ f_dataset <- file.path(data_dir, "full_modeling_dataset_raw.csv")
 f_qctable <- file.path(metadata_dir, "qc_table.csv")
 f_crisk   <- file.path(metadata_dir, "channel_risk.csv")
 
-files_01 <- c(f_qc, f_dscheck, f_split, f_ptype, f_scaling, f_rtable, f_tconfig,
-             f_dataset, f_qctable, f_crisk)
+# ── Run profile ───────────────────────────────────────────────────────────────
+# A development run writes the SAME files, with the SAME names, on a tenth of
+# the data. Without this in plain sight, a month from now a subsample CCC is
+# indistinguishable from a result.
+if (file.exists(f_tconfig)) {
+  .tc <- safe_read_csv2(f_tconfig)
+  if ("run_profile" %in% names(.tc) && !identical(.tc$run_profile[1], "full")) {
+    .say(strrep("!", 90))
+    .say("RUN PROFILE: ", toupper(.tc$run_profile[1]),
+         "  --  THIS IS NOT A RESULT RUN")
+    if ("subsample" %in% names(.tc)) .say("  ", .tc$subsample[1])
+    .say("  Comparable only with another run of the same profile.",
+         "  See docs/reference_performance.md")
+    .say(strrep("!", 90), "
+")
+  }
+}
+
+# Gone with the split: split_check.csv, split_bin_check.csv,
+# scaled_extreme_check.csv and predictor_scaling.csv. Stage 01 no longer
+# decides who trains, and the scaling is now part of the fitted model (stage
+# 04 writes it next to the weights), not a property of the dataset.
+files_01 <- c(f_qc, f_dscheck, f_ptype, f_rtable, f_tconfig,
+             f_dataset, f_qctable, f_crisk, f_pmeta)
 all_01_exist <- all(purrr::map_lgl(files_01, ~ check_exists("01", basename(.x), .x)))
 
 if (all_01_exist) {
 
   qc      <- safe_read_csv2(f_qc)
   dscheck <- safe_read_csv2(f_dscheck)
-  split   <- safe_read_csv2(f_split)
   ptype   <- safe_read_csv2(f_ptype)
-  scaling <- safe_read_csv2(f_scaling)
   rtable  <- safe_read_csv2(f_rtable)
+  pmeta   <- safe_read_csv2(f_pmeta)
   tconfig <- safe_read_csv2(f_tconfig)
 
   # A checagem mais importante: fracao de linhas descartadas por problema de
@@ -177,30 +198,13 @@ if (all_01_exist) {
 
   # Proporcao do split perto de 70/15/15 (tolerancia 2 p.p.)
   total_n <- sum(split$n)
-  for (i in seq_len(nrow(split))) {
-    role <- split$dataset_role[i]
-    pct  <- 100 * split$n[i] / total_n
-    expected <- c(train = 70, validation = 15, test = 15)[[role]]
-    dev <- abs(pct - expected)
-    status <- if (dev > 3) "FAIL" else if (dev > 1) "WARN" else "PASS"
-    add_check("01", paste0("split % ", role), status,
-              sprintf("%.1f%% (esperado ~%d%%)", pct, expected))
-  }
-
+  
   # target_native e target_log1p sao consistentes (log1p(native) == log1p)
   # -- checagem indireta via mediana ja calculada em dataset_check.csv
   implied_log1p <- log1p(dscheck$median_target[1])
   check_equal("01", "median_target_log1p == log1p(median_target)",
               round(dscheck$median_target_log1p[1], 4), round(implied_log1p, 4),
               "salvo", "recalculado")
-
-  # scaling de zscore nao pode ter sd degenerado (checagem redundante ao que
-  # o proprio 01 ja faz, mas re-verifica no arquivo final salvo em disco)
-  zscore_rows <- dplyr::filter(scaling, scaling_method == "zscore_train")
-  n_bad_sd <- sum(is.na(zscore_rows$train_sd) | zscore_rows$train_sd <= 0, na.rm = TRUE)
-  add_check("01", "scaling zscore: nenhum train_sd degenerado",
-            if (n_bad_sd == 0) "PASS" else "FAIL",
-            sprintf("%d preditores com sd invalido", n_bad_sd))
 
   # dataset unico bate com a soma dos splits (mesma linhagem).
   # col_select=1 mantem a leitura rapida mesmo com 180+ colunas.
@@ -231,43 +235,14 @@ if (all_01_exist) {
             if (n_withna == 0L) "PASS" else "WARN",
             sprintf("%d canal(is) com NA -- ver channel_risk.csv", n_withna))
 
-  # ── Sobreposicao espacial entre splits ─────────────────────────────────
-  # Torna visivel, a cada run, a metrica que invalidou a primeira rodada de
-  # resultados e que nada reportava: num split aleatorio sobre perfis
-  # espacialmente agrupados, 33% do teste cai no MESMO pixel de 250 m que um
-  # perfil de treino -- mesmo patch de entrada, bit a bit.
-  #
-  # WARN, nunca FAIL: split aleatorio e escolha legitima. O que nao e
-  # aceitavel e nao saber.
-  if (file.exists(f_smeta) && file.exists(f_rtable)) {
-    sp <- safe_read_csv2(f_smeta)
-    rt <- safe_read_csv2(f_rtable)
-
-    if (all(c("x", "y", "dataset_role") %in% names(sp)) &&
-        file.exists(rt$raster_file[1])) {
-      r1 <- try(terra::rast(rt$raster_file[1]), silent = TRUE)
-      if (!inherits(r1, "try-error")) {
-        cells <- terra::cellFromXY(r1, as.matrix(sp[, c("x", "y")]))
-        ov <- spatial_overlap_report(
-          terra::rowFromCell(r1, cells),
-          terra::colFromCell(r1, cells),
-          sp$dataset_role)
-
-        .say("\n-- Sobreposicao espacial entre splits --")
-        print(ov, n = Inf, width = Inf)
-
-        same <- dplyr::filter(ov, criterion == "same raster cell")
-        for (i in seq_len(nrow(same))) {
-          add_check("01", paste0("'", same$split[i], "' no mesmo pixel do treino"),
-                    if (same$pct[i] < 5) "PASS" else "WARN",
-                    sprintf("%.2f%% (%s de %s)", same$pct[i],
-                            format(same$n[i], big.mark = ","),
-                            format(same$n_split[i], big.mark = ",")))
-        }
-        rm(r1)
-      }
-    }
-  }
+  # The spatial-overlap report used to live here, comparing the fixed split
+  # stage 01 wrote. There is no split here any more: it is carved by the fold
+  # plan in stage 03, and that is where the leakage is measured -- per fold, on
+  # the plan that will actually be used. See fold_leakage_report().
+  add_check("01", "point table carries no role column",
+            if (!any(c("dataset_role", "split_bin") %in% names(pmeta)))
+              "PASS" else "FAIL",
+            paste("columns:", paste(names(pmeta), collapse = ", ")))
 
 } else {
   .say("Etapa 01 incompleta -- pulando checagens de conteudo.")
@@ -863,21 +838,10 @@ if (exists("dscheck")) {
   add_snap("01_n_continuous", dscheck$n_continuous_predictors[1])
   add_snap("01_mediana_alvo", round(dscheck$median_target[1], 6))
 }
-if (exists("split")) {
-  for (i in seq_len(nrow(split))) {
-    add_snap(paste0("01_split_", split$dataset_role[i]), split$n[i])
-  }
-}
 if (exists("qc")) add_snap("01_pct_problema", qc$pct_any_problem[1])
 if (exists("crisk")) {
   add_snap("01_canais_constantes", sum(crisk$risk == "constant", na.rm = TRUE))
   add_snap("01_canais_com_na",     sum(crisk$risk == "has_na",   na.rm = TRUE))
-}
-if (exists("ov")) {
-  so <- dplyr::filter(ov, criterion == "same raster cell")
-  for (i in seq_len(nrow(so))) {
-    add_snap(paste0("01_overlap_pixel_", so$split[i]), so$pct[i])
-  }
 }
 if (exists("manifest") && "n_points_valid" %in% names(manifest)) {
   add_snap("02_n_pontos_validos", manifest$n_points_valid[1])

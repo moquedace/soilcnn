@@ -77,10 +77,16 @@ o teste foi separado lá no `01` por amostragem estratificada pelo alvo, e nunca
 foi tocado desde então. **Mais da metade dos pontos de teste compartilha pixels
 de patch com pontos de treino.**
 
-Consequência concreta: `test_ccc` é uma medida de "prevê bem perto de onde já
-tem amostra", exatamente a pergunta que a validação espacial existe para *não*
-responder. Os dois números aparecem lado a lado na mesma tabela, com nomes que
-sugerem que o segundo é mais rigoroso que o primeiro. É o contrário.
+**Importante não exagerar o achado.** Patches vizinhos compartilharem pixels
+**não é defeito** — é o que amostras vizinhas são, e num split aleatório é
+exatamente a condição sendo medida. O que é defeito, em qualquer split, é a
+**mesma célula**: dois perfis no mesmo pixel de 250 m têm entrada idêntica bit a
+bit, e um pode ser avaliado no que o outro treinou.
+
+Então o problema aqui não é o teste ser aleatório: é os dois números
+conviverem na mesma tabela respondendo a **perguntas diferentes** —
+interpolação perto de amostra conhecida, e predição em terreno não visitado —
+com nomes que sugerem que o segundo é o mais rigoroso.
 
 **Não é erro de código** — é uma decisão que ficou para trás quando a validação
 evoluiu. Ver [§A1](#a1-teste-espacialmente-independente).

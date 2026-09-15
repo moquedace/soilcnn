@@ -28,6 +28,7 @@ setwd(project_root)
 
 source(file.path(project_root, "R", "utils.R"))
 source(file.path(project_root, "R", "patches.R"))
+source(file.path(project_root, "R", "preprocess.R"))
 source(file.path(project_root, "R", "metrics.R"))
 source(file.path(project_root, "R", "cnn_architecture.R"))
 source(file.path(project_root, "R", "tune_grid.R"))
@@ -144,7 +145,14 @@ final_model_base <- file.path(project_root, "outputs", "final_model",
                               "soc_stock_modeling", target_label)
 
 raster_table_file      <- file.path(metadata_dir, "raster_table_used.csv")
-predictor_scaling_file <- file.path(metadata_dir, "predictor_scaling.csv")
+# The scaling is part of the FITTED MODEL, written next to its weights by
+# stage 04. It used to be read from a global table written by stage 01 -- a
+# second copy of the same fact, free to drift, and it did: once patches were
+# stored raw and scaling became per-fold, the map was being built with one set
+# of constants while the network had been trained with another. Silently.
+predictor_scaling_file <- file.path(final_run_dir, config_id,
+                                    "predictor_scaling.csv")
+qc_table_file          <- file.path(metadata_dir, "qc_table.csv")
 patch_manifest_file    <- file.path(patch_dir, "patch_manifest.rds")
 
 if (identical(final_run_id, "latest")) {
@@ -184,34 +192,22 @@ if (!dir.exists(model_dir)) stop("Model directory not found: ", model_dir)
 
 # ── Predictor scaling ─────────────────────────────────────────────────────────
 
-predictor_scaling <- readr::read_csv2(predictor_scaling_file, show_col_types = FALSE)
+predictor_scaling <- readr::read_csv2(predictor_scaling_file,
+                                      show_col_types = FALSE)
+qc_table <- readr::read_csv2(qc_table_file, show_col_types = FALSE)
 
-temperature_min_valid_celsius <- -100
-
-apply_predictor_scaling <- function(mat, pred_names, scale_method,
-                                    scale_center, scale_factor,
-                                    temp_threshold) {
+# QC and scaling both come from the pipeline's own functions (R/preprocess.R),
+# applied here in the same order stage 02 applied them: QC first, then the
+# affine transform. This script used to carry its own hand-written copy of both
+# -- a temperature threshold and a percentage clamp written out again, with the
+# predictor name matched by a regex. Two copies of one rule drift, and when
+# they do the map is wrong in a way no check can see.
+apply_predictor_scaling <- function(mat, pred_names, scaling, qc) {
+  qc_rows <- qc[match(pred_names, qc$predictor), , drop = FALSE]
   for (i in seq_len(ncol(mat))) {
-    x <- mat[, i]
-    if (grepl("surface_temperature_celsius$", pred_names[i])) {
-      x[!is.na(x) & is.finite(x) & x <= temp_threshold] <- NA_real_
-    }
-    if (scale_method[i] == "zscore_train") {
-      x <- (x - scale_center[i]) / scale_factor[i]
-    } else if (scale_method[i] == "percentage_0_100_to_0_1") {
-      # Clamp into [0, 100] instead of discarding as NA: these are continuous
-      # interpolated surfaces (PNV classes, clay mineralogy) that legitimately
-      # overshoot slightly past 0/100 near sharp spatial transitions. Treating
-      # that as missing data amplifies into large gaps once the CNN's
-      # full-window validity rule invalidates the whole patch around each
-      # discarded pixel. Genuine NA/Inf pass through untouched.
-      finite_idx <- !is.na(x) & is.finite(x)
-      x[finite_idx] <- pmin(pmax(x[finite_idx], 0), 100)
-      x <- x / 100
-    }
-    mat[, i] <- x
+    mat[, i] <- qc_band_values(mat[, i], qc_rows[i, ])
   }
-  mat
+  scale_patches_matrix(mat, scaling)
 }
 
 # ── Model config ──────────────────────────────────────────────────────────────
@@ -278,15 +274,18 @@ predictor_scaling <- predictor_scaling %>%
   dplyr::filter(predictor %in% predictor_cols) %>%
   dplyr::arrange(match(predictor, predictor_cols))
 
-if (!identical(predictor_scaling$predictor, predictor_cols)) {
-  stop("predictor_scaling.csv channel order does not match raster_table_used.csv.")
+if (!identical(as.character(predictor_scaling$predictor), predictor_cols)) {
+  stop("The model's predictor_scaling.csv is in a different channel order ",
+       "than raster_table_used.csv. Predicting under that mismatch would feed ",
+       "the network one channel while the map is built from another.")
+}
+if (!identical(as.character(qc_table$predictor), predictor_cols)) {
+  stop("qc_table.csv is in a different channel order than ",
+       "raster_table_used.csv.")
 }
 
-scale_method <- predictor_scaling$scaling_method
-scale_center <- predictor_scaling$train_mean
-scale_factor <- predictor_scaling$train_sd
-
-message("Predictor scaling loaded and aligned (", n_channels, " channels).")
+message("Model scaling and QC rules loaded and aligned (", n_channels,
+        " channels), from: ", final_run_dir)
 
 if (file.exists(patch_manifest_file)) {
   manifest <- readRDS(patch_manifest_file)
@@ -510,8 +509,7 @@ compute_block <- function(b_start) {
 
   .t_scale_start <- Sys.time()
   strip_values <- apply_predictor_scaling(strip_values, predictor_cols,
-                                          scale_method, scale_center, scale_factor,
-                                          temperature_min_valid_celsius)
+                                          predictor_scaling, qc_table)
   t_scale <- as.numeric(Sys.time() - .t_scale_start, units = "secs")
 
   .t_predict_start <- Sys.time()
