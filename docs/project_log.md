@@ -2462,3 +2462,58 @@ Three decisions worth recording:
 skewed exponential error because distribution-freeness is the selling point. An
 uncertainty map is the one output nobody can check by eye: one that promises 90%
 and delivers 61% looks exactly like one that delivers 90%.
+
+---
+
+## kNNDM: folds shaped by where the map will be predicted
+
+Item 11 of the September review (§A2).
+
+**The weakness it addresses.** `spatial_folds()` works and is understandable
+from memory, but the block size and the buffer width are *choices*, and nothing
+in the data says whether they were the right ones — this project picked a block
+size by measuring fold balance, which is a criterion of convenience, not of
+validity. kNNDM (Linnenbrink et al. 2024, GMD 17:5897–5912) starts from a better
+premise: the right validation depends on where you will predict. It shapes the
+folds so the distance from a validation point to its nearest training point is
+distributed like the distance from a *prediction pixel* to its nearest training
+point, minimising the Wasserstein statistic W between the two.
+
+The consequence that makes it worth a dependency: when the samples are well
+spread over the prediction area, kNNDM converges by itself to ordinary random
+k-fold. It does not impose separation that prediction will not face — which is
+the correct criticism of blind blocking, and something a buffer cannot decide.
+
+**Four decisions.**
+
+1. **The algorithm is not re-derived.** `knndm_folds()` calls `CAST::knndm()`. A
+   published CV method re-coded locally is a method that quietly differs from
+   the one being cited, and a test written here would not catch it, because the
+   test would share the misunderstanding. What is tested is everything *around*
+   the call, which is where this framework can be wrong on its own.
+2. **`predpoints` has no default.** kNNDM without a prediction area is an
+   expensive random split wearing the name of a spatial method — the single most
+   damaging convenience this file could have offered. `prediction_sample()`
+   produces one from the prediction raster.
+3. **The projection is not a detail.** Distances have to mean something, and a
+   degree of longitude is 100.1 km at the equator against 64.8 km at 60°N
+   (checked against the Mollweide formulas, ratio 0.647). Coordinates are
+   projected to an equal-area projection before anything is measured, and the
+   projection used is recorded in the plan. Beyond meaning, it is also cost:
+   planar nearest-neighbour search is O(n log n) with a kd-tree and O(n²) in
+   time *and memory* on a sphere — 31,000 points is ~7.7 GB for one matrix.
+4. **There is no `buffer` argument, and that is the method rather than an
+   omission.** A buffer stops a validation point sitting beside a training
+   point; kNNDM's premise is that whether that is a problem depends on
+   prediction, and this map is predicted wall to wall, so prediction pixels *do*
+   sit beside training points. Forcing them apart would measure a scenario that
+   never happens. What a buffer also caught — two profiles in the same raster
+   cell, identical input and different target — kNNDM does not address, and that
+   stays where it belongs, in `spatial_overlap_report()`.
+
+*Argument validation runs before the dependency check*, so a person with a typo
+gets the useful message rather than an install instruction, and the argument
+contract stays testable on a machine without CAST.
+
+W is recorded in the plan's params and printed. It is in coordinate units, so it
+compares plans over the same points and means nothing across datasets.

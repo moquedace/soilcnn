@@ -1,0 +1,210 @@
+# Unit test: kNNDM folds, and the argument contract that holds without CAST
+#
+# WHAT IS AND IS NOT TESTED HERE.
+#
+# The ALGORITHM is not re-derived and not re-checked: knndm_folds() calls
+# CAST::knndm(), the reference implementation from the paper, on purpose. A
+# published cross-validation method re-coded locally is a method that quietly
+# differs from the one being cited, and no test written here would catch that
+# because the test would share the same misunderstanding.
+#
+# What is tested is everything AROUND the call, which is where this framework
+# can be wrong on its own:
+#
+#   - the argument contract, including the refusal to guess `predpoints`
+#   - the projection, because comparing distances in degrees on global data is
+#     comparing 111 km with 20 km and calling both "one unit"
+#   - the fold plan that comes back: a partition, no leak between roles, and W
+#     recorded where a reader will see it
+#   - the front-end spec routing to the right constructor
+#
+# The parts needing CAST are skipped, loudly, when it is not installed -- the
+# argument contract runs either way, which is why those checks were moved ahead
+# of the dependency check in knndm_folds().
+#
+# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tests/test_knndm.R")
+
+suppressMessages({
+  library(tibble)
+  library(dplyr)
+})
+
+root <- (function() {
+  cand <- character(0)
+  a <- commandArgs(trailingOnly = FALSE)
+  f <- sub("^--file=", "", a[grep("^--file=", a)])
+  if (length(f)) cand <- c(cand, dirname(normalizePath(f[1], mustWork = FALSE)))
+  for (i in seq_len(sys.nframe())) {
+    of <- sys.frame(i)$ofile
+    if (!is.null(of) && is.character(of)) {
+      cand <- c(cand, dirname(normalizePath(of, mustWork = FALSE)))
+    }
+  }
+  cand <- c(cand, getwd())
+  for (d in cand) {
+    for (up in c(".", "..")) {
+      r <- normalizePath(file.path(d, up), winslash = "/", mustWork = FALSE)
+      if (file.exists(file.path(r, "R", "cnn_architecture.R"))) return(r)
+    }
+  }
+  stop("Project root not found.", call. = FALSE)
+})()
+source(file.path(root, "tests", "helper.R"))
+source(file.path(root, "R", "utils.R"))
+source(file.path(root, "R", "resample.R"))
+source(file.path(root, "R", "knndm.R"))
+
+ok <- logical(0)
+
+# A global-ish spread, so the projection has something to do: at 60 degrees a
+# degree of longitude is half what it is at the equator, and a method that
+# compares distances in degrees would treat those as the same separation.
+set.seed(21)
+n_sites <- 40L; per_site <- 8L
+sites <- tibble(
+  site = seq_len(n_sites),
+  cx = runif(n_sites, -60, 60),
+  cy = runif(n_sites, -55, 65))
+meta <- sites %>%
+  dplyr::slice(rep(seq_len(n_sites), each = per_site)) %>%
+  dplyr::mutate(
+    x = cx + rnorm(dplyr::n(), 0, 0.15),
+    y = cy + rnorm(dplyr::n(), 0, 0.15),
+    sample_id = seq_len(dplyr::n()),
+    profile_id = sprintf("p%04d", seq_len(dplyr::n()))) %>%
+  dplyr::select(sample_id, profile_id, site, x, y)
+
+predpts <- tibble(x = runif(600, -60, 60), y = runif(600, -55, 65))
+
+# ── 1. the argument contract, with or without CAST ───────────────────────────
+
+# THE REFUSAL THAT MATTERS. kNNDM without a prediction area is an expensive
+# random split wearing the name of a spatial method. Defaulting it would be the
+# single most damaging convenience this file could offer.
+err <- tryCatch(knndm_folds(meta, k = 3L), error = function(e) e)
+ok["refuses_without_predpoints"] <- inherits(err, "error")
+ok["that_refusal_explains_why"] <-
+  grepl("WHERE THE MAP WILL BE PREDICTED", conditionMessage(err), fixed = TRUE)
+
+ok["refuses_k_below_2"] <- inherits(
+  try(knndm_folds(meta, k = 1L, predpoints = predpts), silent = TRUE),
+  "try-error")
+ok["refuses_meta_without_coordinates"] <- inherits(
+  try(knndm_folds(dplyr::select(meta, sample_id), k = 3L,
+                  predpoints = predpts), silent = TRUE), "try-error")
+
+has_sf   <- requireNamespace("sf", quietly = TRUE)
+has_cast <- requireNamespace("CAST", quietly = TRUE)
+
+# ── 2. the projection ────────────────────────────────────────────────────────
+
+if (has_sf) {
+  m <- project_xy(meta$x, meta$y)
+  ok["projection_returns_two_columns"] <- identical(dim(m), c(nrow(meta), 2L))
+  ok["projection_is_in_metres"] <- max(abs(m)) > 1e5
+
+  # THE POINT OF PROJECTING. Two pairs one degree of longitude apart, one at the
+  # equator and one at 60 degrees north, are the same distance in degrees and
+  # roughly half as far apart on the ground. A method comparing distances must
+  # see the difference.
+  eq <- project_xy(c(0, 1), c(0, 0))
+  hi <- project_xy(c(0, 1), c(60, 60))
+  d_eq <- sqrt(sum((eq[1, ] - eq[2, ])^2))
+  d_hi <- sqrt(sum((hi[1, ] - hi[2, ])^2))
+  ok["projection_shrinks_a_degree_at_high_latitude"] <- d_hi < 0.7 * d_eq
+
+  # project_to = NULL means "already projected" and must not silently reproject.
+  raw <- project_xy(meta$x, meta$y, to = NULL)
+  ok["no_projection_leaves_coordinates_alone"] <-
+    isTRUE(all.equal(as.numeric(raw[, 1]), as.numeric(meta$x)))
+} else {
+  cat("  sf missing               : projection checks skipped\n")
+}
+
+# ── 3-4. the plan, and the front end ─────────────────────────────────────────
+
+if (has_cast && has_sf) {
+  plan <- knndm_folds(meta, k = 3L, predpoints = predpts, seed = 7L)
+
+  ok["plan_has_the_right_class"]  <- inherits(plan, "fold_plan")
+  ok["plan_has_k_folds"]          <- plan$n_folds == 3L
+  ok["plan_method_is_named"]      <- identical(plan$method, "knndm_folds")
+
+  # Every row is validation exactly once, and never trains on the fold it is
+  # validated in. check_fold_plan() is the framework's own proof, so it is used
+  # rather than re-implemented here.
+  sizes <- check_fold_plan(plan, meta = meta)
+  ok["check_fold_plan_accepts_it"] <- is.data.frame(sizes) && nrow(sizes) == 3L
+  ok["every_row_validates_once"] <-
+    identical(sort(unlist(lapply(plan$folds, function(f) f$validation))),
+              seq_len(nrow(meta)))
+  ok["no_row_trains_and_validates"] <- all(vapply(plan$folds, function(f)
+    length(intersect(f$train, f$validation)) == 0L, logical(1)))
+
+  # W IS THE QUALITY OF THE PLAN and has to reach the reader. A fold plan whose
+  # W is large is matching prediction badly, and that is the one number saying
+  # so -- kept in params, which print.fold_plan() shows.
+  ok["W_is_recorded"] <- is.numeric(plan$params$W) && is.finite(plan$params$W)
+  ok["projection_is_recorded"] <- grepl("moll", plan$params$projection)
+
+  # A frozen test set must be honoured exactly, because comparing two plans on
+  # different held-out data compares two experiments.
+  frozen <- meta$sample_id[1:40]
+  plan_t <- knndm_folds(meta, k = 3L, predpoints = predpts,
+                        test_ids = frozen, seed = 7L)
+  ok["frozen_test_is_exact"] <-
+    identical(sort(meta$sample_id[plan_t$folds[[1]]$test]), sort(frozen))
+  ok["frozen_test_is_out_of_every_fold"] <- all(vapply(plan_t$folds,
+    function(f) length(intersect(f$test, c(f$train, f$validation))) == 0L,
+    logical(1)))
+  ok["frozen_test_leaves_k_folds"] <- plan_t$n_folds == 3L
+
+  # hold_out_test carves one kNNDM fold out of k + 1. It is off by default,
+  # because a test set that changes with k is not a frozen test set.
+  plan_h <- knndm_folds(meta, k = 3L, predpoints = predpts,
+                        hold_out_test = TRUE, seed = 7L)
+  ok["hold_out_test_produces_a_test_set"] <-
+    length(plan_h$folds[[1]]$test) > 0L
+  ok["hold_out_test_is_off_by_default"] <-
+    length(plan$folds[[1]]$test) == 0L
+  ok["held_out_test_is_roughly_one_of_k_plus_1"] <- {
+    share <- length(plan_h$folds[[1]]$test) / nrow(meta)
+    share > 0.10 && share < 0.45
+  }
+
+  # The front end must route to this constructor and not to a neighbour. The
+  # switch() in resolve_resampling() selects by name, and a spec whose kind is
+  # not a string once selected by POSITION instead -- a spatial request that
+  # came back as a holdout, with no error.
+  source(file.path(root, "R", "metrics.R"))
+  source(file.path(root, "R", "dataset.R"))
+  source(file.path(root, "R", "api.R"))
+  spec <- knndm_cv(k = 3L, predpoints = predpts, seed = 7L)
+  ok["spec_is_a_resample_spec"] <- inherits(spec, "resample_spec")
+  ok["spec_kind_is_the_string_knndm"] <-
+    is.character(spec$kind) && identical(spec$kind, "knndm")
+
+  fake <- structure(list(store = list(meta = meta, window_sizes = 3L),
+                         cell_size = 0.00224579811173295),
+                    class = "dsm_data")
+  plan_api <- resolve_resampling(spec, fake, verbose = FALSE)
+  ok["front_end_builds_a_knndm_plan"] <-
+    identical(plan_api$method, "knndm_folds")
+  ok["front_end_plan_matches_the_direct_call"] <-
+    identical(plan_api$assignment$fold, plan$assignment$fold)
+
+  cat(sprintf("  knndm W                  : %.4f (3 folds, %d points, %d predpoints)\n",
+              plan$params$W, nrow(meta), nrow(predpts)))
+} else {
+  cat("  CAST missing             : fold-plan checks skipped\n")
+  cat("                             install.packages(c(\"CAST\", \"sf\"))\n")
+  # The dependency error must still name what to install, or a person on a
+  # machine without CAST gets a stack trace instead of an instruction.
+  ok["missing_dependency_names_itself"] <- {
+    e <- tryCatch(knndm_folds(meta, k = 3L, predpoints = predpts),
+                  error = function(e) conditionMessage(e))
+    grepl("install.packages", e, fixed = TRUE)
+  }
+}
+
+.report(ok, "test_knndm")

@@ -43,6 +43,7 @@ test_files <- c(
   "test_patch_store_io.R",   # store round-trip + the torch_save 2^31 guard
   "test_metrics_reporting.R",# the three functions that lie quietly
   "test_resample.R",         # fold plans: partition, leakage, seed
+  "test_knndm.R",            # folds matched to the prediction area
   "test_store_spec.R",       # the store lock: what it REFUSES
   "test_model_registry.R",   # registry contract + the tabular fold view
   "test_aoa.R",              # dissimilarity index + area of applicability

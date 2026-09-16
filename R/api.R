@@ -162,6 +162,33 @@ spatial_cv <- function(k = 5L, block_size = "auto", buffer = "auto",
                  buffer_metric = match.arg(buffer_metric), seed = seed)
 }
 
+#' Folds matched to where the map will be predicted (kNNDM).
+#'
+#' The better-founded alternative to spatial_cv(). Blocks need a block size and
+#' a buffer width, and nothing in the data says whether the chosen ones were
+#' right. kNNDM instead shapes the folds so the distance from a validation point
+#' to its nearest training point is distributed like the distance from a
+#' PREDICTION pixel to its nearest training point.
+#'
+#' It therefore needs `predpoints`: a sample of where the map will be drawn.
+#' There is no default, because a default would turn the method into an
+#' expensive random split. prediction_sample(raster) produces one.
+#'
+#' When the samples are well spread over the prediction area it converges by
+#' itself to ordinary random k-fold -- it does not impose separation that
+#' prediction will not face. That is the property blocks cannot have.
+#'
+#' Needs the CAST and sf packages. See R/knndm.R for the projection question,
+#' which is not optional on lon/lat data.
+knndm_cv <- function(k = 5L, predpoints = NULL, hold_out_test = FALSE,
+                     crs = 4326,
+                     project_to = "+proj=moll +lon_0=0 +datum=WGS84 +units=m",
+                     seed = 42L, ...) {
+  .resample_spec(.kind = "knndm", k = as.integer(k), predpoints = predpoints,
+                 hold_out_test = hold_out_test, crs = crs,
+                 project_to = project_to, seed = seed, extra = list(...))
+}
+
 #' Random k-fold. Ignores geography by construction.
 #'
 #' Right when the rows really are independent, and the cleanest way to MEASURE
@@ -237,8 +264,8 @@ resolve_resampling <- function(spec, data, test_ids = NULL, windows = NULL,
   if (!is.character(spec$kind) || length(spec$kind) != 1L) {
     stop("This resample_spec has no usable `kind` (got ",
          paste(class(spec$kind), collapse = "/"), " of length ",
-         length(spec$kind), "). Build it with spatial_cv(), random_cv(), ",
-         "holdout_cv() or region_cv().", call. = FALSE)
+         length(spec$kind), "). Build it with spatial_cv(), knndm_cv(), ",
+         "random_cv(), holdout_cv() or region_cv().", call. = FALSE)
   }
 
   plan <- switch(spec$kind,
@@ -255,6 +282,11 @@ resolve_resampling <- function(spec, data, test_ids = NULL, windows = NULL,
                     buffer_metric = spec$buffer_metric,
                     test_ids = test_ids, seed = spec$seed)
     },
+    knndm   = do.call(knndm_folds, c(
+      list(meta = meta, k = spec$k, predpoints = spec$predpoints,
+           test_ids = test_ids, hold_out_test = spec$hold_out_test,
+           crs = spec$crs, project_to = spec$project_to, seed = spec$seed),
+      spec$extra)),
     random  = random_folds(meta, k = spec$k, test_frac = spec$test_frac,
                            test_ids = test_ids, seed = spec$seed,
                            group = spec$group),

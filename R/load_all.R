@@ -46,6 +46,7 @@
   "metrics.R",          # ccc() and the rest
   "dataset.R",          # the patch store, the fold cache, the table view
   "resample.R",         # fold plans, buffers, noise floor, one_se
+  "knndm.R",            # folds matched to where the map will be predicted
   "diagnostics.R",      # checks about THIS run on real data
   "aoa.R",              # dissimilarity index / area of applicability
   "conformal.R",        # calibrated intervals + PICP
