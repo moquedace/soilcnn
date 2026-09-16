@@ -46,6 +46,12 @@ Rasters (TIF stack)                 Soil profiles (GPKG)
            mean ± sd over repetitions, next to the seed noise floor
                      │
                      ▼
+           03b_run_baselines.R
+           rf(centre) · rf(centre+window means) · mlp(centre) · cnn
+           SAME folds, SAME seeds.  The gap between the context RF and the
+           CNN is what the convolution is worth.
+                     │
+                     ▼
            04_final_model.R
            Refit on everything but the test set, by the tuning plan's own
            criterion.  The scaling is written next to the weights.
@@ -62,6 +68,10 @@ Rasters (TIF stack)                 Soil profiles (GPKG)
                      ▼
            05b_merge_spatial_parts.R
            Mosaics all tiles into the final wall-to-wall rasters
+                     │
+                     ▼
+           07_area_of_applicability.R
+           Where the map should be believed at all
 ```
 
 `05_predict_spatial.R` predicts a single rectangular tile — that's the whole
@@ -194,8 +204,11 @@ For the reasoning behind every architectural and training choice see [`docs/desi
 | [`R/train_table.R`](R/train_table.R) | `run_table_resample()` — tabular models, same comparison table |
 | [`R/caret_adapter.R`](R/caret_adapter.R) | `caret_spec()` — borrow ~230 models, never caret's resampling |
 | [`R/aoa.R`](R/aoa.R) | Dissimilarity index · area of applicability |
+| [`R/conformal.R`](R/conformal.R) | `conformal_calibrate()` · `picp_report()` — intervals with a coverage guarantee, and the check that they keep it |
+| [`R/occlusion.R`](R/occlusion.R) | `spatial_occlusion()` — does the trained network use the neighbourhood, or only the centre pixel? |
+| [`R/test_optimism.R`](R/test_optimism.R) | `freeze_selection()` · `score_test_grid()` — the test set, scored only after the choice is locked |
 | [`R/api.R`](R/api.R) | **The front end**: `dsm_load()` · `spatial_cv()` · `dsm_train()` |
-| [`R/load_all.R`](R/load_all.R) | One `source()` instead of sixteen, in dependency order |
+| [`R/load_all.R`](R/load_all.R) | One `source()` for every module, in dependency order |
 
 ---
 
@@ -285,6 +298,93 @@ and the tour in [`examples/quickstart.R`](examples/quickstart.R).
 
 ---
 
+## Numbers you can defend
+
+Three things a soil-mapping paper is normally asked for and normally cannot
+give: an honest test score, evidence that the architecture earns its cost, and
+an uncertainty map that covers what it claims.
+
+### The test set stays frozen, and the optimism is measured
+
+Tuning never scores the test set. Once the choice is locked — recorded on disk,
+with a timestamp and a commit — the whole grid *can* be scored on it, and that
+measures something worth publishing:
+
+```r
+freeze_selection(run_dir, "cfg_014", rule = "one_se")   # stage 04 does this
+score_test_grid(run_dir, data, device = device)         # afterwards, any time
+```
+
+```
+chosen by validation : cfg_014   test CCC 0.4612   (rank 6 of 24 on test)
+best on test         : cfg_003   test CCC 0.4980
+SELECTION OPTIMISM   : +0.0368 CCC
+```
+
+That gap is how much a test-selected number would have been overstated. It is
+not a reason to switch config — switching is what the measurement is measuring.
+`score_test_grid()` refuses to run before the selection is frozen, and
+`freeze_selection()` refuses to be overwritten with a different config, because
+"score, dislike, re-freeze, re-score" is the loop the ordering exists to
+prevent. Nothing is retrained: the checkpoints are already on disk.
+
+### Does the convolution earn its cost?
+
+Two independent routes to the same question, which is the point — if they
+disagree, one of the measurements is wrong and that is worth knowing.
+
+*From the outside*, stage 03b races the CNN against a forest fed the same
+neighbourhood with the arrangement thrown away. *From the inside*,
+`spatial_occlusion()` hides part of the patch of a trained network and
+re-predicts:
+
+```r
+occlusion_report(run_dir, data, config_id = "cfg_014", device = device)
+```
+
+```
+scope                n_pixels_hidden    ccc   delta_ccc
+baseline                           0  0.489
+context_all                      224  0.487      -0.002
+centre_only_hidden                 1  0.331      -0.158
+ring_01                            8  0.488      -0.001
+...
+-> THE CENTRE PIXEL CARRIES MORE THAN THE WHOLE NEIGHBOURHOOD.
+```
+
+The hidden region is **permuted from another sample**, not zeroed. After scaling
+zero is the training mean, and a patch whose rim is the mean everywhere is a
+landscape that does not exist — the drop would then mix "this region mattered"
+with "this input is impossible", and the second grows with the area hidden,
+which is exactly the comparison being made.
+
+### Calibrated uncertainty, and a check that it is calibrated
+
+```r
+cal <- conformal_calibrate(val$obs, val$pred, alpha = 0.1)   # 90%
+iv  <- conformal_interval(cal, test$pred, lower_limit = 0)
+picp_report(test$obs, iv$lower, iv$upper, group = test$block, alpha = 0.1)
+```
+
+Split conformal gives `P(y ∈ interval) ≥ 1 − α` with no distributional
+assumption, from one pass over held-out residuals. Stage 04 calibrates on the
+validation rows and checks coverage on the **test** rows — a coverage measured
+on the points that calibrated it comes out right by arithmetic, not by evidence
+— and stage 05 reads that calibration to write `soc_pi90_lower` / `_upper`
+bands. It never recomputes: two code paths producing "the interval" is how a map
+ends up claiming a coverage nobody measured.
+
+**PICP** turns uncertainty from an adjective into a number that can be wrong.
+Promise 90%, deliver 61%, and you can see it. And because the conformal
+guarantee is *marginal*, not conditional, coverage is broken down by group and
+the worst is printed first: 90% overall is compatible with 99% over the easy
+half and 60% over the hard half, and the hard half is where anyone needs an
+interval at all. When a group falls far below, that is where exchangeability —
+the theorem's only assumption — is breaking, which is the same place the area of
+applicability is pointing at.
+
+---
+
 ## Tuneable parameters
 
 The table below summarises the search space. See [`docs/tuning_guide.md`](docs/tuning_guide.md) for the rationale behind every range and its connection to digital soil mapping.
@@ -320,7 +420,11 @@ All splits (train · validation · test) are evaluated with six metrics, also br
 | **RPD** | Ratio of Performance to Deviation = sd(obs) / RMSE — standard pedometric benchmark (<1.4 poor, 1.4–2.0 fair, >2.0 good) |
 | **MQI** | Model Quality Index = (CCC × NSE) / (MAE / mean(obs)) |
 
-Model selection across configs ranks by **validation CCC** (descending), then **validation MAE** (ascending) as a tiebreaker. Test metrics are computed and written to the comparison CSV for every config during tuning, but strictly as diagnostic reference — they are never read to choose between configurations. Only after the winning architecture is locked in does a human actually look at test performance. This avoids the common mistake of tuning toward test performance.
+Model selection across configs ranks by **validation CCC** (descending), then **validation MAE** (ascending) as a tiebreaker — or by `one_se()`, which takes the simplest config within one standard error of the best and is the default in stage 04.
+
+**The test set is not scored during tuning at all** (`evaluate_test = FALSE`). The columns exist and hold `NA`, so the table has one shape either way. An earlier version computed them "as diagnostic reference"; there is no such thing. A test score sitting beside the selection metric is selection on the test set performed by whoever reads the table, and with 24 configs × 9 repetitions the *best* of 216 noisy test scores is higher than any one of them by construction — before anyone chooses anything.
+
+The test is scored once, in stage 04, on the config chosen without it.
 
 Early stopping uses **validation SmoothL1 loss** — keeping the stopping criterion consistent with the training objective.
 
@@ -334,7 +438,11 @@ After architecture selection, the top config(s) are re-trained with N independen
 | Batch shuffle order | Different gradient path through the loss landscape |
 | Dropout masks | Different regularisation per forward pass |
 
-Spatial prediction aggregates all seed models per pixel. The **median** is the recommended headline map: it is invariant to the monotone `expm1` back-transform (`median(expm1(z)) = expm1(median(z))`), robust to divergent seeds, and consistent with what SmoothL1 learns (a conditional median). SD and MAD are written as epistemic uncertainty layers.
+Spatial prediction aggregates all seed models per pixel. The **median** is the recommended headline map: it is invariant to the monotone `expm1` back-transform (`median(expm1(z)) = expm1(median(z))`), robust to divergent seeds, and consistent with what SmoothL1 learns (a conditional median).
+
+SD and MAD are written too — but **they are not a prediction interval**, and the framework says so rather than letting a reader assume otherwise. They measure how much the answer moves when the initialisation moves: a property of the optimiser, not of the soil. In this project's numbers the seed spread is 0.038 CCC while the MAE is ~17 t/ha on a median stock of 29.3. A map drawn from that spread would promise an order of magnitude more certainty than it has, and a map that understates is worse than no map, because somebody acts on it.
+
+What the interval bands come from instead is [calibrated uncertainty](#calibrated-uncertainty-and-a-check-that-it-is-calibrated).
 
 ---
 
