@@ -126,6 +126,23 @@ final_run_id <- "latest"
 seeds        <- NULL
 ensemble_center <- "median"
 
+# ── Calibrated interval bands ────────────────────────────────────────────────
+#
+# Stage 04 calibrates a conformal interval on the validation rows and checks its
+# coverage on the test rows, writing conformal_<level>.rds beside the model.
+# Reading it here rather than recomputing is the point: the map and the coverage
+# report then describe the SAME interval. Two code paths computing "the
+# interval" is how a map ends up claiming a coverage nobody measured.
+#
+# conformal_mode:
+#   "auto"       normalised if stage 04 could build it (needs > 1 seed), else
+#                constant width
+#   "normalised" bounds widen where the seeds disagree -- requires the sd band
+#   "constant"   the same +/- everywhere
+#   "none"       no interval bands
+conformal_level <- 90L          # 90 or 95, matching 04's conformal_alpha
+conformal_mode  <- "auto"
+
 # -- Streaming and RAM ---------------------------------------------------------
 #
 # With 2-D tiling, bytes_per_strip_row uses strip_ncol (the tile's columns plus
@@ -722,6 +739,34 @@ open_writer <- function(band_name, file_suffix, datatype = "FLT4S") {
   list(rast = r, file = f)
 }
 
+# THE CALIBRATION IS READ, NOT RECOMPUTED. If it is missing, the interval bands
+# are simply not written -- a map with no interval is honest, and a map with an
+# uncalibrated interval is not.
+conformal_cal <- NULL
+if (!identical(conformal_mode, "none")) {
+  cpath <- file.path(final_run_dir, config_id,
+                     sprintf("conformal_%02d.rds", conformal_level))
+  if (file.exists(cpath)) {
+    cc <- readRDS(cpath)
+    use_norm <- switch(conformal_mode,
+                       auto       = !is.null(cc$normalised),
+                       normalised = TRUE,
+                       constant   = FALSE)
+    if (use_norm && is.null(cc$normalised)) {
+      stop("conformal_mode = \"normalised\" but stage 04 built no normalised ",
+           "calibration for this config (it needs more than one seed).",
+           call. = FALSE)
+    }
+    conformal_cal <- if (use_norm) cc$normalised else cc$constant
+    message(sprintf("Conformal: %d%% intervals, %s width, q = %.4f (n = %d)",
+                    conformal_level, if (use_norm) "normalised" else "constant",
+                    conformal_cal$q, conformal_cal$n))
+  } else {
+    message("Conformal: no calibration at ", cpath,
+            " -- the map will carry no interval bands.")
+  }
+}
+
 w_median <- open_writer("soc_pred_median_ton_ha", "ensemble_median_ton_ha")
 w_mean   <- open_writer("soc_pred_mean_ton_ha",   "ensemble_mean_ton_ha")
 w_sd     <- open_writer("soc_uncert_sd_ton_ha",   "ensemble_sd_ton_ha")
@@ -729,7 +774,16 @@ w_mad    <- open_writer("soc_uncert_mad_ton_ha",  "ensemble_mad_ton_ha")
 w_min    <- open_writer("soc_pred_min_ton_ha",    "ensemble_min_ton_ha")
 w_max    <- open_writer("soc_pred_max_ton_ha",    "ensemble_max_ton_ha")
 w_mask   <- open_writer("valid_patch_mask",       "valid_mask", datatype = "INT1U")
-writers  <- list(w_median, w_mean, w_sd, w_mad, w_min, w_max, w_mask)
+w_lower  <- if (!is.null(conformal_cal)) {
+  open_writer(sprintf("soc_pi%02d_lower_ton_ha", conformal_level),
+              sprintf("conformal_%02d_lower_ton_ha", conformal_level))
+}
+w_upper  <- if (!is.null(conformal_cal)) {
+  open_writer(sprintf("soc_pi%02d_upper_ton_ha", conformal_level),
+              sprintf("conformal_%02d_upper_ton_ha", conformal_level))
+}
+writers  <- purrr::compact(list(w_median, w_mean, w_sd, w_mad, w_min, w_max,
+                                w_mask, w_lower, w_upper))
 
 abort_and_cleanup <- function(msg) {
   for (w in writers) try(terra::writeStop(w$rast), silent = TRUE)
@@ -764,6 +818,8 @@ for (b in seq_along(block_starts)) {
   blk_min    <- rep(NA_real_, blk_len)
   blk_max    <- rep(NA_real_, blk_len)
   blk_mask   <- rep(0L, blk_len)
+  blk_lower  <- rep(NA_real_, blk_len)
+  blk_upper  <- rep(NA_real_, blk_len)
 
   if (cb$n_req > 0L) {
     # Convert GLOBAL indices (row-1)*r_ncol+col into tile-block indices
@@ -785,6 +841,21 @@ for (b in seq_along(block_starts)) {
       blk_mad[tv]    <- cb$mad
       blk_min[tv]    <- cb$min
       blk_max[tv]    <- cb$max
+
+      if (!is.null(conformal_cal)) {
+        # The ensemble SPREAD is the difficulty score of the normalised
+        # calibration, which is what makes the bounds narrow where the seeds
+        # agree. Floored away from zero: a pixel where every seed returned the
+        # identical value would otherwise get a zero-width interval, which is a
+        # claim of certainty the data never supported.
+        half <- if (conformal_cal$normalised) {
+          conformal_cal$q * pmax(cb$sd, .Machine$double.eps)
+        } else {
+          conformal_cal$q
+        }
+        blk_lower[tv] <- pmax(cb$median - half, 0)
+        blk_upper[tv] <- cb$median + half
+      }
 
       run_n         <- run_n + cb$n_val
       run_sum       <- run_sum + sum(cb$median[is.finite(cb$median)])
@@ -814,6 +885,10 @@ for (b in seq_along(block_starts)) {
   terra::writeValues(w_min$rast,    blk_min,    bs_local, cb$out_nrows)
   terra::writeValues(w_max$rast,    blk_max,    bs_local, cb$out_nrows)
   terra::writeValues(w_mask$rast,   blk_mask,   bs_local, cb$out_nrows)
+  if (!is.null(conformal_cal)) {
+    terra::writeValues(w_lower$rast, blk_lower, bs_local, cb$out_nrows)
+    terra::writeValues(w_upper$rast, blk_upper, bs_local, cb$out_nrows)
+  }
 
   rss_mb <- ps::ps_memory_info(.proc_handle)[["rss"]] / 1e6
 
@@ -864,7 +939,10 @@ message(sprintf("  Median map range     : %.2f – %.2f %s", run_min, run_max, t
 f_median <- w_median$file; f_mean <- w_mean$file; f_sd <- w_sd$file
 f_mad    <- w_mad$file;    f_min  <- w_min$file;  f_max <- w_max$file
 f_mask   <- w_mask$file
-written_files <- c(f_median, f_mean, f_sd, f_mad, f_min, f_max, f_mask)
+f_lower  <- if (!is.null(conformal_cal)) w_lower$file else NULL
+f_upper  <- if (!is.null(conformal_cal)) w_upper$file else NULL
+written_files <- c(f_median, f_mean, f_sd, f_mad, f_min, f_max, f_mask,
+                   f_lower, f_upper)
 
 sanity_ok <- TRUE
 if (!is_partitioned && n_valid_total == 0L) {
@@ -936,8 +1014,9 @@ safe_write_csv2(prediction_config,
                 file.path(output_log_dir, paste0("prediction_config", part_suffix, ".csv")))
 
 raster_summary <- purrr::map_dfr(
-  list(median = f_median, mean = f_mean, sd = f_sd, mad = f_mad,
-       min = f_min, max = f_max, mask = f_mask),
+  purrr::compact(list(median = f_median, mean = f_mean, sd = f_sd,
+                      mad = f_mad, min = f_min, max = f_max, mask = f_mask,
+                      pi_lower = f_lower, pi_upper = f_upper)),
   function(f) {
     r <- terra::rast(f)
     tibble::tibble(

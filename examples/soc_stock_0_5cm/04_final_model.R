@@ -58,6 +58,11 @@ selected_config_ids <- NULL
 #   "one_se" -- the simplest config within one standard error of the best
 #   "rank1"  -- the best mean, whatever its spread
 # See the long note at the selection itself for why one_se is the default.
+# Nominal coverages for the conformal intervals. 0.1 -> 90%, 0.05 -> 95%.
+# Each needs at least ceiling(1/alpha) - 1 calibration points to be certifiable
+# (9 and 19 respectively).
+conformal_alpha  <- c(0.1, 0.05)
+
 selection_rule   <- "one_se"
 selection_metric <- "val_ccc"
 
@@ -338,7 +343,8 @@ train_config_all_seeds <- function(cfg, config_id) {
   # set of constants while the network had been trained with another, silently.
   safe_write_csv2(fold$scaling, file.path(cfg_out_dir, "predictor_scaling.csv"))
 
-  seed_rows <- vector("list", length(seeds))
+  seed_rows  <- vector("list", length(seeds))
+  seed_preds <- vector("list", length(seeds))
 
   for (s_idx in seq_along(seeds)) {
     seed_val <- seeds[s_idx]
@@ -376,6 +382,15 @@ train_config_all_seeds <- function(cfg, config_id) {
       safe_write_csv2(result$gate$by_profile, file.path(cfg_out_dir, "gates", paste0(sl, "_gate_profiles.csv")))
     }
 
+    # Kept for the conformal calibration below. Only the held-out roles: the
+    # training rows would make the residuals smaller by exactly the amount the
+    # model overfits, and the resulting intervals would be narrow and wrong in
+    # the direction nobody checks.
+    seed_preds[[s_idx]] <- result$pred_all %>%
+      dplyr::filter(.data$dataset_role %in% c("validation", "test")) %>%
+      dplyr::select(sample_id, dataset_role, obs, pred) %>%
+      dplyr::mutate(seed = seed_val)
+
     seed_rows[[s_idx]] <- dplyr::filter(result$perf_all, dataset_role == "test") %>%
       dplyr::mutate(config_id = config_id, seed = seed_val,
                     best_epoch = result$best_epoch,
@@ -387,6 +402,82 @@ train_config_all_seeds <- function(cfg, config_id) {
             " | MAE ",  round(seed_rows[[s_idx]]$mae,  3),
             " | RMSE ", round(seed_rows[[s_idx]]$rmse, 3))
     gc()
+  }
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # CALIBRATED UNCERTAINTY
+  #
+  # The ensemble gives a median and a spread. The spread is NOT an interval --
+  # it measures how much the answer moves when the initialisation moves, which
+  # is a property of the optimiser and not of the soil. Used as a map of
+  # uncertainty it understates by about an order of magnitude here.
+  #
+  # Conformal fixes that with one pass: take the absolute residuals on data the
+  # model never trained on, take their (1 - alpha) quantile, and every
+  # prediction gets +/- that. The guarantee needs no distributional assumption.
+  #
+  # WHICH SET CALIBRATES AND WHICH SET CHECKS.
+  #
+  #   validation -> calibration. Held out of training, separated spatially with
+  #                 a buffer, and already computed.
+  #   test       -> the check. Neither trained nor calibrated on, so the PICP
+  #                 measured there is an honest answer to "does the interval
+  #                 cover what it promises", not arithmetic.
+  #
+  # The spread finally earns a job as the DIFFICULTY score of the normalised
+  # variant: intervals then widen where the seeds disagree, and the guarantee
+  # survives because the score is calibrated rather than trusted.
+  # ══════════════════════════════════════════════════════════════════════════
+  preds <- dplyr::bind_rows(purrr::compact(seed_preds))
+  if (nrow(preds) > 0L) {
+    ens <- preds %>%
+      dplyr::group_by(.data$sample_id, .data$dataset_role) %>%
+      dplyr::summarise(obs = dplyr::first(.data$obs),
+                       pred = stats::median(.data$pred),
+                       spread = stats::sd(.data$pred),
+                       n_seeds = dplyr::n(), .groups = "drop")
+
+    cal_rows <- dplyr::filter(ens, .data$dataset_role == "validation")
+    chk_rows <- dplyr::filter(ens, .data$dataset_role == "test")
+
+    if (nrow(cal_rows) >= 9L && nrow(chk_rows) > 0L) {
+      for (a in conformal_alpha) {
+        cal <- conformal_calibrate(cal_rows$obs, cal_rows$pred, alpha = a)
+        iv  <- conformal_interval(cal, chk_rows$pred, lower_limit = 0)
+        message("\n-- [", config_id, "] conformal, ",
+                round(100 * (1 - a)), "% --")
+        print(cal)
+        print(picp_report(chk_rows$obs, iv$lower, iv$upper, alpha = a))
+
+        # The normalised variant needs a positive spread everywhere, which it
+        # has only when more than one seed finished. With one seed the spread
+        # is NA and the honest move is to skip rather than to invent a floor.
+        cal_n <- NULL
+        if (all(is.finite(cal_rows$spread)) && all(cal_rows$spread > 0)) {
+          cal_n <- conformal_calibrate(cal_rows$obs, cal_rows$pred, alpha = a,
+                                       difficulty = cal_rows$spread)
+          iv_n  <- conformal_interval(cal_n, chk_rows$pred,
+                                      difficulty = chk_rows$spread,
+                                      lower_limit = 0)
+          message("   normalised by the seed spread:")
+          print(picp_report(chk_rows$obs, iv_n$lower, iv_n$upper, alpha = a))
+        }
+
+        # Saved so stage 05 can put bounds on the map without recomputing --
+        # and so the map and this report can never describe different intervals.
+        safe_save_rds(
+          list(alpha = a, constant = cal, normalised = cal_n,
+               n_calibration = nrow(cal_rows), config_id = config_id,
+               calibrated_on = "validation", checked_on = "test"),
+          file.path(cfg_out_dir,
+                    sprintf("conformal_%02d.rds", round(100 * (1 - a)))),
+          compress = FALSE)
+      }
+      safe_write_csv2(ens, file.path(cfg_out_dir, "ensemble_predictions.csv"))
+    } else {
+      message("\n-- [", config_id, "] conformal skipped: ", nrow(cal_rows),
+              " calibration point(s), ", nrow(chk_rows), " to check on.")
+    }
   }
 
   dplyr::bind_rows(purrr::compact(seed_rows))
