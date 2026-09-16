@@ -132,6 +132,10 @@ run_table_resample <- function(model, tune_grid = NULL, store, points,
 
   # Written BEFORE any fitting: results whose folds cannot be reconstructed are
   # results that cannot be defended.
+  # BEFORE the plan is written, or the check compares the plan with itself.
+  # The cached units were fitted on the cached plan; if the split has moved, no
+  # amount of matching hyperparameters makes them comparable.
+  check_plan_unchanged(plan, run_dir, resume = resume)
   safe_save_rds(plan, file.path(run_dir, "fold_plan.rds"), compress = FALSE)
   safe_write_csv2(dplyr::mutate(fold_sizes, method = plan$method),
                   file.path(run_dir, "fold_sizes.csv"))

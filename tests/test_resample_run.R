@@ -244,18 +244,47 @@ cat("  holdout x 2 seeds   : ", nrow(cmp1), " units | sd between seeds ",
 
 # -- 8. resume: finished units are skipped, not retrained --------------------
 #
-# Same run_id, same grid. Nothing should train again, and the table must come
-# back with the same rows -- not doubled, not empty.
+# Same run_id, same grid, SAME PLAN. Nothing should train again, and the table
+# must come back with the same rows -- not doubled, not empty.
+#
+# The plan used to be `holdout(store$meta)` here -- the defaults, 0.15/0.15 and
+# seed 42 -- while the run being resumed used 0.2/0.2 and seed 3. So the test
+# named "resume skips finished units" was resuming onto a DIFFERENT SPLIT, and
+# passed anyway, because skipping is keyed on unit_id. The defect the guard
+# exists to catch was hiding inside the test meant to protect against it.
+#
+# check_plan_unchanged() now refuses that, which is how this was found.
+
+same_plan <- holdout(store$meta, validation_frac = 0.2, test_frac = 0.2,
+                     seed = 3L)
 
 mtimes_before <- file.mtime(ckpt)
 res1b <- quiet_run(
   tune_grid = grid, store = store, points = points, type_table = type_table,
-  plan = holdout(store$meta), transform = expm1, output_dir = out_root,
+  plan = same_plan, transform = expm1, output_dir = out_root,
   device = device, run_id = "smoke_holdout", n_seeds = 2L,
   release_store = FALSE
 )
 ok["resume_keeps_row_count"] <- nrow(res1b$comparison) == nrow(cmp1)
 ok["resume_retrains_nothing"] <- identical(file.mtime(ckpt), mtimes_before)
+
+# ...and resuming onto a DIFFERENT split must be refused, end to end. The unit
+# test of check_plan_unchanged() lives in test_resample.R; this one proves the
+# runner actually calls it, which is the half that silently rots.
+ok["runner_refuses_a_changed_plan"] <- inherits(
+  try(quiet_run(
+        tune_grid = grid, store = store, points = points,
+        type_table = type_table,
+        plan = holdout(store$meta, validation_frac = 0.3, test_frac = 0.1,
+                       seed = 11L),
+        transform = expm1, output_dir = out_root, device = device,
+        run_id = "smoke_holdout", n_seeds = 2L, release_store = FALSE),
+      silent = TRUE), "try-error")
+
+# ...and the checkpoints must still be there afterwards: a refusal that deleted
+# the work it refused to mix would be worse than the mixing.
+ok["the_refusal_destroys_nothing"] <-
+  all(file.exists(ckpt)) && identical(file.mtime(ckpt), mtimes_before)
 
 # RETOMADA PARCIAL -- o caso que a retomada completa nao exercita.
 #

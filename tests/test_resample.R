@@ -1055,4 +1055,69 @@ ok["buffer_records_what_it_protected"] <-
 cat("  buffer protects          : train and validation against the test set",
     " (was validation only)\n", sep = "")
 
+
+# =============================================================================
+# check_plan_unchanged(): resuming onto a different split
+#
+# .resumable_units() proves a cached unit was fitted on the hyperparameters its
+# name claims. It says nothing about the DATA -- and the fold plan is data.
+#
+# This is not hypothetical. Fixing apply_buffer() to protect the test set made
+# every fold lose a rim of training points. The cached units were still cfg_002
+# with the same learning rate and window, so a hyperparameter check passes them,
+# while they had been fitted on a training set that no longer exists. Resuming
+# would have ranked units trained on different data against each other.
+#
+# The refusal is deliberate rather than a silent discard: a run directory is the
+# record of an experiment, and quietly replacing half of it with units from
+# another experiment is worse than stopping.
+# =============================================================================
+
+plan_dir <- file.path(tempdir(), "test_plan_guard")
+unlink(plan_dir, recursive = TRUE); dir.create(plan_dir, recursive = TRUE)
+
+p_a <- spatial_folds(meta, k = 3L, test_frac = 0.15, block_size = 25000,
+                     buffer = 2000, seed = 7L)
+saveRDS(p_a, file.path(plan_dir, "fold_plan.rds"))
+
+ok["same_plan_passes"] <-
+  isTRUE(check_plan_unchanged(p_a, plan_dir, resume = TRUE))
+
+# The exact case that prompted this: only the buffer's reach changed, so the
+# folds are the same folds with a different rim.
+p_b <- apply_buffer(spatial_folds(meta, k = 3L, test_frac = 0.15,
+                                  block_size = 25000, buffer = NULL, seed = 7L),
+                    meta, buffer = 2000, protect = "validation")
+ok["a_different_buffer_is_caught"] <- inherits(
+  try(check_plan_unchanged(p_b, plan_dir, resume = TRUE), silent = TRUE),
+  "try-error")
+
+# A different k, and a different seed, must be caught too.
+ok["a_different_k_is_caught"] <- inherits(
+  try(check_plan_unchanged(
+        spatial_folds(meta, k = 4L, test_frac = 0.15, block_size = 25000,
+                      buffer = 2000, seed = 7L),
+        plan_dir, resume = TRUE), silent = TRUE), "try-error")
+ok["a_different_seed_is_caught"] <- inherits(
+  try(check_plan_unchanged(
+        spatial_folds(meta, k = 3L, test_frac = 0.15, block_size = 25000,
+                      buffer = 2000, seed = 99L),
+        plan_dir, resume = TRUE), silent = TRUE), "try-error")
+
+# The message has to name the sizes, or the reader is sent to diff two RDS.
+ok["the_refusal_names_both_sizes"] <- {
+  e <- tryCatch(check_plan_unchanged(p_b, plan_dir, resume = TRUE),
+                error = function(e) conditionMessage(e))
+  grepl("cached", e, fixed = TRUE) && grepl("asked", e, fixed = TRUE)
+}
+
+# resume = FALSE is a deliberate fresh start and must not be blocked; neither
+# must a directory that holds no previous plan.
+ok["no_resume_is_never_blocked"] <-
+  isTRUE(check_plan_unchanged(p_b, plan_dir, resume = FALSE))
+ok["an_empty_directory_is_fine"] <-
+  isTRUE(check_plan_unchanged(p_a, tempdir(), resume = TRUE))
+
+unlink(plan_dir, recursive = TRUE)
+
 .report(ok, "test_resample")

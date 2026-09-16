@@ -2517,3 +2517,55 @@ contract stays testable on a machine without CAST.
 
 W is recorded in the plan's params and printed. It is in coordinate units, so it
 compares plans over the same points and means nothing across datasets.
+
+---
+
+## Resuming onto a different split
+
+`.resumable_units()` proves a cached unit was fitted on the hyperparameters its
+name claims. It says nothing about the **data** those hyperparameters were
+fitted to — and the fold plan is data.
+
+It surfaced the moment the buffer was fixed. Once `apply_buffer()` also
+protected the test set, every fold lost a rim of training points. The cached
+units were still `cfg_002` with the same learning rate and window, so the
+hyperparameter check passed them, while they had been trained on a training set
+that no longer exists. Resuming would have produced a comparison table whose
+rows were fitted on different data and ranked against each other, with nothing
+on screen saying so.
+
+`check_plan_unchanged()` compares fold **membership** — which row indices are in
+train, validation and test — rather than the plan object: params differ for
+irrelevant reasons (a new field, a rounded buffer) while the split is identical,
+and the split is what training consumed.
+
+It **refuses** rather than silently discarding the cache. A run directory is the
+record of an experiment; quietly replacing half of it with units from a
+different experiment is worse than stopping. The caller picks a new `run_id` or
+deletes the old one deliberately. The message prints both plans' sizes, because
+"the plan changed" sends someone to diff two RDS files.
+
+**It immediately found a latent bug in this project's own test.**
+`test_resample_run.R` had:
+
+```r
+res1  <- ... plan = holdout(meta, validation_frac = 0.2, test_frac = 0.2, seed = 3)
+res1b <- ... plan = holdout(meta)        # 0.15 / 0.15 / seed 42
+             run_id = "smoke_holdout"    # the same directory
+```
+
+The test named "resume skips finished units" was resuming onto a different
+split, and passed, because skipping is keyed on `unit_id`. The defect the guard
+exists to catch was hiding inside the test meant to protect against it.
+
+**The pattern, third time today.** In `spatial_occlusion()` the function and its
+fixture were both written against base R arrays when the cache holds torch
+tensors. Here the implementation and the test shared the assumption that resume
+only depends on `unit_id`. In both cases the test passed by sharing the mistake.
+What broke the pattern was a check from outside the pair — torch's own error the
+first time, this new guard the second.
+
+**Consequence for the runs ahead:** the 27 cached CNN units cannot be reused,
+because the buffer fix changed the folds. The larger grid starts from zero
+(~7 h at `tune_length = 24` rather than ~6 h resumed). That is the correct price
+of having fixed the buffer; the cheaper alternative was a meaningless result.

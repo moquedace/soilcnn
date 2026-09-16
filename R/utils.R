@@ -396,3 +396,63 @@ print_wide <- function(x, n = NULL) {
   }
   out
 }
+
+# ── Resume: the FOLDS have to be the same folds too ───────────────────────────
+#
+# WHY THIS EXISTS, AND WHY .resumable_units() IS NOT ENOUGH.
+#
+# .resumable_units() proves a cached unit was fitted on the hyperparameters its
+# name claims. It says nothing about the DATA those hyperparameters were fitted
+# to -- and the fold plan is data.
+#
+# It came up the moment the buffer was fixed. apply_buffer() had protected only
+# the validation set; once it also protected the test set, every fold lost a rim
+# of training points. The cached units were still `cfg_002` with the same
+# learning rate and the same window, so the hyperparameter check passed them --
+# while they had been trained on a training set that no longer exists. Resuming
+# would have produced a comparison table whose rows were fitted on different
+# data, ranked against each other, with nothing on screen saying so.
+#
+# There is no safe partial answer here. A plan that differs invalidates every
+# cached unit at once, so this REFUSES rather than silently discarding hours of
+# training: the run directory is the record of an experiment, and quietly
+# overwriting half of it with units from a different experiment is worse than
+# stopping. The caller picks a new run_id, or deletes the old one on purpose.
+#
+# Compared by fold MEMBERSHIP, not by the plan object: params differ for
+# irrelevant reasons (a new field, a rounded buffer) while the split is
+# identical, and the split is what training actually consumed.
+check_plan_unchanged <- function(plan, run_dir, resume = TRUE) {
+  path <- file.path(run_dir, "fold_plan.rds")
+  if (!isTRUE(resume) || !file.exists(path)) return(invisible(TRUE))
+
+  old <- tryCatch(readRDS(path), error = function(e) NULL)
+  if (is.null(old) || is.null(old$folds)) return(invisible(TRUE))
+
+  same <- length(old$folds) == length(plan$folds) &&
+    all(vapply(seq_along(plan$folds), function(j) {
+      a <- old$folds[[j]]; b <- plan$folds[[j]]
+      identical(sort(as.integer(a$train)),      sort(as.integer(b$train))) &&
+      identical(sort(as.integer(a$validation)), sort(as.integer(b$validation))) &&
+      identical(sort(as.integer(a$test)),       sort(as.integer(b$test)))
+    }, logical(1)))
+  if (same) return(invisible(TRUE))
+
+  # Name the difference. "The plan changed" sends someone reading diffs; the
+  # counts usually identify the cause on sight.
+  n_of <- function(p, role) sum(vapply(p$folds, function(f) length(f[[role]]),
+                                       integer(1)))
+  stop(
+    "THE FOLD PLAN IN THIS RUN DIRECTORY IS NOT THE PLAN BEING ASKED FOR.\n\n",
+    "  ", run_dir, "\n\n",
+    sprintf("  cached : %d fold(s) | train %d | validation %d | test %d\n",
+            length(old$folds), n_of(old, "train"), n_of(old, "validation"),
+            n_of(old, "test")),
+    sprintf("  asked  : %d fold(s) | train %d | validation %d | test %d\n\n",
+            length(plan$folds), n_of(plan, "train"), n_of(plan, "validation"),
+            n_of(plan, "test")),
+    "Resuming would rank units fitted on different training sets against each\n",
+    "other. Use a new run_id, or delete this directory deliberately if the\n",
+    "cached run is genuinely obsolete.",
+    call. = FALSE)
+}
