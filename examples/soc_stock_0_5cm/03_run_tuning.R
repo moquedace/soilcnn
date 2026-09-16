@@ -90,7 +90,12 @@ output_tuning_dir <- file.path(project_root, "outputs", "tuning",
 # first pass. make_manual_tune_grid() is the alternative for a full factorial.
 
 tune_grid <- make_tune_grid(
-  tune_length = 3,
+  # 24, not 3. The dev run used 3 -- the best of three draws in a space of a
+  # couple of thousand combinations, which cannot support any statement about
+  # the family, including the negative one 03b reported. With 24 each axis
+  # appears in several combinations, so conv_padding can be told apart from
+  # window and learning rate instead of being confounded with them.
+  tune_length = 24,
   seed        = 666,
   fixed = list(
     loss_fn       = "smooth_l1",                # robust to outlier SOC values
