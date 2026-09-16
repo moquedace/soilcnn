@@ -2415,3 +2415,50 @@ construction — one that reads only the centre pixel, one that reads only ring 
 Each must report the mirror image of the other. A diagnostic that answers this
 question wrongly is worse than not having it, because the answer is the sort
 nobody double-checks: it agrees with whatever the reader already suspected.
+
+---
+
+## Calibrated uncertainty: split conformal + PICP
+
+Item 10 of the September review (§D2), which called it the best return on effort
+in the document.
+
+**The defect it replaces.** Stage 04 reports the median and spread of a seed
+ensemble, and `design_decisions.md` §11 already recorded that the spread is not a
+prediction interval: it measures how much the answer moves when the
+initialisation moves — a property of the optimiser, not of the soil. It says
+nothing about irreducible noise, about bias, or about anything the ensemble
+agrees on while being wrong together. This project's own numbers show the scale:
+the seed spread is 0.038 CCC while the MAE is ~17 t/ha against a median stock of
+29.3. A map that understates its uncertainty is worse than no map, because
+somebody acts on it.
+
+**What was implemented.** `conformal_calibrate()` / `conformal_interval()` /
+`picp()` / `picp_report()` / `conformal_cv()`.
+
+Three decisions worth recording:
+
+1. **The `(n+1)` correction is not a detail.** The quantile is the
+   `ceil((n+1)(1-alpha))`-th residual, not the sample quantile — the 91st of 100
+   rather than the 90th. The plain quantile makes the guarantee false by about
+   `1/n`, in the optimistic direction. Below `ceiling(1/alpha) - 1` calibration
+   points (9 for 90%, 19 for 95%) no finite interval carries the guarantee, and
+   the function returns `Inf` with a warning rather than a comfortable lie.
+2. **Normalised intervals give the seed spread a job it can actually do.**
+   Dividing residuals by a per-point difficulty score before taking the quantile
+   makes widths vary by location while keeping the guarantee. The ensemble
+   spread is useless as an interval and is a perfectly good difficulty score —
+   calibrated instead of trusted. Measured on a heteroscedastic fixture, the
+   easy-vs-hard coverage gap falls from 0.206 to 0.005.
+3. **The guarantee is marginal, not conditional.** "90% overall" is compatible
+   with 99% over the easy half and 60% over the hard half, and the hard half is
+   where anyone needs an interval. `picp_report()` therefore breaks coverage
+   down by group, sorts the worst first, and points at the area of
+   applicability when a group falls far below — that is where exchangeability,
+   the theorem's only assumption, stops holding.
+
+*Test design:* coverage is verified by simulation over 300 repetitions, against
+`k/(n+1) = 0.9020` rather than against a remembered 0.9, and repeated with a
+skewed exponential error because distribution-freeness is the selling point. An
+uncertainty map is the one output nobody can check by eye: one that promises 90%
+and delivers 61% looks exactly like one that delivers 90%.

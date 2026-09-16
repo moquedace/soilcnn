@@ -48,6 +48,7 @@
   "resample.R",         # fold plans, buffers, noise floor, one_se
   "diagnostics.R",      # checks about THIS run on real data
   "aoa.R",              # dissimilarity index / area of applicability
+  "conformal.R",        # calibrated intervals + PICP
   "cnn_architecture.R", # the model
   "tune_grid.R",        # the search space
   "train_cnn.R",        # the CNN runner
