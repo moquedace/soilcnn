@@ -456,3 +456,32 @@ check_plan_unchanged <- function(plan, run_dir, resume = TRUE) {
     "cached run is genuinely obsolete.",
     call. = FALSE)
 }
+
+
+# ── evaluate_test = FALSE: one rule, one place ────────────────────────────────
+#
+# WHY THIS IS A FUNCTION AND NOT THREE dplyr::filter() CALLS.
+#
+# `evaluate_test = FALSE` is supposed to mean the test set is not read while a
+# config is being chosen. It was implemented three times and got fixed once:
+#
+#   comparison table    blanked                        (both runners)
+#   predictions/*.csv   filtered in train_cnn.R only   (2026-09-16)
+#   metrics/*_perf.csv  NEVER FILTERED, either runner
+#
+# So the number the switch exists to withhold -- the per-unit test CCC -- was
+# written in plain text, 27 times, in the very run whose selection was later
+# frozen. `metrics/cfg_003_f1_s1_perf.csv` line 2 begins
+# `cfg_003_f1_s1;smooth_l1;test;591;0,4936...`.
+#
+# The comment written when the first door was closed said "two doors and one
+# lock is one door". There were three. A rule spread across call sites is a rule
+# that will be enforced at some of them.
+#
+# Every artefact that leaves a runner and carries a dataset_role goes through
+# here, so adding a fourth artefact later cannot forget.
+.drop_test_rows <- function(x, evaluate_test) {
+  if (isTRUE(evaluate_test)) return(x)
+  if (is.null(x) || !is.data.frame(x) || !"dataset_role" %in% names(x)) return(x)
+  dplyr::filter(x, .data$dataset_role != "test")
+}

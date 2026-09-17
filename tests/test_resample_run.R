@@ -227,20 +227,48 @@ ok["n_params_survives_to_by_config"] <- "n_params" %in% names(res1$by_config)
 # metrics and left the per-unit predictions writing test residuals to a CSV --
 # a second door to the set score_test_grid() exists to keep shut, and the only
 # one with no ordering check on it. Two doors and one lock is one door.
-ok["test_predictions_are_not_written"] <- {
-  f <- list.files(file.path(res1$run_dir, "predictions"), full.names = TRUE)
-  roles <- unique(unlist(lapply(f, function(p) {
-    suppressMessages(readr::read_csv2(p, show_col_types = FALSE))$dataset_role
-  })))
-  length(f) > 0L && !("test" %in% roles)
+# EVERY artefact, not the one that was remembered.
+#
+# This block used to read predictions/ only, and it passed while
+# metrics/*_perf.csv carried a `test` row for all 27 units of the real stage-03
+# run -- the per-unit test CCC in plain text, in the very run whose selection
+# was later frozen. A test that checks one of three doors reports that the house
+# is locked.
+#
+# So the check now walks EVERY csv the runner writes that has a dataset_role
+# column, discovered by reading them, not by naming the two a person recalled.
+.roles_on_disk <- function(run_dir) {
+  f <- list.files(run_dir, pattern = "[.]csv$", recursive = TRUE,
+                  full.names = TRUE)
+  f <- f[!grepl("comparison", f, fixed = TRUE)]   # the table is blanked, not filtered
+  out <- lapply(f, function(p) {
+    d <- suppressMessages(readr::read_csv2(p, show_col_types = FALSE))
+    if ("dataset_role" %in% names(d)) unique(as.character(d$dataset_role)) else NULL
+  })
+  list(files = f[!vapply(out, is.null, logical(1))],
+       roles = unique(unlist(out)))
 }
-ok["validation_predictions_still_are"] <- {
-  f <- list.files(file.path(res1$run_dir, "predictions"), full.names = TRUE)
-  roles <- unique(unlist(lapply(f, function(p) {
-    suppressMessages(readr::read_csv2(p, show_col_types = FALSE))$dataset_role
-  })))
-  "validation" %in% roles
+
+.on_disk <- .roles_on_disk(res1$run_dir)
+ok["some_artefact_carries_a_role"] <- length(.on_disk$files) > 0L
+ok["no_artefact_carries_a_test_row"] <- !("test" %in% .on_disk$roles)
+ok["validation_rows_are_still_written"] <- "validation" %in% .on_disk$roles
+
+# ...and the rule itself, directly: it must drop test, keep the rest, and be a
+# no-op both when evaluate_test is TRUE and when the frame has no role column.
+ok["drop_test_rows_drops_only_test"] <- {
+  d <- tibble::tibble(dataset_role = c("train", "validation", "test"), v = 1:3)
+  identical(.drop_test_rows(d, FALSE)$dataset_role, c("train", "validation"))
 }
+ok["drop_test_rows_is_a_no_op_when_evaluating"] <- {
+  d <- tibble::tibble(dataset_role = c("train", "test"), v = 1:2)
+  identical(.drop_test_rows(d, TRUE), d)
+}
+ok["drop_test_rows_ignores_a_roleless_frame"] <- {
+  d <- tibble::tibble(a = 1:3)
+  identical(.drop_test_rows(d, FALSE), d)
+}
+ok["drop_test_rows_survives_null"] <- is.null(.drop_test_rows(NULL, FALSE))
 
 # 5. every unit has the checkpoint the 99 looks for
 ckpt <- file.path(res1$run_dir, "models", paste0(cmp1$unit_id, "_best.pt"))

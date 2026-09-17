@@ -751,26 +751,21 @@ run_cnn_tuning <- function(
                     paste0(cid, "_best.pt")))
     safe_write_csv2(result$history,
                     file.path(run_dir, "history", paste0(cid, "_history.csv")))
-    # THE TEST ROWS DO NOT GO TO DISK EITHER.
+    # NO TEST ROW LEAVES THIS RUNNER WHILE evaluate_test IS FALSE.
     #
-    # evaluate_test = FALSE blanks the test METRICS in the comparison table. It
-    # did not stop the per-unit predictions from being written, so the test
-    # residuals sat in a CSV beside the run -- a second door to the set that
-    # score_test_grid() exists to keep shut, and the only one with no ordering
-    # check on it. Two doors and one lock is one door.
+    # Three artefacts carry dataset_role and all three used to be written whole:
+    # predictions/ was filtered on 2026-09-16, metrics/_perf.csv and
+    # metrics/_perf_quantile.csv were not -- so the per-unit test CCC was on
+    # disk in plain text for every unit of the run whose selection was later
+    # frozen. See .drop_test_rows() in R/utils.R for the full account.
     #
-    # The predictions are not lost: score_test_grid() recomputes them from the
+    # Nothing is lost: score_test_grid() recomputes the test from the
     # checkpoints, after the selection is frozen, which is the whole point.
-    pred_written <- if (isTRUE(evaluate_test)) {
-      result$pred_all
-    } else {
-      dplyr::filter(result$pred_all, .data$dataset_role != "test")
-    }
-    safe_write_csv2(pred_written,
+    safe_write_csv2(.drop_test_rows(result$pred_all, evaluate_test),
                     file.path(run_dir, "predictions", paste0(cid, "_pred_all.csv")))
-    safe_write_csv2(result$perf_all,
+    safe_write_csv2(.drop_test_rows(result$perf_all, evaluate_test),
                     file.path(run_dir, "metrics", paste0(cid, "_perf.csv")))
-    safe_write_csv2(result$perf_quantile,
+    safe_write_csv2(.drop_test_rows(result$perf_quantile, evaluate_test),
                     file.path(run_dir, "metrics", paste0(cid, "_perf_quantile.csv")))
     if (!is.null(result$gate)) {
       safe_write_csv2(result$gate$summary,

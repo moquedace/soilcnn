@@ -291,10 +291,16 @@ run_table_resample <- function(model, tune_grid = NULL, store, points,
           dplyr::group_modify(~ calc_metrics(.x$obs, .x$pred)) %>%
           dplyr::ungroup()
 
-        safe_write_csv2(pred_all, file.path(run_dir, "predictions",
-                        paste0(unit_id, "_pred_all.csv")))
-        safe_write_csv2(perf_all, file.path(run_dir, "metrics",
-                        paste0(unit_id, "_perf.csv")))
+        # Same rule as the CNN runner, and this one had NEITHER door closed:
+        # both the predictions and the per-unit metrics were written whole.
+        # baselines_20260917_014054/rf_centre/metrics/rf_001_f1_s1_perf.csv
+        # opens with `test;591;0,4464...`. See .drop_test_rows() in R/utils.R.
+        safe_write_csv2(.drop_test_rows(pred_all, evaluate_test),
+                        file.path(run_dir, "predictions",
+                                  paste0(unit_id, "_pred_all.csv")))
+        safe_write_csv2(.drop_test_rows(perf_all, evaluate_test),
+                        file.path(run_dir, "metrics",
+                                  paste0(unit_id, "_perf.csv")))
         if (!is.null(fitted$history)) {
           safe_write_csv2(fitted$history, file.path(run_dir, "history",
                           paste0(unit_id, "_history.csv")))
