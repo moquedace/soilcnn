@@ -339,7 +339,7 @@ conformal_cv <- function(pred_obs, alpha = 0.1, difficulty = NULL,
 cv_residuals <- function(run_dir, config_id, role = "validation") {
   pred_dir <- file.path(run_dir, "predictions")
   files <- list.files(pred_dir,
-                      pattern = sprintf("^%s_f[0-9]+_s[0-9]+_pred_all\.csv$",
+                      pattern = sprintf("^%s_f[0-9]+_s[0-9]+_pred_all\\.csv$",
                                         config_id),
                       full.names = TRUE)
   if (length(files) == 0L) return(NULL)
