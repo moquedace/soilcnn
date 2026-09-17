@@ -64,7 +64,39 @@ outside. `score_test_grid()` measures how much a test-selected number would have
 been overstated. Both are inference only, minutes, and both produce a number for
 the paper.
 
-Expected cost for the whole of tier A: **under an hour**, most of it A7 and A8.
+Tier A is implemented as `examples/soc_stock_0_5cm/_capability_sweep.R`.
+Expected cost: **1.5-2 hours**, most of it A4 (36 forests on 543 columns) and
+A5 (54 xgboost units on 724).
+
+### What the contract pass changed before a line of it ran
+
+Every call above was derived from the source by one agent and then adversarially
+refuted by another. **Thirteen of fourteen contracts came back BROKEN**, and the
+dominant failure was not a wrong function name -- it was a *weak assertion*: a
+check that passes on a silently wrong result. Five examples that reached the
+script:
+
+- **A1** checked the test set's SIZE (591) rather than its identity. A fresh
+  draw would be `ceiling(0.15 * 3728) = 560`, so 591 catches a total failure by
+  arithmetic coincidence and nothing else. It now compares the ids.
+- **A3** derived the soil-class group from the point table only. A group vector
+  in CSV order against a store in store order produces a plan that looks perfect
+  and groups the wrong points. The label is now derived twice -- from the aligned
+  table and from the patch tensors' centre pixel -- and the two must agree.
+- **A4** checked column names, which are pasted from the window key and never
+  read from the data, so they are right whatever the tensor held. The means are
+  now recomputed in base R on 20 rows of every window.
+- **A5** could not have detected caret's own resampling leaking in, which is the
+  entire risk of borrowing caret. It now probes `trainControl(method = "none")`
+  on the fitted object directly and compares fold membership by row index.
+- **A6** asserted `all(diff(by_group$picp) >= 0)` -- a tautology, because
+  `picp_report()` sorts `by_group` by `picp`.
+
+Two corrections went the other way, against the refuters, because the code moved
+under them: A2 asserted that `metrics/*_perf.csv` carries a test row (true when
+it was written, false since `.drop_test_rows()`), and A6's golden PICP values
+were computed outside R and are now checked as properties with the exact numbers
+printed rather than asserted.
 
 ---
 
