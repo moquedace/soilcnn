@@ -864,10 +864,17 @@ run_cnn_tuning <- function(
     }
   }
   if (n_ok > 0L) {
+    # THE BEST UNIT OF THE FOLD, and only the metric that chose it.
+    #
+    # This line used to end with the test CCC and the words "(diagnostic
+    # only)". With evaluate_test = FALSE it printed "test_CCC=NA (diagnostic
+    # only)" -- noise where a stale claim used to be. Both are gone: the
+    # phrase was wrong even when the number was real, because a test score on
+    # screen beside the selection metric is not a diagnostic, it is the input
+    # to a choice somebody is about to make.
     message("\n── Best config: ", comparison$config_id[1],
             " | val_CCC=", round(comparison$val_ccc[1], 3),
-            " | val_MAE=", round(comparison$val_mae[1], 3),
-            " | test_CCC=", round(comparison$test_ccc[1], 3), " (diagnostic only) ──")
+            " | val_MAE=", round(comparison$val_mae[1], 3), " ──")
   } else {
     message("\n── No config completed successfully. ──")
   }
