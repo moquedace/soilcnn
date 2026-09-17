@@ -490,11 +490,31 @@ train_config_all_seeds <- function(cfg, config_id) {
           }
         }
 
-        # The normalised variant needs a positive spread everywhere, which it
-        # has only when more than one seed finished. With one seed the spread
-        # is NA and the honest move is to skip rather than to invent a floor.
+        # ── WHY THE NORMALISED INTERVAL IS NOT PRODUCED HERE ────────────────
+        #
+        # Locally adaptive intervals need a per-point difficulty score, and the
+        # obvious one is the ensemble spread. It is available on the prediction
+        # side (10 seeds of the final model) and NOT on the calibration side,
+        # because the calibration set is now the cross-validated residuals, and
+        # those came from 3 seeds of models trained on ~53% of the points.
+        #
+        # Calibrating the ratio residual/spread on one kind of spread and
+        # applying it to another is not a weaker guarantee, it is no guarantee:
+        # the CV models disagree with each other more than the final ensemble
+        # does, so the ratio is systematically wrong and the interval would be
+        # confidently the wrong width. Producing that number and labelling it
+        # "90%" is exactly what this file exists to avoid.
+        #
+        # The principled difficulty score is the dissimilarity index from
+        # R/aoa.R: it is computed the same way for a calibration point and for
+        # every prediction pixel, from the same scaling, and it measures the
+        # thing that actually makes a point hard -- distance from what the model
+        # was trained on. That is the next step here, and it needs stage 07's
+        # machinery over the calibration points.
         cal_n <- NULL
-        if (all(is.finite(cal_rows$spread)) && all(cal_rows$spread > 0)) {
+        has_spread <- "spread" %in% names(cal_rows) &&
+          all(is.finite(cal_rows$spread)) && all(cal_rows$spread > 0)
+        if (has_spread) {
           cal_n <- conformal_calibrate(cal_rows$obs, cal_rows$pred, alpha = a,
                                        difficulty = cal_rows$spread)
           iv_n  <- conformal_interval(cal_n, chk_rows$pred,
@@ -502,6 +522,9 @@ train_config_all_seeds <- function(cfg, config_id) {
                                       lower_limit = 0)
           message("   normalised by the seed spread:")
           print(picp_report(chk_rows$obs, iv_n$lower, iv_n$upper, alpha = a))
+        } else {
+          message("   normalised interval: NOT produced. The calibration set ",
+                  "carries no comparable\n     difficulty score -- see the note in this script. Constant width only.")
         }
 
         # Saved so stage 05 can put bounds on the map without recomputing --

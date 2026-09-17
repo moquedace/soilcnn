@@ -302,6 +302,11 @@ Conformal coverage, by calibration set, measured on the same 591 test points:
 | this run's validation (one fold of k = 7) | 449 | 31.98 | 83.6% |
 | cross-validated residuals (all folds) | 3,092 | 39.62 | **87.8%** |
 
+At 95% the two calibrations give 92.2% and 92.7%. Interval widths: 65.1 t/ha
+mean at 90% (against a median stock of 29.3), 83.8 at 95%. Those widths are the
+honest cost of this model's error, and they are the number a user of the map
+would have to live with.
+
 **The first was a defect, the second is a result.** The refit validation is one
 spatial region and the easiest of the three sets (MAE 14.6 against 17.0 across
 the CV and 18.2 on test); calibrating there and measuring elsewhere is
@@ -314,3 +319,23 @@ the points against the final model's 69%, so their residuals are larger — and 
 still falls short. That gap is the part conformal cannot fix, and it is the
 measurable statement that a spatially held-out region is not exchangeable with
 the regions used to calibrate.
+
+### The normalised interval is not produced, and why
+
+Locally adaptive intervals need a per-point difficulty score. The obvious one is
+the ensemble spread — available on the prediction side (10 seeds of the final
+model) and **not** on the calibration side, because the calibration set is now
+the cross-validated residuals, from 3 seeds of models trained on ~53% of the
+points.
+
+Calibrating the ratio residual/spread on one kind of spread and applying it to
+another is not a weaker guarantee, it is no guarantee: the CV models disagree
+with each other more than the final ensemble does, so the ratio is
+systematically wrong and the interval comes out confidently the wrong width.
+
+The principled difficulty score is the **dissimilarity index** from `R/aoa.R`.
+It is computed the same way for a calibration point and for every prediction
+pixel, from the same scaling, and it measures the thing that actually makes a
+point hard: distance from what the model was trained on. That is the next step,
+and it is also what would address the residual under-coverage — the points the
+interval misses should be the dissimilar ones.
