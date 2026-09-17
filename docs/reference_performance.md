@@ -339,3 +339,30 @@ pixel, from the same scaling, and it measures the thing that actually makes a
 point hard: distance from what the model was trained on. That is the next step,
 and it is also what would address the residual under-coverage — the points the
 interval misses should be the dissimilar ones.
+
+### Stage 05 and 07 — the pipeline closed (20 km, plumbing only)
+
+Predicted at 20 km against a model trained at 250 m: the 15×15 patch covers 300
+km instead of 3.75, so the network sees a neighbourhood it never met. Stage 05
+says so in a banner and the map is not a map. 1.6 M cells, 358,537 valid,
+30.5 min single-tile.
+
+| band | min | mean | max |
+|---|---|---|---|
+| median prediction | 0.43 | 26.22 | 113.15 |
+| ensemble sd | 0.25 | **8.56** | 37.94 |
+| conformal 90% lower | 0.00 | 2.16 | 73.53 |
+| conformal 90% upper | 40.06 | 65.84 | 152.77 |
+
+**The number this whole line of work was for:** the ensemble spread says ±8.6 and
+the calibrated interval says ±39.6 — a factor of **4.6**. Publishing the `sd`
+band as "uncertainty" would have promised four and a half times more certainty
+than the model delivers, and it would have looked exactly like a correct map.
+
+The consequence is blunt: with a median of 26.2 and a half-width of 39.6, the
+lower bound is **zero over most of the map** (mean 2.16). The model cannot rule
+out an empty stock almost anywhere. That is the model being honest about what it
+knows, not a defect of the interval.
+
+Stage 07: AOA threshold DI = 0.6999, **78.7%** of valid cells inside (394,406 of
+501,246), 1.4 min.
