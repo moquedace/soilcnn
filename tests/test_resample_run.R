@@ -223,6 +223,25 @@ ok["n_params_constant_within_config"] <-
   all(tapply(cmp1$n_params, cmp1$config_id, dplyr::n_distinct) == 1L)
 ok["n_params_survives_to_by_config"] <- "n_params" %in% names(res1$by_config)
 
+# The test rows must not reach disk either. evaluate_test = FALSE blanked the
+# metrics and left the per-unit predictions writing test residuals to a CSV --
+# a second door to the set score_test_grid() exists to keep shut, and the only
+# one with no ordering check on it. Two doors and one lock is one door.
+ok["test_predictions_are_not_written"] <- {
+  f <- list.files(file.path(res1$run_dir, "predictions"), full.names = TRUE)
+  roles <- unique(unlist(lapply(f, function(p) {
+    suppressMessages(readr::read_csv2(p, show_col_types = FALSE))$dataset_role
+  })))
+  length(f) > 0L && !("test" %in% roles)
+}
+ok["validation_predictions_still_are"] <- {
+  f <- list.files(file.path(res1$run_dir, "predictions"), full.names = TRUE)
+  roles <- unique(unlist(lapply(f, function(p) {
+    suppressMessages(readr::read_csv2(p, show_col_types = FALSE))$dataset_role
+  })))
+  "validation" %in% roles
+}
+
 # 5. every unit has the checkpoint the 99 looks for
 ckpt <- file.path(res1$run_dir, "models", paste0(cmp1$unit_id, "_best.pt"))
 ok["every_unit_has_checkpoint"] <- all(file.exists(ckpt))

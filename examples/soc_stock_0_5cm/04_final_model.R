@@ -437,8 +437,33 @@ train_config_all_seeds <- function(cfg, config_id) {
                        spread = stats::sd(.data$pred),
                        n_seeds = dplyr::n(), .groups = "drop")
 
-    cal_rows <- dplyr::filter(ens, .data$dataset_role == "validation")
+    # WHICH RESIDUALS CALIBRATE, AND WHY NOT THESE ONES.
+    #
+    # The obvious choice is this run's own validation rows -- held out of
+    # training, already computed. It was the first choice here, and it gave 83.6%
+    # coverage against a nominal 90%.
+    #
+    # The refit validation is ONE fold of k = 7: 449 points from one spatial
+    # region, and the easiest of the three sets by a wide margin (MAE 14.6
+    # against 17.0 across the cross-validation and 18.2 on test). Calibrating on
+    # one block and measuring coverage on another is exchangeability failure by
+    # construction.
+    #
+    # The tuning run's cross-validated residuals cover every block instead --
+    # each point predicted once, as validation, somewhere. Recalibrating that way
+    # moved coverage to 87.8%. They are used when available, and this run's own
+    # validation is the fallback for a tuning run that wrote no predictions.
+    cv_cal <- cv_residuals(tuning_dir, config_id)
+    cal_source <- "cross-validated residuals (all folds)"
+    cal_rows <- if (!is.null(cv_cal) && nrow(cv_cal) >= nrow(ens) / 4) {
+      dplyr::mutate(cv_cal, spread = NA_real_)
+    } else {
+      cal_source <- "this run's validation split (one fold)"
+      dplyr::filter(ens, .data$dataset_role == "validation")
+    }
     chk_rows <- dplyr::filter(ens, .data$dataset_role == "test")
+    message("\nConformal calibration set: ", cal_source, " -- ",
+            nrow(cal_rows), " point(s)")
 
     if (nrow(cal_rows) >= 9L && nrow(chk_rows) > 0L) {
       for (a in conformal_alpha) {
@@ -448,6 +473,22 @@ train_config_all_seeds <- function(cfg, config_id) {
                 round(100 * (1 - a)), "% --")
         print(cal)
         print(picp_report(chk_rows$obs, iv$lower, iv$upper, alpha = a))
+
+        # THE OTHER CALIBRATION, ALONGSIDE, when both exist.
+        #
+        # Printing only the better one would hide the finding. The gap between
+        # these two lines IS the result: how much a calibration set drawn from
+        # one spatial block understates the interval a map needs.
+        if (!is.null(cv_cal) && nrow(cv_cal) > 0L) {
+          own <- dplyr::filter(ens, .data$dataset_role == "validation")
+          if (nrow(own) >= 9L) {
+            cal_o <- conformal_calibrate(own$obs, own$pred, alpha = a)
+            iv_o  <- conformal_interval(cal_o, chk_rows$pred, lower_limit = 0)
+            message("   for comparison, calibrated on this run's validation ",
+                    "only (", nrow(own), " points, one fold):")
+            print(picp_report(chk_rows$obs, iv_o$lower, iv_o$upper, alpha = a))
+          }
+        }
 
         # The normalised variant needs a positive spread everywhere, which it
         # has only when more than one seed finished. With one seed the spread

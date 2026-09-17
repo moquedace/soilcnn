@@ -233,3 +233,84 @@ validation set only. Training points adjacent to test blocks were kept, and
 their patches overlapped test patches. **The test numbers above are optimistic
 by an unknown amount** and should not be quoted; the validation numbers, which
 are what every comparison on this page actually uses, are unaffected.
+
+---
+
+## Dev run on the corrected pipeline (2026-09-16/17)
+
+Fold plan: `spatial_folds`, k = 3, block 0.25°, buffer 0.0337° Chebyshev,
+`protect = validation + test`. 409 training points dropped per fold (6.5%):
+319 near validation, 90 near test, plus 45 validation points near test — the
+last 135 are the leak that existed until the buffer was fixed. Identical-cell
+overlap and 15×15 patch overlap between train and validation: **0**.
+
+### Stage 03 — three configs
+
+| rank | config | val_ccc | sd | se | val_mae | n_params | architecture |
+|---|---|---|---|---|---|---|---|
+| 1 | cfg_003 | 0.473 | 0.031 | 0.0104 | 17.4 | 340,225 | **single** 15×15 branch |
+| 2 | cfg_001 | 0.449 | 0.028 | 0.0092 | 18.4 | 1,891,217 | 9+15, vector gate |
+| 3 | cfg_002 | 0.439 | 0.046 | 0.0152 | 17.6 | 2,425,217 | 3+9, no gate |
+
+The single-branch model wins on both metrics with 5–7× fewer parameters. The
+gap to second (0.024) is smaller than the seed noise floor (0.0307), so the
+ranking does not separate — but the dual-branch configs are not ahead either,
+which is the premise under test.
+
+### Stage 03b — the baselines, on identical folds
+
+| family | config | ccc | nse | mae | rmse | mqi | seed noise |
+|---|---|---|---|---|---|---|---|
+| rf_centre | rf_004 | 0.487 | 0.314 | 16.32 | 24.66 | 0.358 | 0.0015 |
+| rf_context | rf_001 | 0.487 | 0.313 | 16.32 | 24.67 | 0.356 | 0.0019 |
+| mlp_centre | mlp_005 | 0.480 | 0.215 | 17.68 | 26.30 | 0.220 | 0.0181 |
+| cnn | cfg_003 | 0.473 | 0.230 | 17.42 | 26.03 | 0.236 | 0.0374 |
+
+Paired by (fold, seed), 9 pairs:
+
+| comparison | CCC | MAE | NSE | MQI |
+|---|---|---|---|---|
+| cnn − rf_context | −0.015 (t −0.9) | **+1.09 (t +6.1)** | **−0.083 (t −4.1)** | **−0.120 (t −3.4)** |
+| cnn − mlp_centre | −0.008 (t −0.5) | −0.26 (t −1.5) | +0.015 (t +1.3) | +0.016 (t +0.9) |
+| rf_context − rf_centre | −0.000 (t −0.1) | +0.008 (t +0.3) | −0.001 (t −0.3) | −0.002 (t −0.3) |
+
+Three findings, mutually consistent:
+
+1. **The neighbourhood buys nothing.** `rf_context = rf_centre` on every metric.
+   Together with the single-branch CNN winning stage 03, neither window means
+   for a forest nor a second convolutional branch pays for itself.
+2. **The CNN loses on error.** Not separated on CCC; behind on MAE, NSE and MQI,
+   all beyond t = 3.
+3. **The architecture buys nothing.** An MLP on the 181 centre values ties the
+   CNN on every metric.
+
+And the cost nobody counts: the CNN's seed-to-seed noise is **~20× the
+forest's** (0.037 against 0.0018). Delivering a map needs an ensemble; the
+forest returns the same answer every time.
+
+Caveats: 3 CNN configs, and 10% of the points.
+
+### Stage 04 — the final model, and the coverage finding
+
+cfg_003, 10 seeds, refit split (train 2559 / validation 449 / test 591).
+Test: CCC 0.467 ± 0.025, MAE 18.6 ± 0.4, RMSE 28.5, NSE 0.234, MQI 0.234.
+
+Conformal coverage, by calibration set, measured on the same 591 test points:
+
+| calibration set | n | q (90%) | PICP |
+|---|---|---|---|
+| this run's validation (one fold of k = 7) | 449 | 31.98 | 83.6% |
+| cross-validated residuals (all folds) | 3,092 | 39.62 | **87.8%** |
+
+**The first was a defect, the second is a result.** The refit validation is one
+spatial region and the easiest of the three sets (MAE 14.6 against 17.0 across
+the CV and 18.2 on test); calibrating there and measuring elsewhere is
+exchangeability failure by construction.
+
+What survives after the fix is the finding: **even calibrated across every
+block, the interval under-covers a held-out spatial block by ~2 points.** The CV
+calibration is conservative by construction — those models trained on ~53% of
+the points against the final model's 69%, so their residuals are larger — and it
+still falls short. That gap is the part conformal cannot fix, and it is the
+measurable statement that a spatially held-out region is not exchangeable with
+the regions used to calibrate.

@@ -297,3 +297,69 @@ conformal_cv <- function(pred_obs, alpha = 0.1, difficulty = NULL,
               group = if (!is.null(group)) all_rows$group else NULL,
               alpha = alpha)
 }
+
+# ── Where the calibration residuals should come from ──────────────────────────
+#
+# A LESSON PAID FOR IN A RUN.
+#
+# Stage 04 first calibrated on the validation rows of its own refit split. That
+# is held out of training, so it looked correct, and the coverage came back at
+# 83.6% against a nominal 90%.
+#
+# The refit validation is ONE fold of k = 7 -- 449 points from one spatial
+# region, and the easiest of the three sets by a wide margin (MAE 14.6 against
+# 17.0 across the cross-validation and 18.2 on the test set). Calibrating on one
+# block and measuring coverage on another is exchangeability failure by
+# construction, and the interval came out too narrow by exactly that.
+#
+# The cross-validated residuals are the better calibration set, and the tuning
+# run already wrote them: every point is predicted once as validation, across
+# every fold, so the residual distribution spans the whole area rather than one
+# corner of it. Recalibrating that way moved coverage from 83.6% to 87.8%.
+#
+# IT STILL UNDER-COVERS, AND THAT IS A RESULT RATHER THAN A BUG. The CV
+# calibration is conservative by construction -- those models trained on ~53% of
+# the points against the final model's 69%, so their residuals are larger -- and
+# the interval is still short on the test set. What is left is the part
+# conformal cannot fix: a held-out spatial block is not exchangeable with the
+# blocks used to calibrate. That gap is worth reporting, and this framework
+# reports it rather than tuning alpha until the number looks right.
+
+#' Cross-validated residuals from a tuning run, for calibration.
+#'
+#' Every point appears once as validation, pooled over folds and averaged over
+#' seeds, so the residual distribution covers the whole study area instead of
+#' one fold's worth of it.
+#'
+#' @param run_dir   Tuning run directory (the one holding predictions/).
+#' @param config_id Which config's predictions to read.
+#' @param role      Which role to keep. "validation" is the point of this.
+#' @return A tibble with sample_id, obs, pred (the seed ensemble's median), and
+#'   n_seeds; or NULL when the run wrote no usable predictions.
+cv_residuals <- function(run_dir, config_id, role = "validation") {
+  pred_dir <- file.path(run_dir, "predictions")
+  files <- list.files(pred_dir,
+                      pattern = sprintf("^%s_f[0-9]+_s[0-9]+_pred_all\.csv$",
+                                        config_id),
+                      full.names = TRUE)
+  if (length(files) == 0L) return(NULL)
+
+  rows <- purrr::map_dfr(files, function(f) {
+    d <- suppressMessages(readr::read_csv2(f, show_col_types = FALSE))
+    if (!all(c("sample_id", "dataset_role", "obs", "pred") %in% names(d))) {
+      return(tibble::tibble())
+    }
+    dplyr::select(dplyr::filter(d, .data$dataset_role == role),
+                  sample_id, obs, pred)
+  })
+  if (nrow(rows) == 0L) return(NULL)
+
+  # The MEDIAN over seeds, matching what the map will be: the deployed
+  # prediction is the ensemble median, so the residual being calibrated has to
+  # be the ensemble's residual and not one seed's.
+  rows %>%
+    dplyr::group_by(.data$sample_id) %>%
+    dplyr::summarise(obs = dplyr::first(.data$obs),
+                     pred = stats::median(.data$pred),
+                     n_seeds = dplyr::n(), .groups = "drop")
+}
