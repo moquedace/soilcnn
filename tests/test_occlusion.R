@@ -300,4 +300,52 @@ cat(sprintf("  ring-1 model             : context %+.4f | centre %+.4f CCC\n",
             tr$delta_ccc[tr$scope == "context_all"],
             tr$delta_ccc[tr$scope == "centre_only_hidden"]))
 
+
+# =============================================================================
+# THE WRAPPER'S ARGUMENT SHAPE
+#
+# occlusion_report() passed fold_points_valid(store, idx) -- the whole named
+# list(train =, validation =, test =) -- where spatial_occlusion() wants ONE
+# role's tibble. The wrapper could never have worked.
+#
+# It survived because every test above calls spatial_occlusion() DIRECTLY with a
+# tibble. The inner function was covered from three angles and the thing a user
+# would actually call had never been called by anything. That is the defect
+# class, not the defect: a wrapper is not tested by testing what it wraps.
+#
+# occlusion_report() itself needs a real store, a fold plan and a checkpoint on
+# disk, so what is asserted here is the CONTRACT it violated -- and that the
+# refusal names the fix rather than failing three frames down in
+# check_point_contract() with "profile_id is missing", which sends the reader
+# to the point table instead of to the argument.
+# =============================================================================
+
+full_list <- list(train      = points_for(centre_val)[1:10, ],
+                  validation = points_for(centre_val),
+                  test       = points_for(centre_val)[1:5, ])
+
+ok["the_whole_role_list_is_refused"] <- inherits(
+  try(spatial_occlusion(centre_reader(wv), make_cache(centre_val), cfg,
+                        full_list, role = "validation", device = dev),
+      silent = TRUE), "try-error")
+
+ok["that_refusal_names_the_fix"] <- {
+  e <- tryCatch(spatial_occlusion(centre_reader(wv), make_cache(centre_val), cfg,
+                                  full_list, role = "validation", device = dev),
+                error = function(e) conditionMessage(e))
+  grepl("fold_points_valid", e, fixed = TRUE) && grepl("[[", e, fixed = TRUE)
+}
+
+# A tibble that is simply missing a contract column must still be caught, and
+# by the contract check rather than by the list guard.
+ok["an_incomplete_tibble_is_still_refused"] <- inherits(
+  try(spatial_occlusion(centre_reader(wv), make_cache(centre_val), cfg,
+                        dplyr::select(points_for(centre_val), -target_native),
+                        role = "validation", device = dev),
+      silent = TRUE), "try-error")
+
+# ...and the wrapper now takes `role` as a real argument, so it can subset.
+ok["occlusion_report_has_a_role_argument"] <-
+  "role" %in% names(formals(occlusion_report))
+
 .report(ok, "test_occlusion")

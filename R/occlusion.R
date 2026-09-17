@@ -138,7 +138,8 @@ occlude_patch_array <- function(x, mask, method = c("permute", "zero"),
 #' @param model     A trained module (already on `device`).
 #' @param cache     The fold cache (from build_fold_cache()$cache).
 #' @param cfg       The config row the model was built from.
-#' @param points_valid Metadata for the role, as fold_points_valid() returns.
+#' @param points_valid ONE role's metadata tibble -- fold_points_valid() returns
+#'   a named list, so this is fold_points_valid(store, index)[[role]].
 #' @param role      Which split to measure on. Validation by default: the test
 #'   set is frozen, and occlusion is a diagnostic, not a result.
 #' @param transform Inverse of the target transformation.
@@ -158,6 +159,27 @@ spatial_occlusion <- function(model, cache, cfg, points_valid,
   if (is.null(cache[[role]])) {
     stop("The cache has no role '", role, "'.", call. = FALSE)
   }
+
+  # ONE ROLE'S TIBBLE, NOT THE WHOLE NAMED LIST.
+  #
+  # fold_points_valid() returns list(train =, validation =, test =), and this
+  # wants the one tibble for `role`. occlusion_report() passed the whole list,
+  # so the wrapper could never have worked -- and the unit tests did not catch
+  # it because they call THIS function directly with a tibble. The wrapper had
+  # never been called by anything.
+  #
+  # Guarded here rather than fixed silently at the call site: the failure
+  # without it is check_point_contract() complaining that profile_id is
+  # missing, three frames down, which sends the reader to the point table
+  # instead of to the argument.
+  if (!is.data.frame(points_valid) && is.list(points_valid) &&
+      all(c("train", "validation") %in% names(points_valid))) {
+    stop("`points_valid` is the whole fold_points_valid() list, not one role. ",
+         "Pass
+  fold_points_valid(store, index)[[\"", role, "\"]]",
+         call. = FALSE)
+  }
+  check_point_contract(points_valid, what = "points_valid")
 
   score <- function(mod_windows) {
     # REPLACE THE WINDOWS, KEEP THE ROLE.
@@ -282,7 +304,8 @@ print.spatial_occlusion <- function(x, ...) {
 #' @param fold,seed_i Which unit of it.
 #' @param ...       Passed to spatial_occlusion().
 occlusion_report <- function(run_dir, data, config_id, fold = 1L, seed_i = 1L,
-                             transform = identity, device, ...) {
+                             role = "validation", transform = identity,
+                             device, ...) {
   tune_grid <- readRDS(file.path(run_dir, "tune_grid.rds"))
   plan      <- readRDS(file.path(run_dir, "fold_plan.rds"))
   cfg <- tune_grid[tune_grid$config_id == config_id, , drop = FALSE]
@@ -293,15 +316,22 @@ occlusion_report <- function(run_dir, data, config_id, fold = 1L, seed_i = 1L,
                   sprintf("%s_f%d_s%d_best.pt", config_id, fold, seed_i))
   if (!file.exists(ck)) stop("No checkpoint: ", ck, call. = FALSE)
 
-  idx   <- plan$folds[[fold]]
+  idx <- plan$folds[[fold]]
+
+  # ONLY THE WINDOWS THIS CONFIG USES. The store may hold 3, 9 and 15 while the
+  # config reads 15 alone; caching all three scales and copies tensors nothing
+  # will look at -- 0.85 GB instead of 0.61 GB here, and worse on a larger store.
+  ws_needed <- sort(unique(unlist(cfg$window_sizes)))
   cache <- build_fold_cache(data$store, data$points, data$type_table, idx,
-                            data$store$window_sizes, verbose = FALSE)
+                            ws_needed, verbose = FALSE)
   m <- build_cnn_from_config(cfg, data$store$n_channels)
   m$load_state_dict(torch::torch_load(ck))
   m$to(device = device)
 
-  out <- spatial_occlusion(m, cache$cache, cfg, fold_points_valid(data$store, idx),
-                           transform = transform, device = device, ...)
+  out <- spatial_occlusion(m, cache$cache, cfg,
+                           fold_points_valid(data$store, idx)[[role]],
+                           role = role, transform = transform,
+                           device = device, ...)
   rm(m, cache); invisible(gc(verbose = FALSE))
   out
 }
