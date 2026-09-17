@@ -90,12 +90,22 @@ output_tuning_dir <- file.path(project_root, "outputs", "tuning",
 # first pass. make_manual_tune_grid() is the alternative for a full factorial.
 
 tune_grid <- make_tune_grid(
-  # 24, not 3. The dev run used 3 -- the best of three draws in a space of a
-  # couple of thousand combinations, which cannot support any statement about
-  # the family, including the negative one 03b reported. With 24 each axis
-  # appears in several combinations, so conv_padding can be told apart from
-  # window and learning rate instead of being confounded with them.
-  tune_length = 24,
+  # THREE, ON PURPOSE, UNTIL THE PIPELINE CLOSES END TO END.
+  #
+  # Three configs x 3 folds x 3 seeds = 27 units, about 50 minutes. That is not
+  # enough to say anything about the CNN as a family -- the best of three draws
+  # in a space of a couple of thousand combinations supports no claim, including
+  # the negative one 03b reported -- and it is not meant to.
+  #
+  # What it is for is the OTHER kind of failure. Stages 04, 05 and 07 have never
+  # run against this API, and 04 now calls one_se(), freeze_selection() and the
+  # conformal calibration for the first time; 05 writes interval bands for the
+  # first time; 07 has never executed at all. A defect in any of them is found
+  # in 50 minutes at this size and after a lost night at tune_length = 24.
+  #
+  # Raise this to 24 once 03 -> 03b -> 04 -> 05 -> 07 has run clean once. The
+  # answer about the family comes from that run, not from this one.
+  tune_length = 3,
   seed        = 666,
   fixed = list(
     loss_fn       = "smooth_l1",                # robust to outlier SOC values
