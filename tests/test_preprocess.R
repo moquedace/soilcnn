@@ -56,7 +56,7 @@ source(file.path(root, "R", "patches.R"))
 source(file.path(root, "R", "preprocess.R"))
 
 set.seed(11)
-results <- logical(0)
+ok <- logical(0)
 
 # ── a synthetic raster with one channel of each predictor type ────────────────
 
@@ -93,7 +93,7 @@ qc_table <- make_qc_table(
 
 # and with NO rules nothing is removed -- the framework stays neutral
 qc_none <- make_qc_table(predictors)
-results["no_rules_means_no_qc"] <-
+ok["no_rules_means_no_qc"] <-
   identical(qc_band_values(cells[, 2L], qc_none[2L, ]), cells[, 2L])
 
 # QC applied band by band, exactly as extraction will do it
@@ -133,7 +133,7 @@ new_arr <- scale_patches_array(
   patch_finish(raw$values, seq_len(nrow(cell_index)), n_ch, w), scaling_a
 )
 
-results["array_path_orders_agree"] <- max(abs(old_arr - new_arr)) < 1e-12
+ok["array_path_orders_agree"] <- max(abs(old_arr - new_arr)) < 1e-12
 
 # ── 2: same through the tensor path, within float32 error ────────────────────
 
@@ -143,7 +143,7 @@ new_t <- scale_patches(
   scaling_a
 )
 rel <- max(abs(as.array(new_t) - old_arr)) / max(abs(old_arr))
-results["tensor_path_matches_within_f32"] <- rel < 1e-6
+ok["tensor_path_matches_within_f32"] <- rel < 1e-6
 
 # ── 3: QC is fold-independent ────────────────────────────────────────────────
 # Running QC on a subset must give the same values as running it on everything
@@ -152,36 +152,36 @@ results["tensor_path_matches_within_f32"] <- rel < 1e-6
 sub <- sample(n_cell, 200L)
 qc_sub <- cells[sub, 2L]
 qc_sub <- qc_band_values(qc_sub, qc_table[2L, ])
-results["qc_independent_of_subset"] <-
+ok["qc_independent_of_subset"] <-
   identical(qc_sub, cells_qc[sub, 2L])
 
 # ── 4: fit_scaling reproduces a hand-computed mean/sd ────────────────────────
 
-results["fit_scaling_matches_manual"] <-
+ok["fit_scaling_matches_manual"] <-
   isTRUE(all.equal(scaling_a$center[1], mean(points[[1]][fold_a], na.rm = TRUE))) &&
   isTRUE(all.equal(scaling_a$scale[1],  sd(points[[1]][fold_a],  na.rm = TRUE)))
 
 # fixed constants must NOT be estimated
-results["percentage_scale_is_fixed_100"] <- scaling_a$scale[3] == 100 &&
+ok["percentage_scale_is_fixed_100"] <- scaling_a$scale[3] == 100 &&
                                             scaling_a$center[3] == 0
-results["dummy_scale_is_identity"] <- scaling_a$scale[4] == 1 &&
+ok["dummy_scale_is_identity"] <- scaling_a$scale[4] == 1 &&
                                       scaling_a$center[4] == 0
 
 # ── 5: different folds give different scalings ───────────────────────────────
 # If this ever passed trivially, the refactor would be pointless.
 
-results["folds_give_different_scaling"] <-
+ok["folds_give_different_scaling"] <-
   scaling_a$center[1] != scaling_b$center[1] &&
   scaling_a$scale[1]  != scaling_b$scale[1]
 
 # and the fixed ones must NOT move between folds
-results["fixed_scalings_stable_across_folds"] <-
+ok["fixed_scalings_stable_across_folds"] <-
   identical(scaling_a$center[3:4], scaling_b$center[3:4]) &&
   identical(scaling_a$scale[3:4],  scaling_b$scale[3:4])
 
 # ── 6: channel mismatch caught ───────────────────────────────────────────────
 
-results["channel_mismatch_errors"] <- inherits(
+ok["channel_mismatch_errors"] <- inherits(
   try(scale_patches_array(new_arr, scaling_a[1:2, ]), silent = TRUE), "try-error"
 )
 
@@ -191,16 +191,16 @@ results["channel_mismatch_errors"] <- inherits(
 
 rule_both <- tibble(predictor = "x", na_below = 0,
                     clamp_lower = 0, clamp_upper = 100)
-results["na_floor_wins_over_clamp"] <-
+ok["na_floor_wins_over_clamp"] <-
   is.na(qc_band_values(c(-5, 50, 150), rule_both)[1]) &&
   qc_band_values(c(-5, 50, 150), rule_both)[3] == 100
 
 # sensor nodata really was removed, and nothing else was
-results["qc_removed_only_the_nodata"] <-
+ok["qc_removed_only_the_nodata"] <-
   sum(is.na(cells_qc[, 2L])) == 5L && !anyNA(cells_qc[, c(1L, 3L, 4L)])
 
 # percentage overshoot was clamped, not discarded
-results["percentage_overshoot_clamped"] <-
+ok["percentage_overshoot_clamped"] <-
   min(cells_qc[, 3L]) == 0 && max(cells_qc[, 3L]) == 100 &&
   !anyNA(cells_qc[, 3L])
 
@@ -211,4 +211,4 @@ cat(sprintf("  synthetic raster    : %d x %d cells, %d channels (cont/temp/pct/d
 cat(sprintf("  fold A vs B mu      : %.2f vs %.2f  (channel 1)\n",
             scaling_a$center[1], scaling_b$center[1]))
 cat(sprintf("  tensor path rel err : %.3e  (float32)\n", rel))
-.report(results, "test_preprocess")
+.report(ok, "test_preprocess")

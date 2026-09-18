@@ -51,7 +51,7 @@ source(file.path(root, "R", "utils.R"))
 source(file.path(root, "R", "dataset.R"))
 
 set.seed(3)
-results <- logical(0)
+ok <- logical(0)
 
 store <- file.path(tempdir(), "test_store")
 unlink(store, recursive = TRUE)
@@ -65,18 +65,18 @@ for (w in c(3L, 9L, 15L)) {
   arr <- array(rnorm(n * ch * w * w), dim = c(n, ch, w, w))
 
   res <- save_patch_window(arr, store, w)
-  results[sprintf("w%02d_size_ok", w)] <- res$ok
+  ok[sprintf("w%02d_size_ok", w)] <- res$ok
 
   back <- load_patch_window(store, w, expect_points = n, expect_channels = ch)
 
   # CONTEÚDO, não tamanho. float32 perde precisão do double, então a comparação
   # é contra o mesmo round-trip de precisão -- e tem que bater exatamente.
   esperado <- as.array(torch_tensor(arr, dtype = torch_float()))
-  results[sprintf("w%02d_roundtrip_exato", w)] <-
+  ok[sprintf("w%02d_roundtrip_exato", w)] <-
     identical(dim(as.array(back)), dim(esperado)) &&
     max(abs(as.array(back) - esperado)) == 0
 
-  results[sprintf("w%02d_dtype_float32", w)] <-
+  ok[sprintf("w%02d_dtype_float32", w)] <-
     identical(as.character(back$dtype), "Float")
 
   rm(back); gc(verbose = FALSE)
@@ -84,10 +84,10 @@ for (w in c(3L, 9L, 15L)) {
 
 # ── 4: shape de outro conjunto de pontos é recusado ──────────────────────────
 
-results["ponto_errado_recusado"] <- inherits(
+ok["ponto_errado_recusado"] <- inherits(
   try(load_patch_window(store, 3L, expect_points = n + 1L), silent = TRUE),
   "try-error")
-results["canal_errado_recusado"] <- inherits(
+ok["canal_errado_recusado"] <- inherits(
   try(load_patch_window(store, 3L, expect_channels = ch + 1L), silent = TRUE),
   "try-error")
 
@@ -96,16 +96,16 @@ results["canal_errado_recusado"] <- inherits(
 # 2,147,487,648 matou a sessão. A guarda tem que disparar ANTES de tentar.
 
 grande <- torch_empty(floor(2^31 / 4) + 1000L, dtype = torch_float())
-results["safe_torch_save_recusa_acima_2_31"] <- inherits(
+ok["safe_torch_save_recusa_acima_2_31"] <- inherits(
   try(safe_torch_save(grande, file.path(store, "nao_deve_existir.pt")),
       silent = TRUE), "try-error")
-results["safe_torch_save_nao_criou_arquivo"] <-
+ok["safe_torch_save_nao_criou_arquivo"] <-
   !file.exists(file.path(store, "nao_deve_existir.pt"))
 rm(grande); gc(verbose = FALSE)
 
 # e um tensor pequeno continua passando normalmente
 pequeno <- torch_empty(1000L, dtype = torch_float())
-results["safe_torch_save_aceita_pequeno"] <- !inherits(
+ok["safe_torch_save_aceita_pequeno"] <- !inherits(
   try(safe_torch_save(pequeno, file.path(store, "ok.pt")), silent = TRUE),
   "try-error")
 rm(pequeno); gc(verbose = FALSE)
@@ -116,7 +116,7 @@ rm(pequeno); gc(verbose = FALSE)
 
 f3 <- patch_window_path(store, 3L)
 con <- file(f3, "r+b"); truncate(con, 5000L); close(con)
-results["arquivo_truncado_detectado"] <- inherits(
+ok["arquivo_truncado_detectado"] <- inherits(
   try(load_patch_window(store, 3L), silent = TRUE), "try-error")
 
 unlink(store, recursive = TRUE)
@@ -143,22 +143,22 @@ pt <- tibble::tibble(sample_id = 1:8,             # INTEGER, and more rows
                      v = (1:8) * 10L)
 
 al <- align_points_to_meta(pt, pm)
-results["align_reorders_to_the_store"] <-
+ok["align_reorders_to_the_store"] <-
   identical(as.numeric(al$sample_id), c(4, 1, 7))
-results["align_carries_the_values"] <- identical(al$v, c(40L, 10L, 70L))
-results["align_drops_what_the_store_dropped"] <- nrow(al) == nrow(pm)
+ok["align_carries_the_values"] <- identical(al$v, c(40L, 10L, 70L))
+ok["align_drops_what_the_store_dropped"] <- nrow(al) == nrow(pm)
 
 # THE TYPE MUST NOT MATTER. An id is a label; integer 4 and double 4 name the
 # same observation, and a framework that refuses one of them breaks for anyone
 # who builds their point table in R instead of reading it from a CSV.
-results["align_ignores_integer_vs_double"] <- !inherits(
+ok["align_ignores_integer_vs_double"] <- !inherits(
   try(align_points_to_meta(
         dplyr::mutate(pt, sample_id = as.numeric(sample_id)),
         dplyr::mutate(pm, sample_id = as.integer(sample_id))),
       silent = TRUE), "try-error")
 
 # ...and character ids are a legitimate choice, so they must work too.
-results["align_accepts_character_ids"] <- {
+ok["align_accepts_character_ids"] <- {
   a <- align_points_to_meta(
     dplyr::mutate(pt, sample_id = as.character(sample_id)),
     dplyr::mutate(pm, sample_id = as.character(sample_id)))
@@ -167,10 +167,10 @@ results["align_accepts_character_ids"] <- {
 
 # A store point with no row in the point table is the real failure, and it must
 # say so rather than silently shortening the table.
-results["align_refuses_a_missing_point"] <- inherits(
+ok["align_refuses_a_missing_point"] <- inherits(
   try(align_points_to_meta(pt[1:3, ], pm), silent = TRUE), "try-error")
 
 cat(sprintf("  synthetic store     : %d points x %d channels, windows 3/9/15\n", n, ch))
 cat(sprintf("  torch_save limit    : %s bytes (2^31)\n",
             format(2^31, big.mark = ",")))
-.report(results, "test_patch_store_io")
+.report(ok, "test_patch_store_io")

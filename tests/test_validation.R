@@ -54,7 +54,7 @@ source(file.path(root, "R", "tune_grid.R"))
 source(file.path(root, "R", "train_cnn.R"))
 
 set.seed(7); torch_manual_seed(7)
-results <- logical(0)
+ok <- logical(0)
 
 # ── a tiny but real inference setup ───────────────────────────────────────────
 # Small single-branch model over 8 synthetic samples. The model is untrained,
@@ -92,17 +92,17 @@ run <- function(transform, ...) {
 # shift far below zero: with the default lower bound everything must be 0,
 # and with c(-Inf, Inf) everything must stay negative
 push_down <- function(z) z - 1000
-results["clamp_default_floors_at_zero"] <- all(run(push_down) == 0)
-results["clamp_open_lets_negatives_through"] <-
+ok["clamp_default_floors_at_zero"] <- all(run(push_down) == 0)
+ok["clamp_open_lets_negatives_through"] <-
   all(run(push_down, clamp = c(-Inf, Inf)) < 0)
 
 # shift far above: an upper bound must bite, and Inf must not
 push_up <- function(z) z + 1000
-results["clamp_upper_bound_applied"] <- all(run(push_up, clamp = c(-Inf, 5)) == 5)
-results["clamp_upper_inf_leaves_values"] <- all(run(push_up) > 900)
+ok["clamp_upper_bound_applied"] <- all(run(push_up, clamp = c(-Inf, 5)) == 5)
+ok["clamp_upper_inf_leaves_values"] <- all(run(push_up) > 900)
 
 # the default must reproduce the old pmax(., 0) exactly
-results["clamp_default_equals_old_pmax"] <-
+ok["clamp_default_equals_old_pmax"] <-
   identical(run(identity), pmax(run(identity, clamp = c(-Inf, Inf)), 0))
 
 # ── 3: malformed clamp rejected ──────────────────────────────────────────────
@@ -110,9 +110,9 @@ results["clamp_default_equals_old_pmax"] <-
 bad_clamp <- function(cl) {
   inherits(try(run(identity, clamp = cl), silent = TRUE), "try-error")
 }
-results["clamp_rejects_reversed"]  <- bad_clamp(c(10, 0))
-results["clamp_rejects_wrong_len"] <- bad_clamp(0)
-results["clamp_rejects_na"]        <- bad_clamp(c(NA, Inf))
+ok["clamp_rejects_reversed"]  <- bad_clamp(c(10, 0))
+ok["clamp_rejects_wrong_len"] <- bad_clamp(0)
+ok["clamp_rejects_na"]        <- bad_clamp(c(NA, Inf))
 
 # ── 4-6: option sets validated at construction ───────────────────────────────
 
@@ -122,18 +122,18 @@ build <- function(...) {
       silent = TRUE)
 }
 
-results["bad_gate_type_errors"] <-
+ok["bad_gate_type_errors"] <-
   inherits(build(window_sizes = c(3L, 5L), gate_type = "vetor_featurewise"),
            "try-error")
-results["bad_embed_pool_errors"] <-
+ok["bad_embed_pool_errors"] <-
   inherits(build(window_sizes = c(3L), embed_pool = "GAP"), "try-error")
-results["good_options_still_build"] <-
+ok["good_options_still_build"] <-
   !inherits(build(window_sizes = c(3L, 5L), gate_type = "scalar_per_sample",
                   embed_pool = "gap"), "try-error")
 
 # a single branch ignores gate_type entirely -- old configs carrying a
 # placeholder there must keep working
-results["single_branch_ignores_gate_type"] <-
+ok["single_branch_ignores_gate_type"] <-
   !inherits(build(window_sizes = c(3L), gate_type = "whatever"), "try-error")
 
 # ── 7: missing embed_pool column defaults, and stays quiet ───────────────────
@@ -151,12 +151,12 @@ m_back <- withCallingHandlers(
   build_cnn_from_config(row_no_pool, n_ch),
   warning = function(cnd) { warned <<- TRUE; invokeRestart("muffleWarning") }
 )
-results["missing_embed_pool_defaults_flatten"] <-
+ok["missing_embed_pool_defaults_flatten"] <-
   identical(m_back$branch1$embed_pool, "flatten")
-results["missing_embed_pool_is_silent"] <- !warned
+ok["missing_embed_pool_is_silent"] <- !warned
 
 # ── report ────────────────────────────────────────────────────────────────────
 
 cat(sprintf("  inference setup     : %d samples, %d channels, %dx%d window\n",
             n_s, n_ch, w, w))
-.report(results, "test_validation")
+.report(ok, "test_validation")

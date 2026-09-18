@@ -107,7 +107,7 @@ assemble_all_bands <- function(cell_values, cell_index, window_size, n_ch,
 
 windows  <- c(3L, 5L, 9L, 15L)
 channels <- c(1L, 3L, 187L)
-results  <- logical(0)
+ok  <- logical(0)
 detail   <- character(0)
 
 for (w in windows) {
@@ -132,9 +132,9 @@ for (w in windows) {
     ok_same  <- max(abs(a_train - a_pred)) == 0
 
     key <- sprintf("w%02d_c%03d", w, n_ch)
-    results[paste0("train_vs_truth_", key)] <- ok_train
-    results[paste0("pred_vs_truth_",  key)] <- ok_pred
-    results[paste0("paths_agree_",    key)] <- ok_same
+    ok[paste0("train_vs_truth_", key)] <- ok_train
+    ok[paste0("pred_vs_truth_",  key)] <- ok_pred
+    ok[paste0("paths_agree_",    key)] <- ok_same
 
     if (!ok_train || !ok_pred) {
       bad <- which(a_train != truth)[1]
@@ -166,15 +166,15 @@ valid_ok   <- identical(valid_all,  c(FALSE, TRUE)) &&
               identical(valid_band, c(FALSE, TRUE)) &&
               all(patch_gather(cells, cell_index, 4L)$valid)
 
-results["validity_flags_affected_centre_only"] <- valid_ok
+ok["validity_flags_affected_centre_only"] <- valid_ok
 
 # an untouched channel must still see centre 1 as valid
-results["validity_is_per_channel_before_intersect"] <-
+ok["validity_is_per_channel_before_intersect"] <-
   all(patch_band_assemble(cells_na[, 1L], cell_index, w)$valid)
 
 # keep= must drop exactly the invalid centre and renumber cleanly
 kept <- assemble_all_bands(cells_na, cell_index, w, 4L, keep = which(valid_all))
-results["keep_drops_invalid_centre"] <-
+ok["keep_drops_invalid_centre"] <-
   identical(dim(kept), c(1L, 4L, w, w)) &&
   max(abs(kept[1, , , ] - truth_patch(30L, 40L, w, 4L)[1, , , ])) == 0
 
@@ -192,10 +192,10 @@ for (w in windows) {
   just_out <- patch_centre_in_bounds(half, half + 1L, n_rows, n_cols, w)
   edge_ok  <- edge_ok && inside && !just_out
 }
-results["edge_rule_keeps_every_index_in_strip"] <- edge_ok
+ok["edge_rule_keeps_every_index_in_strip"] <- edge_ok
 
 # odd-window contract
-results["even_window_rejected"] <- inherits(
+ok["even_window_rejected"] <- inherits(
   try(patch_cell_index(5L, 5L, n_cols, 4L), silent = TRUE), "try-error"
 )
 
@@ -206,4 +206,4 @@ cat(sprintf("  synthetic raster    : %d x %d cells, value = row*1e6 + col*1e3 + 
 cat(sprintf("  combinations tested : %d windows x %d channel counts x 3 positions\n",
             length(windows), length(channels)))
 
-.report(results, "test_patch_geometry", detail)
+.report(ok, "test_patch_geometry", detail)

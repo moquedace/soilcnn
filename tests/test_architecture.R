@@ -192,7 +192,7 @@ cat(sprintf("  valid vs same (15x15): %s vs %s params (%.2fx lighter)
             format(np(m_same),  big.mark = ","),
             np(m_same) / np(m_valid)))
 
-results <- c(
+ok <- c(
   forward_valid          = ok_forward,
   gap_lighter            = ok_lighter,
   grid_carries_pool      = ok_grid,
@@ -200,4 +200,4 @@ results <- c(
   backcompat_flatten     = ok_backcompat,
   ok2
 )
-.report(results, "test_architecture")
+.report(ok, "test_architecture")

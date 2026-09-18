@@ -78,7 +78,7 @@ for (i in 1:N) {
 }
 n_distinct_k <- length(unique(match_k[!is.na(match_k)]))
 
-results <- c(
+ok <- c(
   shape_preserved     = ok_shape,
   center_preserved    = ok_center,
   value_multiset_kept = ok_multiset,
@@ -86,4 +86,4 @@ results <- c(
   per_sample_sampling = n_distinct_k > 1
 )
 cat(sprintf("  (%d distinct symmetries across %d samples)\n", n_distinct_k, N))
-.report(results, "test_augmentation")
+.report(ok, "test_augmentation")

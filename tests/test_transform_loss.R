@@ -78,7 +78,7 @@ regimes <- list(
   log1p_soc      = list(obs = log1p(rlnorm(2000, 3.4, 0.9)), noise = 0.45)
 )
 
-results <- logical(0)
+ok <- logical(0)
 worst   <- numeric(0)
 
 for (rg in names(regimes)) {
@@ -95,7 +95,7 @@ for (rg in names(regimes)) {
     )
     rel <- abs(r_val - t_val) / max(abs(t_val), 1e-12)
     key <- paste0(fn, "_", rg)
-    results[key] <- rel < 1e-5
+    ok[key] <- rel < 1e-5
     worst[key]   <- rel
   }
 }
@@ -113,7 +113,7 @@ for (fn in c("smooth_l1", "mse", "mae")) {
     )$item()
   )
   rel <- abs(r_val - t_val) / max(abs(t_val), 1e-12)
-  results[paste0(fn, "_at_kink")] <- rel < 1e-5
+  ok[paste0(fn, "_at_kink")] <- rel < 1e-5
   worst[paste0(fn, "_at_kink")]   <- rel
 }
 
@@ -132,13 +132,13 @@ for (fn in c("smooth_l1", "mse", "mae")) {
     )$item()
   )
   rel <- abs(r_val - t_val) / max(abs(t_val), 1e-12)
-  results[paste0(fn, "_column_shape")] <- rel < 1e-5
+  ok[paste0(fn, "_column_shape")] <- rel < 1e-5
   worst[paste0(fn, "_column_shape")]   <- rel
 }
 
 # ── unknown loss name must error, not return silently ─────────────────────────
 
-results["unknown_loss_errors"] <- inherits(
+ok["unknown_loss_errors"] <- inherits(
   try(transform_space_loss(1:3, 1:3, "huber"), silent = TRUE), "try-error"
 )
 worst["unknown_loss_errors"] <- 0
@@ -151,6 +151,6 @@ cat(sprintf("  worst relative diff : %.3e  (%s)\n",
 cat(sprintf("  tolerance           : 1e-5 relative (float32 round trip)\n"))
 
 .report(
-  results, "test_transform_loss",
-  detail = sprintf("  %-28s rel diff %.3e", names(worst)[!results], worst[!results])
+  ok, "test_transform_loss",
+  detail = sprintf("  %-28s rel diff %.3e", names(worst)[!ok], worst[!ok])
 )
