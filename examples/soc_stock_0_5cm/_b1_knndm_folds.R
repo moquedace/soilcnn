@@ -623,8 +623,17 @@ cell_value <- terra::extract(footprint,
 # and not for others; the layer is always last. Written to survive a bare vector
 # too, so a terra release that simplifies the return value does not turn this
 # guard into the error it was meant to prevent.
-cell_value <- if (is.null(dim(cell_value))) cell_value
-              else as.data.frame(cell_value)[[ncol(cell_value)]]
+#
+# BRACED, and not for looks. R closes `x <- if (cond) expr` at the end of the
+# line, so a bare `else` starting the next one is a syntax error at top level --
+# it is only legal inside an open delimiter. This exact line failed
+# test_sources_parse.R with "'else' inesperado", which is the check that exists
+# for it.
+cell_value <- if (is.null(dim(cell_value))) {
+  cell_value
+} else {
+  as.data.frame(cell_value)[[ncol(cell_value)]]
+}
 n_outside  <- sum(is.na(cell_value))
 if (n_outside > 0L) {
   message(sprintf(
