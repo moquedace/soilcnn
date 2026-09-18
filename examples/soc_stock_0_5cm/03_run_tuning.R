@@ -71,6 +71,44 @@ metadata_dir <- file.path(project_root, "outputs", "metadata",
 output_tuning_dir <- file.path(project_root, "outputs", "tuning",
                                 "soc_stock_modeling", target_label)
 
+# ── Overrides, for driving this stage from outside ────────────────────────────
+#
+# THE rm(list = ls()) AT THE TOP IS WHY THESE ARE ENVIRONMENT VARIABLES.
+# Sys.setenv() survives that erasure; a workspace object does not. Stage 04
+# carries the same block for the same reason (commit 91cfa83).
+#
+# Unset, every one of them leaves the values written in this file untouched.
+#
+#   soc_tuning_design    "spatial" (default) or "knndm" -- see the long note at
+#                        the resampling spec below for what the choice means
+#   soc_tune_length      how many configs to draw
+#   soc_tuning_n_seeds   repetitions per (config, fold)
+#   soc_tuning_run_id    name the run directory instead of timestamping it
+#
+# They exist so the two-design comparison can run the REAL script twice rather
+# than a copy of it edited twice.
+.env_chr <- function(name, default) {
+  v <- trimws(Sys.getenv(name))
+  if (!nzchar(v)) default else v
+}
+.env_int <- function(name, default) {
+  v <- trimws(Sys.getenv(name))
+  if (!nzchar(v)) return(default)
+  n <- suppressWarnings(as.integer(v))
+  if (is.na(n) || n < 1L) {
+    stop(name, " is set to '", v, "', which is not a positive integer.",
+         call. = FALSE)
+  }
+  n
+}
+
+.tuning_design <- .env_chr("soc_tuning_design", "spatial")
+if (!.tuning_design %in% c("spatial", "knndm")) {
+  stop("soc_tuning_design is '", .tuning_design,
+       "'; it must be \"spatial\" or \"knndm\".", call. = FALSE)
+}
+.tune_length <- .env_int("soc_tune_length", 3L)
+
 # ── Tuning grid ───────────────────────────────────────────────────────────────
 # See R/tune_grid.R and docs/tuning_guide.md for full parameter descriptions.
 #
@@ -105,7 +143,7 @@ tune_grid <- make_tune_grid(
   #
   # Raise this to 24 once 03 -> 03b -> 04 -> 05 -> 07 has run clean once. The
   # answer about the family comes from that run, not from this one.
-  tune_length = 3,
+  tune_length = .tune_length,
   seed        = 666,
   fixed = list(
     loss_fn       = "smooth_l1",                # robust to outlier SOC values
@@ -254,6 +292,57 @@ cv <- spatial_cv(
   max_share  = 0.10
 )
 
+# ── THE OTHER DESIGN, AND WHAT CHOOSING BETWEEN THEM MEANS ───────────────────
+#
+# Measured by _b1_knndm_folds.R on these 3,728 points against the prediction
+# grid, as the median distance from a point being scored to the nearest
+# training point:
+#
+#   what the map actually does        824 km
+#   kNNDM folds                       837 km
+#   block folds                        16 km
+#
+# Over the whole distribution (CAST's W1): kNNDM 128 km against the blocks'
+# 1,048 km -- the blocks sit at eight times the distance-mismatch.
+#
+# Both questions are legitimate and they are different questions:
+#
+#   blocks  how well does it predict NEAR other profiles?  (interpolation)
+#   kNNDM   how well does it predict where there are none? (what a global map
+#           made from 3,728 profiles is mostly doing)
+#
+# A CCC measured under blocks is not wrong; it answers the first. Reporting it
+# for a map that does the second is what would be wrong, and until B1 ran
+# nobody here knew the two were 52x apart.
+if (identical(.tuning_design, "knndm")) {
+  # READ, NOT REBUILT. _b1_knndm_folds.R constructs the predpoints by reading
+  # every predictor over the prediction grid, keeping cells where all channels
+  # are present, and sampling inside that footprint. A second implementation
+  # here would be a second definition of "where prediction happens", and the
+  # two would drift apart the first time either changed.
+  .pred_file <- file.path(output_tuning_dir, "capability_sweep", "b1_knndm",
+                          "predpoints.csv")
+  if (!file.exists(.pred_file)) {
+    stop("soc_tuning_design = \"knndm\" needs prediction points, and none are ",
+         "on disk at\n  ", .pred_file,
+         "\n  Run _b1_knndm_folds.R first: it builds them from the prediction ",
+         "rasters and\n  records which grid they came from.", call. = FALSE)
+  }
+  .predpoints <- safe_read_csv2(.pred_file)
+  stopifnot(all(c("x", "y") %in% names(.predpoints)), nrow(.predpoints) >= 500L)
+  message("\nkNNDM design: ", nrow(.predpoints), " prediction points read from ",
+          basename(.pred_file))
+
+  cv <- knndm_cv(k = k_folds, predpoints = .predpoints,
+                 hold_out_test = FALSE, crs = 4326,
+                 project_to = "+proj=moll +lon_0=0 +datum=WGS84 +units=m",
+                 seed = 42L)
+}
+
+# THE SAME FROZEN TEST SET REACHES BOTH DESIGNS, and that is what makes the two
+# runs comparable at all: the validation geometry differs on purpose, the thing
+# they are finally scored against does not. frozen_test comes from
+# data_split.csv above, which is written once and read forever after.
 plan <- resolve_resampling(cv, data, test_ids = frozen_test,
                            windows = windows_needed)
 
@@ -330,10 +419,15 @@ message("Channels: ", n_channels, " | Points: ", nrow(store$meta))
 # default; generates a fresh timestamp).
 resume_run_id <- NULL
 
-run_id <- if (is.null(resume_run_id)) {
-  paste0("soc_0_5cm_", format(Sys.time(), "%Y%m%d_%H%M%S"))
-} else {
+run_id <- if (!is.null(resume_run_id)) {
   resume_run_id
+} else if (nzchar(Sys.getenv("soc_tuning_run_id"))) {
+  # Named from outside so two designs can be launched into directories whose
+  # names say which is which, instead of two timestamps nobody can tell apart
+  # six months later.
+  trimws(Sys.getenv("soc_tuning_run_id"))
+} else {
+  paste0("soc_0_5cm_", format(Sys.time(), "%Y%m%d_%H%M%S"))
 }
 
 # HOW MANY SEEDS PER CONFIG
@@ -347,7 +441,7 @@ run_id <- if (is.null(resume_run_id)) {
 # Cost: 3x the grid's time. Raising it later is RESUMABLE -- the repetitions
 # already on disk are recognised and only the new ones train, so it is fine
 # to start at 1, see the grid stand up, and go to 3 without losing anything.
-n_seeds <- 3L
+n_seeds <- .env_int("soc_tuning_n_seeds", 3L)
 
 # dsm_train() dispatches on the model's declared input: "patches" goes to
 # run_cnn_resample(), "table" to run_table_resample(). The engine is the same
