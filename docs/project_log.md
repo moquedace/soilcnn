@@ -2615,7 +2615,7 @@ wrong one and got a plausible number back. Renamed to `smeared_mean_ton_ha`
 (band `soc_smeared_mean_ton_ha`): *smeared* is the word that discriminates, and
 it is the word the correction is named after.
 
-### 3. A check that counted to nine
+### 3. Two checks that counted to nine
 
 `_b4_shard_merge_check.R` held nine band names as a literal, beside
 `stopifnot(nrow(ref_sum) == 9L)`. A tenth band gives that pairing two outcomes:
@@ -2626,6 +2626,22 @@ passed nothing.
 The 1×1 summary stage 05 writes already names every band and every file it
 produced, so B4 now reads `layers` and `merged` from it. The script checks the
 run in front of it rather than the run it was written against.
+
+The **snapshot** step in the same file counted to nine too, and its failure mode
+was the worse one:
+
+```r
+if (length(ref_src) == 9L) { ...snapshot... } else { message("proceeding WITHOUT
+  a pixel-level reference.") }
+```
+
+A tenth band turns that condition FALSE, and the pixel comparison — the only
+check in B4 that looks at *values* rather than at recorded summaries — switches
+itself off while every remaining check still prints PASS. The script would have
+reported success having stopped doing the thing it exists for. It is now
+`length(ref_src) == n_bands`, with the else branch stopping rather than
+messaging, and the summary read moved above the snapshot so the count is never a
+literal again.
 
 **The common shape.** Every unit test here asserts about a *function*. These
 three are properties of the *pipeline* — which files exist, what they are

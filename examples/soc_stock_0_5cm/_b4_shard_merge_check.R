@@ -70,7 +70,27 @@ message(sprintf("20 km grid   : %d rows x %d cols", exp_nrow, exp_ncol))
 # did not reach here and everything downstream is measuring the wrong raster.
 stopifnot(exp_ncol < 10000L)
 
-# ── STEP 0a: snapshot the 1x1 map, AT MOST ONCE ───────────────────────────────
+
+# ── STEP 0a: the recorded statistics of the 1x1 run ──────────────────────────────
+#
+# 05 appends a shard suffix to these two files whenever the run is partitioned,
+# so the UNSUFFIXED pair belongs to the 1x1 run and survives the 2x2 run
+# untouched. They are ground truth even after the rasters are overwritten.
+#
+# READ BEFORE THE SNAPSHOT, because the snapshot needs to know how many bands
+# the run produced, and a literal count there is a silent skip waiting to happen.
+ref_cfg <- readr::read_csv2(file.path(log_dir, "prediction_config.csv"),
+                            show_col_types = FALSE)
+ref_sum <- readr::read_csv2(file.path(log_dir, "prediction_raster_summary.csv"),
+                            show_col_types = FALSE)
+stopifnot(ref_cfg$r_nrow[1] == exp_nrow, ref_cfg$r_ncol[1] == exp_ncol,
+          ref_cfg$n_row_shards[1] == 1L, ref_cfg$n_col_shards[1] == 1L,
+          nrow(ref_sum) >= 7L)
+ref_n_valid <- as.integer(ref_cfg$n_valid[1])
+message("reference 1x1: n_valid = ", format(ref_n_valid, big.mark = ","))
+n_bands <- nrow(ref_sum)
+
+# ── STEP 0b: snapshot the 1x1 map, AT MOST ONCE ───────────────────────────────
 #
 # 05b deletes and rewrites raster/ before merging. So the single-tile map has to
 # be copied aside first -- and the copy must be guarded, because on a second run
@@ -83,7 +103,7 @@ stopifnot(exp_ncol < 10000L)
 # session dies is the normal case here.
 if (!file.exists(ref_stamp)) {
   ref_src <- list.files(raster_dir, pattern = "[.]tif$", full.names = TRUE)
-  if (length(ref_src) == 9L) {
+  if (length(ref_src) == n_bands) {
     dir.create(ref_dir, recursive = TRUE, showWarnings = FALSE)
     file.copy(ref_src, ref_dir, overwrite = TRUE)
     writeLines(c(paste("snapshot:", format(Sys.time())),
@@ -91,27 +111,22 @@ if (!file.exists(ref_stamp)) {
                  basename(ref_src)), ref_stamp)
     message("1x1 reference snapshotted -> ", ref_dir)
   } else {
-    message("No 9-band 1x1 map in raster/ (found ", length(ref_src),
-            ") -- proceeding WITHOUT a pixel-level reference.")
+    # A SILENT SKIP IS THE WORST OUTCOME HERE, so this stops.
+    #
+    # The count used to be a literal 9, and the branch a message. Add a band to
+    # stage 05 and the condition turns FALSE: the pixel comparison -- the only
+    # check in this script that looks at values rather than at summaries --
+    # switches itself off, and the remaining checks still print PASS. The
+    # script would report success while having stopped doing the thing it is
+    # for.
+    stop("raster/ holds ", length(ref_src), " tif(s) but the 1x1 summary names ",
+         n_bands, ". Either raster/ already holds a partitioned result (delete ",
+         "it and re-run the 1x1 map), or stage 05 changed its bands without ",
+         "this run being redone.", call. = FALSE)
   }
 } else {
   message("1x1 reference already snapshotted -- left untouched.")
 }
-
-# ── STEP 0b: the recorded statistics of that run ──────────────────────────────
-#
-# 05 appends a shard suffix to these two files whenever the run is partitioned,
-# so the UNSUFFIXED pair belongs to the 1x1 run and survives the 2x2 run
-# untouched. They are ground truth even after the rasters are overwritten.
-ref_cfg <- readr::read_csv2(file.path(log_dir, "prediction_config.csv"),
-                            show_col_types = FALSE)
-ref_sum <- readr::read_csv2(file.path(log_dir, "prediction_raster_summary.csv"),
-                            show_col_types = FALSE)
-stopifnot(ref_cfg$r_nrow[1] == exp_nrow, ref_cfg$r_ncol[1] == exp_ncol,
-          ref_cfg$n_row_shards[1] == 1L, ref_cfg$n_col_shards[1] == 1L,
-          nrow(ref_sum) >= 7L)
-ref_n_valid <- as.integer(ref_cfg$n_valid[1])
-message("reference 1x1: n_valid = ", format(ref_n_valid, big.mark = ","))
 
 # ── STEP 0c: remove tiles from any OTHER shard grid ───────────────────────────
 #
