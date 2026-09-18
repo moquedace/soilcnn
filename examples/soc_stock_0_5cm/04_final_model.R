@@ -706,4 +706,4 @@ for (i in seq_len(nrow(config_summary))) {
   message(sprintf("    MQI  : %.4f ± %.4f", s$mqi_mean,  s$mqi_sd))
 }
 
-message("\nResultados salvos em: ", output_dir)
+message("\nResults saved in: ", output_dir)

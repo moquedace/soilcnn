@@ -79,7 +79,7 @@ add_check <- function(stage, check, status, detail = "") {
 check_exists <- function(stage, label, path) {
   ok <- file.exists(path)
   add_check(stage, label, if (ok) "PASS" else "FAIL",
-            if (ok) path else paste("NAO ENCONTRADO:", path))
+            if (ok) path else paste("NOT FOUND:", path))
   ok
 }
 
@@ -206,7 +206,7 @@ if (all_01_exist) {
   implied_log1p <- log1p(dscheck$median_target[1])
   check_equal("01", "median_target_log1p == log1p(median_target)",
               round(dscheck$median_target_log1p[1], 4), round(implied_log1p, 4),
-              "salvo", "recalculado")
+              "saved", "recomputed")
 
   # The dataset, the point table and the QC summary must agree on how many
   # rows survived. Stage 01 writes them from three different objects in three
@@ -886,8 +886,8 @@ if (!dir.exists(final_model_base)) {
       for (i in seq_len(nrow(config_summary))) {
         cs <- config_summary[i, ]
         pct_sd <- 100 * cs$ccc_sd / cs$ccc_mean
-        check_threshold("04", paste0("CCC SD relativo (", cs$config_id, ")"),
-                        pct_sd, warn_above = 10, fail_above = 20, unit = "% da media")
+        check_threshold("04", paste0("CCC SD relative (", cs$config_id, ")"),
+                        pct_sd, warn_above = 10, fail_above = 20, unit = "% of the mean")
       }
 
       # config_summary matches the aggregation recomputed from
@@ -897,9 +897,9 @@ if (!dir.exists(final_model_base)) {
         dplyr::summarise(ccc_mean_recalc = mean(ccc), .groups = "drop")
       merged <- dplyr::left_join(config_summary, recalc, by = "config_id")
       for (i in seq_len(nrow(merged))) {
-        check_equal("04", paste0("ccc_mean salvo == recalculado (", merged$config_id[i], ")"),
+        check_equal("04", paste0("ccc_mean saved == recomputed (", merged$config_id[i], ")"),
                     round(merged$ccc_mean[i], 6), round(merged$ccc_mean_recalc[i], 6),
-                    "salvo", "recalculado")
+                    "saved", "recomputed")
       }
 
       # A per-seed gate_summary.csv should exist only for dual-branch configs

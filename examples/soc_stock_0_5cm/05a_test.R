@@ -8,39 +8,39 @@ pkg <- c("processx")
 install_load_pkg(pkg)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 05a_test — Teste do pipeline 2D antes de rodar o job completo
+# 05a_test -- test of the 2D pipeline before running the full job
 #
-# Roda apenas test_n_shards shards escolhidos do grid n_row_shards x n_col_shards.
-# O objetivo é verificar:
-#   1. Geometria dos tiles de saída (extensão, resolução, nrows/ncols)
-#   2. Valores produzidos (mediana, sd, mask) — plausibilidade
-#   3. RSS por processo (piso de RAM real com 2D)
-#   4. Throughput (s/bloco) para estimar ETA do job real
+# Runs only test_n_shards shards chosen from the n_row_shards x n_col_shards grid.
+# The point is to check:
+#   1. Geometry of the output tiles (extent, resolution, nrows/ncols)
+#   2. Values produced (median, sd, mask) -- plausibility
+#   3. RSS per process (the real RAM floor with 2D)
+#   4. Throughput (s/block) to estimate the ETA of the real job
 #
-# Ao final imprime um diagnóstico comparando RAM e throughput com o 05
-# (referência: ~7-8 GB piso, ~130 s/bloco após otimização).
+# At the end it prints a diagnostic comparing RAM and throughput against 05
+# (reference: ~7-8 GB floor, ~130 s/block after optimisation).
 #
-# NÃO roda o merge — os tiles de teste ficam em raster/parts_2d/ para
-# inspeção manual. Apague-os antes de rodar o 05a real.
+# It does NOT run the merge -- the test tiles stay in raster/parts_2d/ for
+# manual inspection. Delete them before running the real 05a.
 # ══════════════════════════════════════════════════════════════════════════════
 
-# ── Configuração de TESTE ──────────────────────────────────────────────────────
-# Estes valores devem ser os MESMOS que você planeja usar no 05a real.
-# Só test_n_shards e max_concurrent podem ser menores no teste.
+# ── TEST configuration ─────────────────────────────────────────────────────────
+# These values must be the SAME ones you plan to use in the real 05a.
+# Only test_n_shards and max_concurrent may be smaller in the test.
 
-n_row_shards <- 250      # igual ao que usará no 05a real
-n_col_shards <- 4        # igual ao que usará no 05a real
+n_row_shards <- 250      # same as what you will use in the real 05a
+n_col_shards <- 4        # same as what you will use in the real 05a
 
-# Quantos shards rodar no teste. 4 = 1 por coluna (testa toda a largura).
-# Aumente para 8 se quiser testar 2 linhas de shards.
+# How many shards to run in the test. 4 = 1 per column (tests the full width).
+# Raise it to 8 if you want to test 2 rows of shards.
 test_n_shards <- 4
 
-# Quais shards rodar. "auto" = distribui pelos 4 tiles de coluna na linha 1
-# (testa geometria em todas as colunas). Ou defina manualmente, ex:
+# Which shards to run. "auto" = spread over the 4 column tiles in row 1
+# (tests the geometry in every column). Or set them by hand, e.g.:
 #   test_shards <- list(c(1,1), c(1,2), c(1,3), c(1,4))
 test_shards <- "auto"
 
-# Concorrência e RAM (pode ser menor que o real para o teste)
+# Concurrency and RAM (may be smaller than the real ones for the test)
 max_concurrent <- 2
 poll_interval_s <- 15
 
@@ -56,21 +56,21 @@ dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
 rscript_bin <- file.path(R.home("bin"), "Rscript.exe")
 if (!file.exists(rscript_bin)) stop("Rscript.exe not found: ", rscript_bin)
 
-# ── Montar lista de shards de teste ──────────────────────────────────────────
+# ── Build the list of test shards ────────────────────────────────────────────
 
 if (identical(test_shards, "auto")) {
-  # Bug corrigido: a versao anterior so adicionava uma amostra da linha do
-  # meio (mais densa/tropical -- o que realmente calibra throughput/RAM real)
-  # quando test_n_shards > n_col_shards. Com os valores padrao deste arquivo
-  # (ambos 4) essa condicao NUNCA era TRUE, entao o teste so via a linha 1
-  # (quase toda oceano/gelo polar, exceto onde cruza terra) e a recomendacao
-  # de max_concurrent/ETA saia de uma media distorcida (shards quase vazios
-  # com RSS~1.7 GB e predict~2s, escondendo o unico shard real com RSS~12.7 GB
-  # e predict~550s -- media = numero sem sentido, perigoso se usado pra
-  # RAM: max_concurrent tao alto que shards densos concorrentes estourariam
-  # a RAM da maquina).
-  # Agora SEMPRE reserva pelo menos 1 shard da linha do meio, mesmo que
-  # precise reduzir a cobertura de largura da linha 1.
+  # Bug fixed: the previous version only added a sample from the middle row
+  # (denser/tropical -- the one that really calibrates real throughput/RAM)
+  # when test_n_shards > n_col_shards. With this file's default values
+  # (both 4) that condition was NEVER TRUE, so the test only saw row 1
+  # (almost all ocean/polar ice, except where it crosses land) and the
+  # max_concurrent/ETA recommendation came out of a distorted mean (nearly
+  # empty shards with RSS~1.7 GB and predict~2s, hiding the one real shard
+  # with RSS~12.7 GB and predict~550s -- mean = meaningless number, dangerous
+  # if used for RAM: a max_concurrent so high that concurrent dense shards
+  # would blow up the machine's RAM).
+  # Now it ALWAYS reserves at least 1 shard from the middle row, even when
+  # it has to reduce row 1's width coverage.
   n_row1 <- max(1L, min(test_n_shards - 1L, n_col_shards))
   n_mid  <- max(1L, test_n_shards - n_row1)
   mid_row <- ceiling(n_row_shards / 2)
@@ -81,19 +81,19 @@ if (identical(test_shards, "auto")) {
 }
 
 n_test <- length(test_shards)
-message(sprintf("Teste 2D: %d x %d grid | rodando %d shard(s) | %d por vez",
+message(sprintf("2D test: %d x %d grid | running %d shard(s) | %d at a time",
                 n_row_shards, n_col_shards, n_test, max_concurrent))
-message(sprintf("Shards de teste: %s",
+message(sprintf("Test shards: %s",
                 paste(sapply(test_shards, function(x) sprintf("[r%d/c%d]", x[1], x[2])),
                       collapse = " ")))
 message("Logs: ", log_dir, "\n")
 
-# ── Fila ───────────────────────────────────────────────────────────────────────
+# ── Queue ──────────────────────────────────────────────────────────────────────
 
 pending    <- seq_len(n_test)
 active     <- list()
 exit_codes <- integer(n_test)
-rss_peak   <- numeric(n_test)   # RSS max lido do log de cada shard
+rss_peak   <- numeric(n_test)   # max RSS read from each shard's log
 
 launch_shard <- function(idx) {
   rs <- test_shards[[idx]][1]
@@ -135,7 +135,7 @@ while (length(active) > 0 || length(pending) > 0) {
       cs  <- test_shards[[idx]][2]
       exit_codes[idx] <- p$get_exit_status()
       n_done <- n_done + 1L
-      status <- if (exit_codes[idx] == 0L) "OK" else paste0("FALHOU (exit ", exit_codes[idx], ")")
+      status <- if (exit_codes[idx] == 0L) "OK" else paste0("FAILED (exit ", exit_codes[idx], ")")
       message(sprintf("  [r%03d/c%03d] finished: %s", rs, cs, status))
       finished_ids <- c(finished_ids, idx_chr)
     }
@@ -148,16 +148,16 @@ while (length(active) > 0 || length(pending) > 0) {
   }
 
   el <- Sys.time() - t0
-  message(sprintf("  [%.1f %s] %d/%d done, %d rodando, %d aguardando",
+  message(sprintf("  [%.1f %s] %d/%d done, %d running, %d waiting",
                   as.numeric(el), units(el), n_done, n_test, length(active), length(pending)))
 }
 
 el_total <- Sys.time() - t0
 
-# ── Diagnóstico dos logs ───────────────────────────────────────────────────────
+# ── Log diagnostics ────────────────────────────────────────────────────────────
 
 message("\n", strrep("═", 70))
-message("DIAGNÓSTICO DO TESTE 2D")
+message("2D TEST DIAGNOSTICS")
 message(strrep("═", 70))
 
 parse_worker_log <- function(idx) {
@@ -188,23 +188,24 @@ parse_worker_log <- function(idx) {
     if (length(m) > 0) output_block_rows <- as.integer(sub("= ", "", m))
   }
 
-  # RSS máximo
-  # Bug corrigido: a versao anterior deixava o sufixo " MB" no valor extraido
-  # (sub() so removia o prefixo "RSS "), entao as.numeric("12345 MB") sempre
-  # dava NA -- rss_peak_mb ficava sempre NA e a recomendacao de max_concurrent
-  # caia pra -Inf/absurda. Lookbehind/lookahead evita capturar o texto.
+  # Maximum RSS
+  # Bug fixed: the previous version left the " MB" suffix on the extracted
+  # value (sub() only stripped the "RSS " prefix), so as.numeric("12345 MB")
+  # always gave NA -- rss_peak_mb was always NA and the max_concurrent
+  # recommendation fell to -Inf/absurd. Lookbehind/lookahead avoids
+  # capturing the text.
   rss_lines <- lines[grepl("RSS [0-9]+(?:\\.[0-9]+)? MB", lines, perl = TRUE)]
   rss_vals  <- as.numeric(regmatches(rss_lines,
     regexpr("(?<=RSS )[0-9]+(?:\\.[0-9]+)?(?= MB)", rss_lines, perl = TRUE)))
   rss_peak_mb <- if (length(rss_vals) > 0) max(rss_vals, na.rm = TRUE) else NA_real_
 
-  # s/bloco (predict)
+  # s/block (predict)
   block_lines <- lines[grepl("predict [0-9]+\\.[0-9]+s", lines)]
   predict_times <- as.numeric(unlist(regmatches(block_lines,
     gregexpr("[0-9]+\\.[0-9]+(?=s \\| RSS)", block_lines, perl = TRUE))))
   median_predict_s <- if (length(predict_times) > 0) median(predict_times) else NA_real_
 
-  # n_valid total (ultima linha de Block)
+  # total n_valid (last Block line)
   n_valid <- NA_integer_
   blk_summary <- lines[grepl("^Block [0-9]+/[0-9]+", lines)]
   if (length(blk_summary) > 0) {
@@ -226,7 +227,7 @@ parse_worker_log <- function(idx) {
 results <- lapply(seq_len(n_test), parse_worker_log)
 
 message(sprintf("\n%-20s %10s %10s %10s %12s %12s %8s",
-                "shard", "strip_ncol", "ram_fator", "blk_rows", "RSS_pico_MB", "pred_s/blk", "status"))
+                "shard", "strip_ncol", "ram_factor", "blk_rows", "RSS_peak_MB", "pred_s/blk", "status"))
 message(strrep("-", 85))
 
 for (r in results) {
@@ -238,13 +239,13 @@ for (r in results) {
                   ifelse(is.na(r$output_block_rows), "?", r$output_block_rows),
                   ifelse(is.na(r$rss_peak_mb), "?", sprintf("%.0f", r$rss_peak_mb)),
                   ifelse(is.na(r$median_predict_s), "?", sprintf("%.1f", r$median_predict_s)),
-                  if (r$ok) "OK" else "FALHOU"))
+                  if (r$ok) "OK" else "FAILED"))
 }
 
 message(strrep("-", 85))
 
-# Verifica geometria dos tiles produzidos
-message("\n── Verificação de geometria dos tiles ──────────────────────────────")
+# Checks the geometry of the tiles produced
+message("\n── Tile geometry check ─────────────────────────────────────────────")
 target_label <- "soc_stock_0_5cm"
 
 output_dir <- file.path(project_root, "outputs", "spatial_prediction",
@@ -290,11 +291,11 @@ if (length(test_tiles) > 0) {
                     geom_ok))
   }
 } else {
-  message("  Nenhum tile de teste encontrado em: ", parts_dir)
+  message("  No test tile found in: ", parts_dir)
 }
 
-# Recomendações finais
-message("\n── Recomendações para o job real (05a_run_parallel.R) ─────────────")
+# Final recommendations
+message("\n── Recommendations for the real job (05a_run_parallel.R) ──────────")
 ok_results <- Filter(function(r) !is.null(r) && r$ok, results)
 if (length(ok_results) > 0) {
   rss_vals    <- sapply(ok_results, function(r) r$rss_peak_mb)
@@ -305,33 +306,33 @@ if (length(ok_results) > 0) {
   avg_pred <- mean(pred_vals, na.rm = TRUE)
   avg_rf   <- mean(ram_factors, na.rm = TRUE)
 
-  # RAM disponível: 64 GB = 64000 MB; margem de 30%
+  # RAM available: 64 GB = 64000 MB; 30% margin
   ram_total_mb    <- 64000
-  ram_budget_mb   <- ram_total_mb * 0.70   # 70% para shards
+  ram_budget_mb   <- ram_total_mb * 0.70   # 70% for shards
   safe_concurrent <- floor(ram_budget_mb / max(avg_rss, 1))
   safe_concurrent <- min(safe_concurrent, parallel::detectCores())
 
-  message(sprintf("  RAM pico por shard  : %.0f MB (media dos %d shards de teste)",
+  message(sprintf("  Peak RAM per shard  : %.0f MB (mean of the %d test shards)",
                   avg_rss, length(ok_results)))
-  message(sprintf("  Reducao de RAM vs 05: %.1fx (strip_ncol / r_ncol)",
+  message(sprintf("  RAM reduction vs 05 : %.1fx (strip_ncol / r_ncol)",
                   avg_rf))
-  message(sprintf("  Throughput          : %.1f s/bloco (predict)",
+  message(sprintf("  Throughput          : %.1f s/block (predict)",
                   avg_pred))
-  message(sprintf("  max_concurrent seguro (70%% de 64 GB): %d processos",
+  message(sprintf("  safe max_concurrent (70%% of 64 GB): %d processes",
                   safe_concurrent))
 
-  n_blocks_est <- n_row_shards * n_col_shards * 32   # ~32 blocos/shard (estimativa)
+  n_blocks_est <- n_row_shards * n_col_shards * 32   # ~32 blocks/shard (estimate)
   eta_h <- (n_blocks_est * avg_pred) / safe_concurrent / 3600
-  message(sprintf("  ETA estimado (job real, %d x %d = %d shards): ~%.0f h (~%.1f dias)",
+  message(sprintf("  Estimated ETA (real job, %d x %d = %d shards): ~%.0f h (~%.1f days)",
                   n_row_shards, n_col_shards, n_row_shards * n_col_shards,
                   eta_h, eta_h / 24))
 
-  message(sprintf("\n  -> Edite 05a_run_parallel.R: max_concurrent <- %d", safe_concurrent))
+  message(sprintf("\n  -> Edit 05a_run_parallel.R: max_concurrent <- %d", safe_concurrent))
 } else {
-  message("  Nenhum shard completou com sucesso — verifique os logs em: ", log_dir)
+  message("  No shard completed successfully -- check the logs in: ", log_dir)
 }
 
-message(sprintf("\nTeste concluido em %.1f %s. Logs em: %s",
+message(sprintf("\nTest finished in %.1f %s. Logs in: %s",
                 as.numeric(el_total), units(el_total), log_dir))
-message("Tiles de teste em: ", parts_dir)
-message("Apague os tiles de teste antes de rodar o 05a real.")
+message("Test tiles in: ", parts_dir)
+message("Delete the test tiles before running the real 05a.")

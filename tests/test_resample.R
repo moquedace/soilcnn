@@ -541,18 +541,19 @@ ok["single_run_has_no_spread"] <- all(is.na(sr1$val_ccc_sd)) &&
 nf <- seed_noise_floor(cmp, metric = "val_ccc")
 ok["noise_floor_uses_only_repeats"] <- nf$n_comparable == 2L
 
-# Duas repeticoes cuja metrica veio NA nao sao duas repeticoes comparaveis.
-# Contar a linha em vez do valor faria o relatorio anunciar cobertura que os
-# dados nao tem -- pior do que dizer que nao da para estimar.
+# Two repeats whose metric came back NA are not two comparable repeats.
+# Counting the row instead of the value would make the report announce coverage
+# the data does not have -- worse than saying it cannot be estimated.
 cmp_na <- cmp
 cmp_na$val_ccc[cmp_na$config_id == "A"][2] <- NA_real_
 nf_na <- seed_noise_floor(cmp_na, metric = "val_ccc")
 ok["noise_floor_ignores_na_repeats"] <- nf_na$n_comparable == 1L
 ok["noise_floor_sd_always_finite"]   <- is.finite(nf_na$median_sd)
 
-# E duas linhas com a MESMA semente nao sao duas repeticoes: sao a mesma coisa
-# contada duas vezes, e o sd entre elas sai 0 -- um piso de ruido inexistente,
-# que faria qualquer diferenca entre configs parecer evidencia.
+# And two rows with the SAME seed are not two repeats: they are the same thing
+# counted twice, and the sd between them comes out 0 -- a noise floor that does
+# not exist, which would make any difference between configs look like
+# evidence.
 cmp_dup <- cmp
 cmp_dup$seed[cmp_dup$config_id == "A"] <- 42L
 nf_dup <- seed_noise_floor(cmp_dup, metric = "val_ccc")
@@ -569,8 +570,9 @@ nf1 <- seed_noise_floor(one, metric = "val_ccc")
 ok["noise_floor_unknowable_with_one_seed"] <- nf1$n_comparable == 0L &&
   is.na(nf1$median_sd)
 
-# Nenhuma das duas pode emitir aviso. Aviso em funcao de relatorio treina quem
-# usa a ignorar avisos -- e o unico aviso que importa e sempre o proximo.
+# Neither of them may raise a warning. A warning out of a reporting function
+# trains whoever uses it to ignore warnings -- and the only warning that
+# matters is always the next one.
 warns <- character(0)
 withCallingHandlers({
   invisible(summarise_resamples(cmp, metrics = c("val_ccc", "val_mae")))

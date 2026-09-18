@@ -1,24 +1,24 @@
-# Unit test: gravar e reler uma janela devolve exatamente o mesmo dado
+# Unit test: writing a window and reading it back gives exactly the same data
 #
-# Este teste existe por causa de um prejuízo concreto. A versão anterior do
-# store gravava tensores float32 com torch_save() para economizar disco.
-# torch_save() no R torch 0.17.0 quebra acima de 2^31 bytes -- e não quebra
-# de forma honesta: num caso produziu um arquivo do TAMANHO CERTO cujo final
-# eram 4,3 GB de zeros. Passou por uma checagem de "nenhum valor não-finito",
-# porque zero é finito. Custou ~10 h de extração e duas sessões mortas.
+# This test exists because of a concrete loss. The previous version of the
+# store wrote float32 tensors with torch_save() to save disk. torch_save() in
+# R torch 0.17.0 breaks above 2^31 bytes -- and it does not break honestly:
+# in one case it produced a file of the RIGHT SIZE whose tail was 4.3 GB of
+# zeros. It passed a "no non-finite value" check, because zero is finite. It
+# cost ~10 h of extraction and two dead sessions.
 #
-# A lição virou regra: nenhuma verificação de escrita pode se contentar com o
-# tamanho do arquivo. Tem que ler de volta e comparar CONTEÚDO.
+# The lesson became a rule: no write check may settle for the size of the
+# file. It has to read back and compare CONTENT.
 #
-# Verifica:
-#   1. round-trip é exato para cada tipo de janela
-#   2. o tamanho em disco bate com o previsto por patch_window_bytes()
-#   3. load_patch_window() devolve float32 com o shape certo
-#   4. as asserções de shape pegam um arquivo de outro conjunto de pontos
-#   5. safe_torch_save() RECUSA um tensor acima de 2^31 em vez de corromper
-#   6. um arquivo truncado é detectado
+# Checks:
+#   1. the round-trip is exact for every window size
+#   2. the size on disk matches what patch_window_bytes() predicts
+#   3. load_patch_window() returns float32 with the right shape
+#   4. the shape assertions catch a file from another set of points
+#   5. safe_torch_save() REFUSES a tensor above 2^31 instead of corrupting it
+#   6. a truncated file is detected
 #
-# Rode: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tests/test_patch_store_io.R")
+# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tests/test_patch_store_io.R")
 
 suppressMessages({
   library(torch)
@@ -59,7 +59,7 @@ dir.create(store, recursive = TRUE)
 
 n <- 40L; ch <- 7L
 
-# ── 1-3: round-trip por janela ────────────────────────────────────────────────
+# ── 1-3: round-trip per window ────────────────────────────────────────────────
 
 for (w in c(3L, 9L, 15L)) {
   arr <- array(rnorm(n * ch * w * w), dim = c(n, ch, w, w))
@@ -69,10 +69,10 @@ for (w in c(3L, 9L, 15L)) {
 
   back <- load_patch_window(store, w, expect_points = n, expect_channels = ch)
 
-  # CONTEÚDO, não tamanho. float32 perde precisão do double, então a comparação
-  # é contra o mesmo round-trip de precisão -- e tem que bater exatamente.
+  # CONTENT, not size. float32 loses the double's precision, so the comparison
+  # is against the same precision round-trip -- and it has to match exactly.
   esperado <- as.array(torch_tensor(arr, dtype = torch_float()))
-  ok[sprintf("w%02d_roundtrip_exato", w)] <-
+  ok[sprintf("w%02d_roundtrip_exact", w)] <-
     identical(dim(as.array(back)), dim(esperado)) &&
     max(abs(as.array(back) - esperado)) == 0
 
@@ -82,41 +82,41 @@ for (w in c(3L, 9L, 15L)) {
   rm(back); gc(verbose = FALSE)
 }
 
-# ── 4: shape de outro conjunto de pontos é recusado ──────────────────────────
+# ── 4: a shape from another set of points is refused ─────────────────────────
 
-ok["ponto_errado_recusado"] <- inherits(
+ok["wrong_point_refused"] <- inherits(
   try(load_patch_window(store, 3L, expect_points = n + 1L), silent = TRUE),
   "try-error")
-ok["canal_errado_recusado"] <- inherits(
+ok["wrong_channel_refused"] <- inherits(
   try(load_patch_window(store, 3L, expect_channels = ch + 1L), silent = TRUE),
   "try-error")
 
-# ── 5: safe_torch_save recusa acima de 2^31 em vez de corromper ──────────────
-# Mede-se o limite, não se confia nele: 2,147,479,648 bytes gravou e
-# 2,147,487,648 matou a sessão. A guarda tem que disparar ANTES de tentar.
+# ── 5: safe_torch_save refuses above 2^31 instead of corrupting ──────────────
+# The limit is measured, not trusted: 2,147,479,648 bytes wrote and
+# 2,147,487,648 killed the session. The guard has to fire BEFORE it tries.
 
-grande <- torch_empty(floor(2^31 / 4) + 1000L, dtype = torch_float())
-ok["safe_torch_save_recusa_acima_2_31"] <- inherits(
-  try(safe_torch_save(grande, file.path(store, "nao_deve_existir.pt")),
+too_big <- torch_empty(floor(2^31 / 4) + 1000L, dtype = torch_float())
+ok["safe_torch_save_refuses_above_2_31"] <- inherits(
+  try(safe_torch_save(too_big, file.path(store, "must_not_exist.pt")),
       silent = TRUE), "try-error")
-ok["safe_torch_save_nao_criou_arquivo"] <-
-  !file.exists(file.path(store, "nao_deve_existir.pt"))
-rm(grande); gc(verbose = FALSE)
+ok["safe_torch_save_created_no_file"] <-
+  !file.exists(file.path(store, "must_not_exist.pt"))
+rm(too_big); gc(verbose = FALSE)
 
-# e um tensor pequeno continua passando normalmente
+# and a small tensor still passes as usual
 pequeno <- torch_empty(1000L, dtype = torch_float())
-ok["safe_torch_save_aceita_pequeno"] <- !inherits(
+ok["safe_torch_save_accepts_small"] <- !inherits(
   try(safe_torch_save(pequeno, file.path(store, "ok.pt")), silent = TRUE),
   "try-error")
 rm(pequeno); gc(verbose = FALSE)
 
-# ── 6: arquivo truncado é detectado ──────────────────────────────────────────
-# O modo de falha que passou despercebido foi um arquivo do tamanho certo com
-# lixo dentro. Aqui o inverso -- tamanho errado -- tem que ser pego na leitura.
+# ── 6: a truncated file is detected ──────────────────────────────────────────
+# The failure mode that went unnoticed was a file of the right size with
+# garbage inside. Here the reverse -- the wrong size -- must be caught on read.
 
 f3 <- patch_window_path(store, 3L)
 con <- file(f3, "r+b"); truncate(con, 5000L); close(con)
-ok["arquivo_truncado_detectado"] <- inherits(
+ok["truncated_file_detected"] <- inherits(
   try(load_patch_window(store, 3L), silent = TRUE), "try-error")
 
 unlink(store, recursive = TRUE)

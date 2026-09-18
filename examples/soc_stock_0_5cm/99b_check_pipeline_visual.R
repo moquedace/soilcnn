@@ -16,27 +16,31 @@ project_root <- "D:/usuario_armazenamento/cassio/R/deep_learning_caret"
 setwd(project_root)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 99b — Checkpoint VISUAL do pipeline (companheiro do 99_check_pipeline.R)
+# 99b -- VISUAL pipeline checkpoint (companion to 99_check_pipeline.R)
 #
-# O 99 confere números (contagens, percentuais, consistência entre arquivos).
-# Este aqui mostra COISA DE VERDADE na tela: onde os perfis estão no mapa, se
-# o tuning realmente melhorou, se o modelo final acerta o valor de SOC de
-# verdade (não só a métrica agregada), e como são os patches que a CNN
-# recebe — recorte de elevação, vegetação e (de propósito, é o vilão da
-# história) uma camada PNV, extraídos ao redor de perfis reais.
+# 99 checks numbers (counts, percentages, consistency between files).
+# This one puts SOMETHING REAL on the screen: where the profiles are on the map,
+# whether tuning actually improved anything, whether the final model gets the
+# real SOC value right (not just the aggregated metric), and what the patches
+# the CNN receives look like -- a cut-out of elevation, vegetation and (on
+# purpose, it is the villain of the story) a PNV layer, extracted around real
+# profiles.
 #
-# Quatro partes, custo crescente:
-#   PARTE 1 (leve, segundos): mapa-múndi dos ~37 mil perfis por split. So le
-#     split_metadata.csv.
-#   PARTE 2 (leve, segundos): etapa 03 (tuning) — leaderboard dos configs e
-#     "será que o vencedor acerta o valor real?" (obs x predito, validação).
-#   PARTE 3 (leve, segundos): etapa 04 (modelo final) — curvas de treino por
-#     seed, estabilidade entre seeds, e obs x predito no TEST (o ensemble
-#     final, o número que de fato vai pro mapa).
-#   PARTE 4 (pesada, minutos): carrega os tensores de patches (~8.6 GB)
-#     na memoria so pra tirar uns 6 patches de exemplo. E o unico jeito de
-#     acessar o arquivo (RDS nao suporta leitura parcial) — rode quando nao
-#     estiver com pouca RAM sobrando. Comente a PARTE 4 se nao quiser esperar.
+# Four parts, increasing cost:
+#   PART 1 (light, seconds): world map of the store's profiles by split.
+#     Reads the tuning run's fold_plan.rds and the store's patch_meta.csv.
+#     It used to read split_metadata.csv, which nothing writes any more -- see
+#     the note above PART 1. The count is the store's (3,728 here), not the
+#     ~37,000 of the full WOSIS extract this text was written against.
+#   PART 2 (light, seconds): stage 03 (tuning) -- leaderboard of the configs and
+#     "does the winner get the real value right?" (obs x pred, validation).
+#   PART 3 (light, seconds): stage 04 (final model) -- training curves per seed,
+#     stability between seeds, and obs x pred on TEST (the final ensemble, the
+#     number that actually goes onto the map).
+#   PART 4 (heavy, minutes): loads the patch tensors (0.85 GB) into memory just
+#     to pull out some 6 example patches. It is the only way to reach the file
+#     (RDS does not support partial reads) -- run it when you are not short on
+#     RAM. Comment out PART 4 if you do not want to wait.
 # ══════════════════════════════════════════════════════════════════════════════
 
 target_label <- "soc_stock_0_5cm"
@@ -49,9 +53,9 @@ final_base     <- file.path(project_root, "outputs", "final_model", "soc_stock_m
 fig_dir        <- file.path(project_root, "outputs", "qc", "figures")
 dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
 
-# Resolve o run mais recente numa pasta de runs timestamped (mesmo criterio
-# usado no 99_check_pipeline.R e nos proprios 03/04/05): ordena os nomes das
-# subpastas e pega o primeiro em ordem decrescente.
+# Resolve the most recent run inside a folder of timestamped runs (same
+# criterion used in 99_check_pipeline.R and in 03/04/05 themselves): sorts the
+# subfolder names and takes the first in decreasing order.
 .latest_run <- function(base_dir, prefix) {
   runs <- list.dirs(base_dir, recursive = FALSE, full.names = FALSE)
   runs <- runs[grepl(paste0("^", prefix), runs)]
@@ -59,18 +63,18 @@ dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
   sort(runs, decreasing = TRUE)[1]
 }
 
-# CCC de Lin, calculado exatamente como em R/metrics.R (DescTools::CCC) --
-# so pra anotar os graficos obs-x-predito com o mesmo numero que o resto do
-# pipeline reportaria, sem precisar fazer source() do metrics.R inteiro.
+# Lin's CCC, computed exactly as in R/metrics.R (DescTools::CCC) -- just to
+# annotate the obs-x-pred plots with the same number the rest of the pipeline
+# would report, without having to source() the whole of metrics.R.
 .lin_ccc <- function(obs, pred) {
   as.numeric(DescTools::CCC(obs, pred, conf.level = 0.95)$rho.c$est)[1]
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PARTE 1 — Mapa-múndi dos perfis (leve)
+# PART 1 -- World map of the profiles (light)
 # ══════════════════════════════════════════════════════════════════════════════
 
-message("\n-- Parte 1: mapa dos perfis por split --\n")
+message("\n-- Part 1: map of the profiles by split --\n")
 
 # THE SPLIT IS NOT A PROPERTY OF THE DATA ANY MORE.
 #
@@ -109,7 +113,7 @@ role_of[fold_plan$folds[[1]]$validation] <- "validation (fold 1)"
 role_of[fold_plan$folds[[1]]$test]       <- "test (all folds)"
 split_meta <- dplyr::mutate(store_meta, dataset_role = role_of)
 
-message("Perfis totais: ", nrow(split_meta))
+message("Total profiles: ", nrow(split_meta))
 print(dplyr::count(split_meta, dataset_role))
 
 p_map <- ggplot2::ggplot(split_meta, ggplot2::aes(x = x, y = y, color = dataset_role)) +
@@ -128,29 +132,29 @@ p_map <- ggplot2::ggplot(split_meta, ggplot2::aes(x = x, y = y, color = dataset_
 print(p_map)
 ggplot2::ggsave(file.path(fig_dir, "99b_world_map_profiles.png"), p_map,
                 width = 12, height = 6, dpi = 150)
-message("Salvo: ", file.path(fig_dir, "99b_world_map_profiles.png"))
+message("Saved: ", file.path(fig_dir, "99b_world_map_profiles.png"))
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PARTE 2 — Etapa 03: tuning (leaderboard + o vencedor acerta o valor real?)
+# PART 2 -- Stage 03: tuning (leaderboard + does the winner get the real value right?)
 # ══════════════════════════════════════════════════════════════════════════════
 
-message("\n-- Parte 2: etapa 03 (tuning) --\n")
+message("\n-- Part 2: stage 03 (tuning) --\n")
 
 tuning_run_id <- .latest_run(tuning_base, "soc_")
 
 if (is.null(tuning_run_id)) {
-  message("Etapa 03 nao encontrada em ", tuning_base, " -- pulando Parte 2.")
+  message("Stage 03 not found in ", tuning_base, " -- skipping Part 2.")
 } else {
 
   tuning_run_dir <- file.path(tuning_base, tuning_run_id)
-  message("Run de tuning: ", tuning_run_id)
+  message("Tuning run: ", tuning_run_id)
 
   # ONE ROW PER CONFIG, AGGREGATED FROM THE UNITS.
   #
   # comparison_ranked.csv is one row per (config, fold, seed) and has been since
   # repetitions arrived. Everything below treats it as one row per config: it
   # builds a factor whose levels are config_id -- which fails outright on the
-  # duplicates -- draws one lollipop per row, and says "N configs testados".
+  # duplicates -- draws one lollipop per row, and says "N configs tested".
   #
   # comparison_by_config.csv is the aggregated table and is read in preference,
   # because it carries the standard error the leaderboard should have been
@@ -193,12 +197,12 @@ if (is.null(tuning_run_id)) {
       dplyr::mutate(rank = dplyr::row_number())
   }
   stopifnot(!anyDuplicated(ranking$config_id))
-  message("configs no leaderboard: ", nrow(ranking))
+  message("configs on the leaderboard: ", nrow(ranking))
 
-  # ── Leaderboard: todos os configs, ordenados por val_ccc ──────────────────
-  # Lollipop em vez de barra pura: a régua horizontal deixa mais fácil ver a
-  # DIFERENÇA entre vizinhos no ranking (é isso que decide qual config vira o
-  # modelo final), não só o valor absoluto de cada um.
+  # ── Leaderboard: every config, ordered by val_ccc ─────────────────────────
+  # Lollipop instead of a plain bar: the horizontal rule makes it easier to see
+  # the DIFFERENCE between neighbours in the ranking (it is this that decides
+  # which config becomes the final model), not just each one's absolute value.
   ranking_plot <- ranking %>%
     dplyr::mutate(
       config_id = factor(config_id, levels = config_id[order(val_ccc)]),
@@ -238,12 +242,13 @@ if (is.null(tuning_run_id)) {
   print(p_leaderboard)
   ggplot2::ggsave(file.path(fig_dir, "99b_tuning_leaderboard.png"), p_leaderboard,
                   width = 9, height = max(4, 0.35 * nrow(ranking)), dpi = 150)
-  message("Salvo: ", file.path(fig_dir, "99b_tuning_leaderboard.png"))
+  message("Saved: ", file.path(fig_dir, "99b_tuning_leaderboard.png"))
 
-  # ── O vencedor acerta o valor real? Obs x Predito no split de VALIDAÇÃO ───
-  # A métrica CCC=0.xx da tabela é abstrata; ver os pontos ao redor da reta
-  # 1:1 é o que de fato convence que o "melhor config" aprendeu algo físico,
-  # não só um número que ficou bom por acaso na agregação.
+  # ── Does the winner get the real value right? Obs x Pred on VALIDATION ────
+  # The CCC=0.xx metric in the table is abstract; seeing the points around the
+  # 1:1 line is what actually convinces you that the "best config" learned
+  # something physical, not just a number that came out good by chance in the
+  # aggregation.
   # THE FILENAME CHANGED WHEN REPETITIONS ARRIVED, and this block has been
   # skipping itself ever since. The tuning run writes ONE FILE PER UNIT --
   # cfg_003_f1_s1_pred_all.csv -- not one per config, so file.exists() on
@@ -295,36 +300,37 @@ if (is.null(tuning_run_id)) {
     print(p_best_val)
     ggplot2::ggsave(file.path(fig_dir, "99b_tuning_best_obs_vs_pred.png"), p_best_val,
                     width = 7, height = 7, dpi = 150)
-    message("Salvo: ", file.path(fig_dir, "99b_tuning_best_obs_vs_pred.png"))
+    message("Saved: ", file.path(fig_dir, "99b_tuning_best_obs_vs_pred.png"))
   } else {
-    message("Predicoes do config vencedor nao encontradas: ", pred_file)
+    message("Predictions for the winning config not found: ", pred_file)
   }
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PARTE 3 — Etapa 04: modelo final (convergência, estabilidade, acerto no test)
+# PART 3 -- Stage 04: final model (convergence, stability, accuracy on test)
 # ══════════════════════════════════════════════════════════════════════════════
 
-message("\n-- Parte 3: etapa 04 (modelo final, ensemble multi-seed) --\n")
+message("\n-- Part 3: stage 04 (final model, multi-seed ensemble) --\n")
 
 final_run_id <- .latest_run(final_base, "final_")
 
 if (is.null(final_run_id)) {
-  message("Etapa 04 nao encontrada em ", final_base, " -- pulando Parte 3.")
+  message("Stage 04 not found in ", final_base, " -- skipping Part 3.")
 } else {
 
   final_run_dir <- file.path(final_base, final_run_id)
-  message("Run do modelo final: ", final_run_id)
+  message("Final model run: ", final_run_id)
 
   summary_rds <- readRDS(file.path(final_run_dir, "comparison", "final_run_summary.rds"))
   selected_cfgs <- summary_rds$selected_cfgs
   seeds         <- summary_rds$seeds
 
-  # ── Curvas de treino, uma linha por seed ───────────────────────────────────
-  # Se as sementes convergem para curvas parecidas, o treino é estável (não é
-  # sorte de inicialização). Uma curva muito fora do feixe das outras é o
-  # tipo de coisa que fica invisível numa média ± desvio, mas salta aos olhos
-  # aqui -- é a versão "fisica" do check numérico de SD relativo do CCC.
+  # ── Training curves, one line per seed ─────────────────────────────────────
+  # If the seeds converge to similar curves, training is stable (it is not
+  # initialisation luck). A curve well outside the bundle of the others is the
+  # kind of thing that stays invisible in a mean +- sd, but jumps out at you
+  # here -- it is the "physical" version of the numeric relative-SD check on
+  # the CCC.
   history_long <- purrr::map_dfr(selected_cfgs$config_id, function(cid) {
     purrr::map_dfr(seeds, function(sd_val) {
       f <- file.path(final_run_dir, cid, "history", sprintf("seed%04d_history.csv", sd_val))
@@ -349,13 +355,14 @@ if (is.null(final_run_id)) {
     print(p_curves)
     ggplot2::ggsave(file.path(fig_dir, "99b_final_training_curves.png"), p_curves,
                     width = 9, height = 6, dpi = 150)
-    message("Salvo: ", file.path(fig_dir, "99b_final_training_curves.png"))
+    message("Saved: ", file.path(fig_dir, "99b_final_training_curves.png"))
   }
 
-  # ── Estabilidade entre seeds: CCC de cada seed ao redor da média ──────────
-  # Companheiro visual direto do check "CCC SD relativo" do 99_check_pipeline:
-  # aqui dá pra ver a nuvem de pontos (cada seed é um treino independente do
-  # zero), não só o número do desvio.
+  # ── Stability between seeds: each seed's CCC around the mean ──────────────
+  # Direct visual companion to the "CCC SD relative" check in
+  # 99_check_pipeline.R -- quoted verbatim so grep finds both ends.
+  # here you get to see the cloud of points (each seed is an independent
+  # training run from scratch), not just the SD number.
   all_seed_results <- readr::read_csv2(
     file.path(final_run_dir, "comparison", "all_seed_results_test.csv"),
     show_col_types = FALSE
@@ -383,14 +390,14 @@ if (is.null(final_run_id)) {
   print(p_stability)
   ggplot2::ggsave(file.path(fig_dir, "99b_final_seed_stability.png"), p_stability,
                   width = 7, height = 5, dpi = 150)
-  message("Salvo: ", file.path(fig_dir, "99b_final_seed_stability.png"))
+  message("Saved: ", file.path(fig_dir, "99b_final_seed_stability.png"))
 
-  # ── O ensemble final acerta o valor real? Obs x Predito no TEST ──────────
-  # Este é o número que efetivamente vira mapa no 05: a mediana das previsões
-  # das N seeds por perfil (mesma lógica de agregação usada na predição
-  # espacial). O leque cinza atrás de cada ponto mostra a dispersão entre
-  # seeds daquele perfil específico -- um jeito tangível de ver a incerteza
-  # do ensemble, perfil a perfil, não só como um número médio de erro.
+  # ── Does the final ensemble get the real value right? Obs x Pred on TEST ──
+  # This is the number that actually becomes a map in 05: the median of the N
+  # seeds' predictions per profile (same aggregation logic used in the spatial
+  # prediction). The grey fan behind each point shows the spread between seeds
+  # for that specific profile -- a tangible way to see the ensemble's
+  # uncertainty, profile by profile, not just as a mean error number.
   pred_test_all <- purrr::map_dfr(selected_cfgs$config_id, function(cid) {
     purrr::map_dfr(seeds, function(sd_val) {
       f <- file.path(final_run_dir, cid, "predictions", sprintf("seed%04d_pred_all.csv", sd_val))
@@ -436,29 +443,31 @@ if (is.null(final_run_id)) {
       print(p_test)
       out_png <- file.path(fig_dir, paste0("99b_final_test_obs_vs_pred_", cid, ".png"))
       ggplot2::ggsave(out_png, p_test, width = 7, height = 7, dpi = 150)
-      message("Salvo: ", out_png)
+      message("Saved: ", out_png)
     }
   }
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PARTE 4 — Patches reais ao redor de perfis (pesada — carrega ~17 GB)
+# PART 4 -- Real patches around profiles (heavy -- loads the whole store, 0.85 GB)
 # ══════════════════════════════════════════════════════════════════════════════
 
-message("\n-- Parte 4: patches reais (carregando o patch store, pode demorar) --\n")
+message("\n-- Part 4: real patches (loading the patch store, this may take a while) --\n")
 
 manifest <- readRDS(file.path(patch_dir, "patch_manifest.rds"))
-# predictor_cols_final e salvo como string unica separada por ";" (mesmo
-# formato do patch_manifest.csv), nao como vetor -- precisa split.
+# predictor_cols_final is saved as a single ";"-separated string (same format
+# as patch_manifest.csv), not as a vector -- it needs a split.
 predictor_cols <- strsplit(manifest$predictor_cols_final, ";")[[1]]
 
-# Canais escolhidos por serem visualmente reconhecíveis (mesmo escalados em
-# z-score, a FORMA espacial se preserva — só muda a unidade da escala de cor):
-#   - elevação: relevo deveria aparecer nitidamente (cristas/vales)
-#   - NDVI: padrão de vegetação
-#   - pnv_open_forest_evergreen_broadleaf: a própria camada PNV que
-#     investigamos a fundo (~33% de perda no interior antes da correção) —
-#     ver essa camada saindo limpa aqui fecha o ciclo da investigação
+# Channels chosen for being visually recognisable. The store holds RAW values
+# (see the note below, above load_patch_store), so these are the numbers as they
+# came off the raster -- the comment here used to say z-score, which contradicted
+# that note and mislabelled the figure's own legend:
+#   - elevation: relief should show up sharply (ridges/valleys)
+#   - NDVI: vegetation pattern
+#   - pnv_open_forest_evergreen_broadleaf: the very PNV layer we investigated
+#     in depth (~33% loss in the interior before the fix) -- seeing this layer
+#     come out clean here closes the loop on that investigation
 channels_to_show <- c(
   elevacao = "ensemble_digital_terrain_model_v1_1",
   ndvi     = "landsat_2020_2025_ndvi",
@@ -467,23 +476,23 @@ channels_to_show <- c(
 
 missing_ch <- setdiff(channels_to_show, predictor_cols)
 if (length(missing_ch) > 0) {
-  stop("Canal(is) nao encontrado(s) em predictor_cols_final: ", paste(missing_ch, collapse = ", "))
+  stop("Channel(s) not found in predictor_cols_final: ", paste(missing_ch, collapse = ", "))
 }
 channel_idx <- match(channels_to_show, predictor_cols)
 names(channel_idx) <- names(channels_to_show)
 
-message("Canais escolhidos e seus índices: ")
+message("Chosen channels and their indices: ")
 print(tibble::tibble(nome = names(channel_idx), predictor = channels_to_show, indice = channel_idx))
 
-# O store guarda os patches CRUS (sem escalonamento) -- que e exatamente o
-# que esta parte quer mostrar: o dado como saiu do raster, antes de qualquer
-# transformacao estatistica.
+# The store keeps the RAW patches (unscaled) -- which is exactly what this part
+# wants to show: the data as it came off the raster, before any statistical
+# transformation.
 source(file.path(project_root, "R", "preprocess.R"))
 source(file.path(project_root, "R", "dataset.R"))
 
 t0 <- Sys.time()
 store <- load_patch_store(patch_dir)
-message("patch store carregado em ",
+message("patch store loaded in ",
         round(difftime(Sys.time(), t0, units = "mins"), 1), " min")
 
 set.seed(42)
@@ -528,7 +537,7 @@ meta_examples <- store$meta[example_idx, ] %>%
   dplyr::mutate(example_id = paste0("perfil ", dplyr::row_number(),
                                     "\nSOC=", round(target_native, 1), " t/ha"))
 
-# Monta um data.frame longo: uma linha por (exemplo, janela, canal, pixel)
+# Builds a long data.frame: one row per (example, window, channel, pixel)
 patch_long <- purrr::map_dfr(seq_along(window_arrays), function(w_i) {
   w_name <- names(window_arrays)[w_i]
   arr    <- window_arrays[[w_i]]  # [N, C, w, w]
@@ -552,7 +561,7 @@ patch_long <- purrr::map_dfr(seq_along(window_arrays), function(w_i) {
   })
 })
 
-message("\nValores extraídos (checagem rápida de sanidade — não deveria haver NA/Inf):")
+message("\nExtracted values (quick sanity check -- there should be no NA/Inf):")
 print(dplyr::summarise(patch_long,
                        n = dplyr::n(),
                        n_na = sum(is.na(value)),
@@ -572,8 +581,8 @@ for (ch_name in names(channel_idx)) {
     ggplot2::labs(
       title = paste0(target_label, " — patches reais: ", ch_name,
                     " (", channels_to_show[[ch_name]], ")"),
-      subtitle = "Valores em z-score (a forma espacial se preserva mesmo escalado)",
-      x = NULL, y = NULL, fill = "z-score"
+      subtitle = "Valores brutos, como saem do raster (o store nao guarda patches escalados)",
+      x = NULL, y = NULL, fill = "valor bruto"
     ) +
     ggplot2::theme_minimal() +
     ggplot2::theme(
@@ -585,13 +594,13 @@ for (ch_name in names(channel_idx)) {
   print(p)
   out_png <- file.path(fig_dir, paste0("99b_patches_", ch_name, ".png"))
   ggplot2::ggsave(out_png, p, width = 9, height = 11, dpi = 150)
-  message("Salvo: ", out_png)
+  message("Saved: ", out_png)
 }
 
-message("\nFeito. Figuras em: ", fig_dir)
-message("Patches (Parte 4): olhe se elevacao/ndvi mostram um padrao espacial")
-message("coerente (nao ruido aleatorio) e se a janela maior (15x15) mostra mais")
-message("contexto ao redor do mesmo centro que a menor (3x3) — devem estar alinhadas.")
-message("Tuning/modelo final (Partes 2-3): olhe se o vencedor do leaderboard fica")
-message("perto da reta 1:1 em validacao E em teste, se o feixe de curvas de treino")
-message("e apertado entre seeds, e se a nuvem de estabilidade nao tem outlier isolado.")
+message("\nDone. Figures in: ", fig_dir)
+message("Patches (Part 4): look at whether elevation/ndvi show a coherent spatial")
+message("pattern (not random noise) and whether the larger window (15x15) shows more")
+message("context around the same centre than the smaller one (3x3) -- they should line up.")
+message("Tuning/final model (Parts 2-3): look at whether the leaderboard winner lands")
+message("close to the 1:1 line in validation AND in test, whether the bundle of training")
+message("curves is tight between seeds, and whether the stability cloud has no isolated outlier.")

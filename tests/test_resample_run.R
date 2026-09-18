@@ -96,13 +96,13 @@ meta <- tibble::tibble(
   target_transform = log1p(y_true)
 )
 
-# Limpeza na ENTRADA, nao so na saida.
+# Clean up on the WAY IN, not only on the way out.
 #
-# tempdir() sobrevive entre source() na mesma sessao. Se uma execucao anterior
-# abortou antes do unlink do fim, a proxima RETOMA os modelos velhos em vez de
-# treinar: o resume funcionando exatamente como deveria, contra o teste. Foi o
-# que aconteceu -- quatro assercoes falharam medindo modelos de outra rodada.
-# Um teste que retoma o proprio run anterior nao e reproduzivel.
+# tempdir() survives between source() calls in the same session. If an earlier
+# execution aborted before the unlink at the end, the next one RESUMES the old
+# models instead of training: resume working exactly as it should, against the
+# test. That is what happened -- four assertions failed measuring models from
+# another round. A test that resumes its own previous run is not reproducible.
 store_dir <- file.path(tempdir(), "dlc_smoke_store")
 out_root  <- file.path(tempdir(), "dlc_smoke_out")
 unlink(store_dir, recursive = TRUE)
@@ -145,10 +145,10 @@ grid <- make_manual_tune_grid(
   use_se_block  = FALSE,
   dropout       = 0.0,
   base_lr       = 1e-2,
-  # 1e-4 de proposito: readr::write_csv2() grava isso como "1e-04", que o
-  # read_csv2() com decimal virgula NAO parseia como numero -- devolve texto, e
-  # o bind_rows da retomada aborta. Com um valor "redondo" aqui o teste
-  # atravessaria o bug sem ve-lo.
+  # 1e-4 on purpose: readr::write_csv2() writes it as "1e-04", which
+  # read_csv2() with a decimal comma does NOT parse as a number -- it gives back
+  # text, and the bind_rows on resume aborts. With a "round" value here the test
+  # would pass straight through the bug without seeing it.
   weight_decay  = 1e-4,
   batch_size    = 16L,
   loss_fn       = "mse"
@@ -156,11 +156,11 @@ grid <- make_manual_tune_grid(
 ok["grid_has_two_configs"] <- nrow(grid) == 2L
 
 device    <- torch::torch_device("cpu")
-# 30 epocas, nao 2. Com 2 o modelo preve praticamente uma constante, a
-# variancia das predicoes e zero e o CCC sai NaN -- e ai a agregacao e o piso
-# de ruido nao sao exercitados de verdade, so atravessados. O alvo aqui e
-# linear no centro do canal 1 de proposito, entao 30 epocas bastam e ainda
-# custam segundos.
+# 30 epochs, not 2. With 2 the model predicts practically a constant, the
+# variance of the predictions is zero and CCC comes out NaN -- and then the
+# aggregation and the noise floor are not really exercised, only crossed. The
+# target here is linear in the centre of channel 1 on purpose, so 30 epochs are
+# enough and still cost seconds.
 train_args <- list(n_epochs = 30L, patience = 30L, print_every = 100L,
                    augment = FALSE)
 
@@ -186,8 +186,8 @@ ok["unit_id_present"]  <- "unit_id" %in% names(cmp1)
 ok["unit_id_distinct"] <- dplyr::n_distinct(cmp1$unit_id) == nrow(cmp1)
 ok["unit_id_names_the_fold_and_seed"] <- all(grepl("_f1_s[12]$", cmp1$unit_id))
 ok["all_units_succeeded"] <- all(cmp1$status == "success")
-# Metrica finita e, por si so, uma checagem de fiacao: NaN aqui significa que
-# as predicoes chegaram constantes ao calculo de CCC.
+# A finite metric is, by itself, a wiring check: NaN here means the predictions
+# arrived constant at the CCC calculation.
 ok["metrics_are_finite"] <- all(is.finite(cmp1$val_ccc)) &&
   all(is.finite(cmp1$val_mae))
 
@@ -333,15 +333,15 @@ ok["runner_refuses_a_changed_plan"] <- inherits(
 ok["the_refusal_destroys_nothing"] <-
   all(file.exists(ckpt)) && identical(file.mtime(ckpt), mtimes_before)
 
-# RETOMADA PARCIAL -- o caso que a retomada completa nao exercita.
+# PARTIAL RESUME -- the case a full resume does not exercise.
 #
-# Com tudo pronto, toda unidade e pulada ANTES do bind_rows, e a tabela relida
-# nunca encontra uma linha nova. Basta uma unidade faltando para os dois
-# caminhos se cruzarem, e foi exatamente ai que o tipo adivinhado pelo
-# read_csv2 derrubou o run (`window_sizes` "3" lido como numero).
+# With everything finished, every unit is skipped BEFORE the bind_rows, and the
+# re-read table never meets a new row. One missing unit is enough for the two
+# paths to cross, and that is exactly where the type guessed by read_csv2
+# brought the run down (`window_sizes` "3" read as a number).
 #
-# Aqui: um run de 1 semente, retomado pedindo 2. A semente 1 e pulada, a 2
-# treina, e as linhas tem que empilhar.
+# Here: a 1-seed run, resumed asking for 2. Seed 1 is skipped, seed 2 trains,
+# and the rows have to stack.
 res_p1 <- quiet_run(
   tune_grid = grid, store = store, points = points, type_table = type_table,
   plan = holdout(store$meta, validation_frac = 0.2, test_frac = 0.2, seed = 3L),
@@ -359,12 +359,13 @@ res_p2 <- quiet_run(
 ok["partial_resume_appends"] <- nrow(res_p2$comparison) == 4L
 ok["partial_resume_all_success"] <- all(res_p2$comparison$status == "success")
 
-# TODA coluna volta com o tipo que tinha -- nao so as que eu lembrei de listar.
+# EVERY column comes back with the type it had -- not just the ones I remembered
+# to list.
 #
-# A primeira tentativa de conserto forcava uma LISTA de colunas a character, e
-# a lista estava incompleta: weight_decay quebrou logo depois, num run de 3
-# horas. Comparar o conjunto INTEIRO de classes e a unica assercao que nao
-# depende de eu ter lembrado da coluna certa.
+# The first attempt at a fix forced a LIST of columns to character, and the list
+# was incomplete: weight_decay broke right afterwards, in a 3-hour run.
+# Comparing the WHOLE set of classes is the only assertion that does not depend
+# on my having remembered the right column.
 cls_before <- vapply(res_p1$comparison, function(z) class(z)[1], character(1))
 cls_after  <- vapply(res_p2$comparison, function(z) class(z)[1], character(1))
 shared     <- intersect(names(cls_before), names(cls_after))

@@ -1,7 +1,7 @@
-# Avalia\u00e7\u00e3o gr\u00e1fica da CNN \u2014 apenas R base, sem instalar pacotes.
+# Graphical evaluation of the CNN -- base R only, nothing to install.
 # RStudio: source("examples/soc_stock_0_5cm/06_avaliacao_grafica.R", encoding="UTF-8")
-# Console: Rscript gerar_graficos.R "PASTA_PROJETO" "PASTA_SAIDA"
-# N\u00e3o treina modelos nem modifica os resultados de origem.
+# Console: Rscript gerar_graficos.R "PROJECT_DIR" "OUTPUT_DIR"
+# Does not train models and does not modify the source results.
 
 gerar_graficos_cnn <- function(
   project_root = "D:/usuario_armazenamento/cassio/R/deep_learning_caret",
@@ -100,7 +100,7 @@ gerar_graficos_cnn <- function(
   }
   vm <- as.data.frame(t(vapply(seq_along(seeds),function(i) metricas(val$obs,val$pred[,i]),numeric(6))))
   vm$seed <- seeds
-  message("Calculando todas as combina\u00e7\u00f5es de sementes...")
+  message("Computing every seed combination...")
   combinacoes <- lapply(seq_along(seeds),function(k) {
     ids <- combn(seq_along(seeds),k,simplify=FALSE)
     do.call(rbind,lapply(ids,function(ii) data.frame(k=k,seeds=paste(seeds[ii],collapse="|"),
@@ -114,7 +114,7 @@ gerar_graficos_cnn <- function(
   faixas <- do.call(rbind,lapply(1:7,function(i) data.frame(grupo=rotulos[i],n=sum(grupo==i),
     inferior=cortes[i],superior=cortes[i+1],as.list(metricas(y[grupo==i],med[grupo==i])))))
 
-  # Contagem anal\u00edtica: convolu\u00e7\u00f5es, vieses, par\u00e2metros afins BN, SE, embedding e head.
+  # Analytic count: convolutions, biases, BN affine parameters, SE, embedding and head.
   n_channels <- as.integer(readRDS(file.path(project_root,"outputs/patches/soc_stock_modeling",target,"patch_manifest.rds"))$n_channels[1])
   parametros <- function(v) {
     ch <- as.integer(strsplit(v$conv_channels,"_",fixed=TRUE)[[1]])
@@ -243,7 +243,7 @@ gerar_graficos_cnn <- function(
   cards <- vapply(figuras,function(f) paste0('<section><h2>',f$titulo,'</h2><a href="',f$nome,'.png"><img src="',f$nome,'.png"></a><p>',f$legenda,'</p><a href="',f$nome,'.svg">SVG edit\u00e1vel</a> \u00b7 <a href="',f$nome,'.png">PNG</a></section>'),character(1))
   pagina <- paste0('<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>A jornada da CNN \u2014 R</title><style>body{background:#edf2f5;color:#183247;font:17px/1.6 system-ui;margin:0}main{max-width:1150px;margin:auto;padding:40px 24px}h1{font-size:44px}section{background:white;padding:25px;border-radius:14px;margin:25px 0}img{width:100%}a{color:#087f8c}</style><main><h1>Da sele\u00e7\u00e3o ao ensemble</h1><p>Gr\u00e1ficos gerados integralmente em R, a partir dos resultados salvos.</p><p>',config_id,' \u00b7 ',length(seeds),' sementes \u00b7 CCC do ensemble: ',sprintf('%.3f',ens['ccc']),' \u00b7 MAE: ',sprintf('%.2f',ens['mae']),' t/ha.</p>',paste(cards,collapse='\n'),'<p>Sele\u00e7\u00e3o: valida\u00e7\u00e3o. Ensemble: teste. Split aleat\u00f3rio estratificado; n\u00e3o representa valida\u00e7\u00e3o espacial independente. Dispers\u00e3o entre sementes n\u00e3o cobre todas as fontes de incerteza.</p><p>Tuning: ',tuning_id,'<br>Final: ',final_run_id,'</p></main></html>')
   writeLines(enc2utf8(pagina),file.path(output_dir,"galeria.html"),useBytes=TRUE)
-  message("Figuras geradas em: ",normalizePath(output_dir,winslash="/"))
+  message("Figures written to: ",normalizePath(output_dir,winslash="/"))
   print(ens)
   invisible(list(ensemble=ens,output_dir=output_dir))
 }
@@ -254,5 +254,5 @@ if (sys.nframe()==0L) {
   else if(length(args)==1) gerar_graficos_cnn(project_root=args[1])
   else gerar_graficos_cnn()
 } else {
-  message("Fun\u00e7\u00e3o carregada. Execute gerar_graficos_cnn() para gerar no projeto, ou informe output_dir.")
+  message("Function loaded. Run gerar_graficos_cnn() to generate inside the project, or pass output_dir.")
 }

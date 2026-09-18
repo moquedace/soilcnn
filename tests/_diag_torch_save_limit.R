@@ -1,22 +1,22 @@
-# Onde exatamente torch_save() quebra?
+# Where exactly does torch_save() break?
 #
-# O diagnostico de escala mostrou: 1,41 GB grava, 2,17 GB mata a sessao.
-# 2^31 bytes = 2,147 GB cai exatamente nessa janela, o que sugere estouro de
-# inteiro de 32 bits no serializador.
+# The scale diagnostic showed: 1.41 GB writes, 2.17 GB kills the session.
+# 2^31 bytes = 2.147 GB falls exactly inside that window, which points at a
+# 32-bit integer overflow in the serializer.
 #
-# Contra-evidencia que precisa ser explicada: patches_w15.pt tem 5,98 GB, foi
-# gravado por torch_save e RELEU perfeitamente (shape certo, zero celulas
-# nao-finitas em 1,49 bilhao). Se o limite fosse 2^31, esse arquivo nao
-# existiria.
+# Counter-evidence that has to be explained: patches_w15.pt is 5.98 GB, was
+# written by torch_save and READ BACK perfectly (right shape, zero non-finite
+# cells out of 1.49 billion). If the limit were 2^31, that file would not
+# exist.
 #
-# Este teste isola SO o torch_save: os tensores vem de torch_empty(), sem
-# nenhum array R por perto, entao nada mais compete por memoria ou atrapalha a
-# leitura do resultado. Varre tamanhos em torno de 2^31 e, no fim, tenta um
-# tensor GRANDE (na faixa do w15) para testar a contra-evidencia.
+# This test isolates torch_save ALONE: the tensors come from torch_empty(),
+# with no R array anywhere near, so nothing else competes for memory or muddies
+# the reading of the result. It sweeps sizes around 2^31 and, at the end, tries
+# a LARGE tensor (in the w15 range) to test the counter-evidence.
 #
-# Log em disco com flush a cada linha -- a resposta sobrevive ao crash.
+# Log on disk, flushed every line -- the answer survives the crash.
 #
-# Rode: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tests/_diag_torch_save_limit.R")
+# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tests/_diag_torch_save_limit.R")
 
 suppressMessages(library(torch))
 
@@ -41,50 +41,50 @@ tmp <- file.path(tempdir(), "diag_limit")
 dir.create(tmp, showWarnings = FALSE, recursive = TRUE)
 f <- file.path(tmp, "t.pt")
 
-# ── um tamanho por vez, tensor criado direto pelo torch ──────────────────────
-# torch_empty nao passa por nenhum array R: isola o serializador.
+# ── one size at a time, tensor created directly by torch ─────────────────────
+# torch_empty goes through no R array at all: it isolates the serializer.
 
 testar <- function(n_elem, rotulo) {
   bytes <- n_elem * 4
-  log_linha("--- ", rotulo, ": ", format(n_elem, big.mark = ","), " elementos = ",
+  log_linha("--- ", rotulo, ": ", format(n_elem, big.mark = ","), " elements = ",
             format(bytes, big.mark = ","), " bytes (",
             sprintf("%.3f GB", bytes / 1e9), ")",
-            if (bytes > 2^31) "   ACIMA de 2^31" else "   abaixo de 2^31")
+            if (bytes > 2^31) "   ABOVE 2^31" else "   below 2^31")
 
   x <- torch_empty(n_elem, dtype = torch_float())
-  log_linha("    tensor criado, gravando...")
+  log_linha("    tensor created, writing...")
 
   if (file.exists(f)) file.remove(f)
   torch_save(x, f)
 
   got <- file.size(f)
-  log_linha("    GRAVOU -- ", format(got, big.mark = ","), " bytes",
-            if (abs(got - bytes) < 5000) "  [tamanho ok]" else
-              sprintf("  [ESPERADO %s]", format(bytes, big.mark = ",")))
+  log_linha("    WROTE -- ", format(got, big.mark = ","), " bytes",
+            if (abs(got - bytes) < 5000) "  [size ok]" else
+              sprintf("  [EXPECTED %s]", format(bytes, big.mark = ",")))
 
   rm(x); invisible(gc(verbose = FALSE))
   file.remove(f)
   invisible(TRUE)
 }
 
-# Varredura em torno de 2^31. Cada passo e logado ANTES de tentar, entao a
-# ultima linha do log identifica o tamanho que matou a sessao.
-n_2_31 <- floor(2^31 / 4)   # elementos que dao exatamente 2^31 bytes
+# Sweep around 2^31. Every step is logged BEFORE it is tried, so the last line
+# of the log identifies the size that killed the session.
+n_2_31 <- floor(2^31 / 4)   # elements that come to exactly 2^31 bytes
 
-testar(floor(n_2_31 * 0.90), "90% de 2^31")
-testar(floor(n_2_31 * 0.99), "99% de 2^31")
-testar(n_2_31 - 1000L,       "logo ABAIXO de 2^31")
-testar(n_2_31 + 1000L,       "logo ACIMA de 2^31")
-testar(floor(n_2_31 * 1.10), "110% de 2^31")
+testar(floor(n_2_31 * 0.90), "90% of 2^31")
+testar(floor(n_2_31 * 0.99), "99% of 2^31")
+testar(n_2_31 - 1000L,       "just BELOW 2^31")
+testar(n_2_31 + 1000L,       "just ABOVE 2^31")
+testar(floor(n_2_31 * 1.10), "110% of 2^31")
 
-# A contra-evidencia: o w15 tem 1.494.485.325 elementos e gravou. Se chegarmos
-# aqui, 2^31 nao e o limite e o w15 deixa de ser contradicao.
-log_linha("=== varredura de 2^31 passou inteira ===")
-testar(1494485325L, "tamanho do w15 (5,98 GB)")
+# The counter-evidence: w15 has 1,494,485,325 elements and it wrote. If we get
+# here, 2^31 is not the limit and w15 stops being a contradiction.
+log_linha("=== the whole 2^31 sweep passed ===")
+testar(1494485325L, "w15 size (5.98 GB)")
 
-log_linha("=== TUDO GRAVOU -- torch_save nao tem limite de tamanho aqui ===")
-log_linha("Se esta linha aparece, o defeito depende de outra coisa: array R ",
-          "vivo junto, estado do heap, ou a forma 4D.")
+log_linha("=== EVERYTHING WROTE -- torch_save has no size limit here ===")
+log_linha("If this line appears, the defect depends on something else: a live ",
+          "R array alongside it, the heap state, or the 4D shape.")
 
 unlink(tmp, recursive = TRUE)
 message("\nLog: ", log_file)

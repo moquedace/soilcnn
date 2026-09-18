@@ -17,41 +17,42 @@ setwd(project_root)
 source(file.path(project_root, "R", "utils.R"))
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Diagnóstico: por que o mapa final tem falhas (speckle) espalhadas pelo mundo?
+# Diagnostic: why does the final map have gaps (speckle) scattered worldwide?
 #
-# Hipótese testada: o pipeline exige que TODOS os 187 preditores estejam
-# finitos em TODA a janela (até 15x15 = 225 células) para prever um pixel.
-# Se qualquer preditor tiver NA esparso e espalhado (comum em produtos raster
-# globais — costuras de mosaico, falhas de sensor, lacunas de dado), um único
-# pixel NA nesse preditor invalida uma vizinhança de até 15x15 ao redor dele.
-# Isso amplifica NA esparso (pouco visível olhando 1 preditor sozinho) em
-# "buracos" muito maiores e visíveis no mapa final.
+# Hypothesis under test: the pipeline requires ALL 187 predictors to be finite
+# over the WHOLE window (up to 15x15 = 225 cells) to predict a pixel.
+# If any predictor carries sparse, scattered NA (common in global raster
+# products -- mosaic seams, sensor dropouts, data gaps), a single NA pixel in
+# that predictor invalidates a neighbourhood of up to 15x15 around it.
+# That amplifies sparse NA (barely visible looking at 1 predictor alone) into
+# much larger "holes" that are visible in the final map.
 #
-# Este script:
-#   1. Amostra pontos regulares sobre TERRA (usa uma camada de referência com
-#      cobertura completa em terra — ex. elevação — como máscara de terra/água,
-#      já que rodar NA-check nos 187 preditores completos, na resolução nativa,
-#      é caro).
-#   2. Para cada um dos 187 preditores, calcula a fração de NA SOBRE TERRA.
-#   3. Ranqueia os preditores por fração de NA — aponta o(s) culpado(s).
-#   4. Quantifica o efeito de amplificação da janela: compara
-#        - fração válida "ingênua" (só o pixel central, sem considerar janela)
-#        - fração válida real do pipeline (lida do valid_mask.tif já gerado)
-#   5. Salva um CSV ranqueado + um gráfico de barras dos piores preditores.
+# This script:
+#   1. Samples regular points over LAND (uses a reference layer with complete
+#      coverage on land -- e.g. elevation -- as a land/water mask, since
+#      running the NA-check on all 187 full predictors, at native resolution,
+#      is expensive).
+#   2. For each of the 187 predictors, computes the NA fraction OVER LAND.
+#   3. Ranks the predictors by NA fraction -- points at the culprit(s).
+#   4. Quantifies the window amplification effect: compares
+#        - the "naive" valid fraction (centre pixel only, window ignored)
+#        - the pipeline's real valid fraction (read from the valid_mask.tif
+#          already generated)
+#   5. Saves a ranked CSV + a bar chart of the worst predictors.
 #
-# Uso: ajuste `n_samples` e `land_reference_predictor` abaixo se necessário.
+# Usage: adjust `n_samples` and `land_reference_predictor` below if needed.
 # ══════════════════════════════════════════════════════════════════════════════
 
 target_label <- "soc_stock_0_5cm"
 config_id    <- "cfg_022"
 
-# Quantos pontos amostrar (grade regular sobre o raster inteiro). 1-2 milhões
-# é rápido (segundos a poucos minutos) e estatisticamente representativo.
+# How many points to sample (regular grid over the whole raster). 1-2 million
+# is fast (seconds to a few minutes) and statistically representative.
 n_samples <- 2000000L
 
-# Preditor usado como máscara de "isto é terra" — precisa ter cobertura
-# completa sobre toda a terra firme (sem gaps conhecidos). O DEM é a escolha
-# mais segura (produtos DEM globais são tipicamente void-filled).
+# Predictor used as the "this is land" mask -- it needs complete coverage over
+# all dry land (no known gaps). The DEM is the safest choice (global DEM
+# products are typically void-filled).
 land_reference_pattern <- "^ensemble_digital_terrain_model"
 
 metadata_dir <- file.path(project_root, "outputs", "metadata",
@@ -63,18 +64,18 @@ output_dir <- file.path(project_root, "outputs", "spatial_prediction",
 diag_dir <- file.path(output_dir, "diagnostics")
 create_output_dirs(diag_dir)
 
-# ── Carregar tabela de preditores ──────────────────────────────────────────────
+# ── Load the predictor table ──────────────────────────────────────────────────
 
 raster_table <- readr::read_csv2(raster_table_file, show_col_types = FALSE)
 predictor_cols <- raster_table$predictor
 n_predictors <- length(predictor_cols)
 
-message("Preditores: ", n_predictors)
+message("Predictors: ", n_predictors)
 
 missing_files <- raster_table$raster_file[!file.exists(raster_table$raster_file)]
 if (length(missing_files) > 0) {
   print(missing_files)
-  stop("Alguns rasters de preditores nao existem mais.")
+  stop("Some predictor rasters no longer exist.")
 }
 
 rast_stack <- terra::rast(raster_table$raster_file)
@@ -82,45 +83,45 @@ names(rast_stack) <- predictor_cols
 
 r_nrow <- terra::nrow(rast_stack)
 r_ncol <- terra::ncol(rast_stack)
-message("Grade: ", r_nrow, " x ", r_ncol, " x ", n_predictors, " bandas")
+message("Grid: ", r_nrow, " x ", r_ncol, " x ", n_predictors, " bands")
 
-# ── Identificar preditor de referência (máscara de terra) ─────────────────────
+# ── Identify the reference predictor (land mask) ──────────────────────────────
 
 land_ref_idx <- grep(land_reference_pattern, predictor_cols, ignore.case = TRUE)
 
 if (length(land_ref_idx) == 0) {
-  message("\nWARNING: nenhum preditor bateu com o padrao '", land_reference_pattern,
-          "'. Preditores disponiveis (primeiros 30):")
+  message("\nWARNING: no predictor matched the pattern '", land_reference_pattern,
+          "'. Available predictors (first 30):")
   print(head(predictor_cols, 30))
-  stop("Ajuste 'land_reference_pattern' para um preditor com cobertura completa em terra.")
+  stop("Set 'land_reference_pattern' to a predictor with complete coverage over land.")
 }
 
 land_ref_name <- predictor_cols[land_ref_idx[1]]
-message("Preditor de referencia (mascara de terra): ", land_ref_name)
+message("Reference predictor (land mask): ", land_ref_name)
 
-# ── Amostragem regular sobre TODO o raster (inclui oceano, filtramos depois) ──
+# ── Regular sampling over the WHOLE raster (ocean included, filtered later) ───
 
-message("\nAmostrando ", format(n_samples, big.mark = ","), " pontos regulares...")
+message("\nSampling ", format(n_samples, big.mark = ","), " regular points...")
 t0 <- Sys.time()
 
 samp <- terra::spatSample(rast_stack, size = n_samples, method = "regular",
                           na.rm = FALSE, values = TRUE, xy = FALSE)
 
-message("Amostragem concluida em ",
+message("Sampling finished in ",
         round(as.numeric(Sys.time() - t0, units = "secs"), 1), "s | ",
-        nrow(samp), " pontos amostrados.")
+        nrow(samp), " points sampled.")
 
-# ── Máscara de terra: pontos onde o preditor de referência é finito ───────────
+# ── Land mask: points where the reference predictor is finite ─────────────────
 
 is_land <- is.finite(samp[[land_ref_name]])
 n_land  <- sum(is_land)
-message(sprintf("Pontos classificados como terra: %s / %s (%.1f%%)",
+message(sprintf("Points classified as land: %s / %s (%.1f%%)",
                 format(n_land, big.mark = ","), format(nrow(samp), big.mark = ","),
                 100 * n_land / nrow(samp)))
 
 samp_land <- samp[is_land, , drop = FALSE]
 
-# ── Fração de NA por preditor, SOBRE TERRA ─────────────────────────────────────
+# ── NA fraction per predictor, OVER LAND ──────────────────────────────────────
 
 na_frac <- purrr::map_dbl(predictor_cols, function(p) {
   mean(!is.finite(samp_land[[p]]))
@@ -133,18 +134,18 @@ na_summary <- tibble::tibble(
 ) %>%
   dplyr::arrange(dplyr::desc(na_fraction_over_land))
 
-message("\n── Top 20 preditores por fração de NA sobre terra ──────────────────")
+message("\n── Top 20 predictors by NA fraction over land ──────────────────────")
 print_wide(head(na_summary, 20), n = 20)
 
 n_offenders <- sum(na_summary$na_fraction_over_land > 0)
-message(sprintf("\n%d de %d preditores têm pelo menos 1 NA sobre terra na amostra.",
+message(sprintf("\n%d of %d predictors have at least 1 NA over land in the sample.",
                 n_offenders, n_predictors))
 
-# ── Amplificação pela janela: ingênuo (1 pixel) vs pipeline (janela completa) ──
-# "Ingênuo": fração de pontos-terra onde TODOS os 187 preditores são finitos
-#            NESSE ÚNICO PIXEL (sem considerar vizinhança).
-# Isso é o piso teórico de cobertura SE a janela não amplificasse nada.
-# Compare com valid_fraction real do pipeline (raster_summary / valid_mask).
+# ── Window amplification: naive (1 pixel) vs pipeline (whole window) ──────────
+# "Naive": the fraction of land points where ALL 187 predictors are finite
+#          IN THAT SINGLE PIXEL (neighbourhood ignored).
+# That is the theoretical coverage floor IF the window amplified nothing.
+# Compare with the pipeline's real valid_fraction (raster_summary / valid_mask).
 
 all_finite_center <- rowSums(!sapply(predictor_cols, function(p) {
   is.finite(samp_land[[p]])
@@ -152,14 +153,14 @@ all_finite_center <- rowSums(!sapply(predictor_cols, function(p) {
 naive_valid_fraction <- mean(all_finite_center)
 
 message(sprintf(
-  "\nCobertura ingênua (1 pixel, sem janela): %.2f%% da terra amostrada",
+  "\nNaive coverage (1 pixel, no window): %.2f%% of the sampled land",
   100 * naive_valid_fraction))
-message("(compare esse número com o valid_fraction real do pipeline, salvo em")
+message("(compare this number with the pipeline's real valid_fraction, saved in")
 message(" outputs/spatial_prediction/.../cfg_022/log/prediction_config*.csv")
-message(" ou no log de merge: se o valor final for MUITO menor que este, a")
-message(" amplificação pela janela é a causa dominante das falhas.)")
+message(" or in the merge log: if the final value is MUCH smaller than this,")
+message(" window amplification is the dominant cause of the gaps.)")
 
-# ── Salvar resultados ──────────────────────────────────────────────────────────
+# ── Save the results ──────────────────────────────────────────────────────────
 
 safe_write_csv2(na_summary, file.path(diag_dir, "predictor_na_fraction_over_land.csv"))
 
@@ -174,7 +175,7 @@ diag_summary <- tibble::tibble(
 )
 safe_write_csv2(diag_summary, file.path(diag_dir, "diagnostic_summary.csv"))
 
-# ── Gráfico dos piores ofensores ────────────────────────────────────────────────
+# ── Chart of the worst offenders ──────────────────────────────────────────────
 
 top_n <- 25
 plot_data <- na_summary %>%
@@ -199,8 +200,8 @@ if (nrow(plot_data) > 0) {
   )
 }
 
-message("\n── Diagnóstico concluído ─────────────────────────────────────────")
-message("Resultados salvos em: ", diag_dir)
-message("  predictor_na_fraction_over_land.csv — ranking completo dos 187 preditores")
-message("  diagnostic_summary.csv — resumo + cobertura ingênua")
-message("  predictor_na_fraction_top25.png — gráfico dos piores ofensores")
+message("\n── Diagnostic complete ───────────────────────────────────────────")
+message("Results saved in: ", diag_dir)
+message("  predictor_na_fraction_over_land.csv -- full ranking of the 187 predictors")
+message("  diagnostic_summary.csv -- summary + naive coverage")
+message("  predictor_na_fraction_top25.png -- chart of the worst offenders")
