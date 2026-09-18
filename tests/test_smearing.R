@@ -17,6 +17,8 @@
 suppressMessages({
   library(tibble)
   library(dplyr)
+  library(readr)
+  library(purrr)
 })
 
 root <- (function() {
@@ -170,8 +172,110 @@ ok["correcting_worsens_mae"]   <- mae(corr)  > mae(naive)
 ok["correcting_removes_the_bias"] <-
   abs(mean(corr) - mean(yt)) < abs(mean(naive) - mean(yt)) / 3
 
+# ── 7. THE RESIDUAL MUST BE THE ENSEMBLE'S, NOT ONE MEMBER'S ─────────────────
+#
+# The deployed prediction is the median over seeds, so the calibrated residual
+# has to be the median's. smearing_from_run() used to read the per-seed rows --
+# 3 rows per point -- while documenting itself as using the same residuals as
+# the conformal interval, which collapses them. Two failures came with that:
+#
+#   n overstated the evidence by the number of seeds, in the one line a reader
+#   uses to judge the factor; and exp() being convex, mean(exp(e)) grows with
+#   var(e), so a noisier single-member residual inflates S.
+#
+# Built as a real run directory, because the defect was in the reading, and a
+# fixture that hands the function a tidy data frame would test the fixture.
+
+set.seed(606)
+run_dir <- file.path(tempdir(), "smear_run_fixture")
+pred_dir <- file.path(run_dir, "predictions")
+dir.create(pred_dir, recursive = TRUE, showWarnings = FALSE)
+
+n_pt <- 400L
+truth <- stats::rnorm(n_pt, log1p(30), 0.5)
+obs_t <- truth + stats::rnorm(n_pt, 0, 0.45)      # irreducible error
+for (s in 1:3) {
+  # each seed is the truth plus its OWN noise, so the median over the three is
+  # a less noisy predictor than any one of them -- the whole point
+  readr::write_csv2(
+    tibble::tibble(sample_id = seq_len(n_pt),
+                   dataset_role = "validation",
+                   obs_transform = obs_t,
+                   pred_transform = truth + stats::rnorm(n_pt, 0, 0.30)),
+    file.path(pred_dir, sprintf("cfg_t_f1_s%d_pred_all.csv", s)))
+}
+
+cal_run <- smearing_from_run(run_dir, "cfg_t")
+
+ok["from_run_returns_one_row_per_point"] <- identical(cal_run$n, n_pt)
+
+# and the pooled-rows factor it replaced is LARGER, by convexity
+pooled <- purrr::map_dfr(
+  list.files(pred_dir, full.names = TRUE),
+  ~ suppressMessages(readr::read_csv2(.x, show_col_types = FALSE)))
+cal_pooled <- smearing_factor(pooled$obs_transform, pooled$pred_transform)
+
+ok["pooling_seeds_inflates_the_factor"] <-
+  cal_pooled$n == 3L * n_pt && cal_pooled$s > cal_run$s
+
+# the inflation is the variance difference, not something else: for near-normal
+# residuals the ratio is exp((var_pooled - var_ens) / 2)
+ok["the_inflation_is_the_variance_difference"] <- {
+  predicted <- exp((cal_pooled$sd_residual^2 - cal_run$sd_residual^2) / 2) *
+    exp(cal_pooled$mean_residual - cal_run$mean_residual)
+  abs(predicted - cal_pooled$s / cal_run$s) < 0.01
+}
+
+# ── 8. THE INDEPENDENCE ASSUMPTION IS REPORTED ───────────────────────────────
+#
+# Duan needs e independent of x, and one scalar is only defensible while that
+# holds. On this project it does not, so the diagnostic has to actually fire --
+# and, just as importantly, has to stay quiet when the assumption holds, or it
+# is an alarm nobody reads.
+
+set.seed(707)
+p_ind <- stats::runif(2000, 2, 5)
+e_ind <- stats::rnorm(2000, 0, 0.4)               # independent of p by design
+cal_ind <- smearing_factor(p_ind + e_ind, p_ind)
+ok["independent_residuals_give_a_flat_profile"] <-
+  length(cal_ind$s_by_bin) == 5L &&
+  max(cal_ind$s_by_bin) / min(cal_ind$s_by_bin) < 1.25
+
+# ...and the sum-unbiasing factor coincides with the plain one when it holds,
+# because the weights then carry no information
+ok["weighted_equals_plain_when_independent"] <-
+  abs(cal_ind$s_weighted / cal_ind$s - 1) < 0.05
+
+set.seed(808)
+p_dep <- stats::runif(2000, 2, 5)
+e_dep <- stats::rnorm(2000, 0, 0.4) - 0.35 * (p_dep - 3.5)   # e shrinks with p
+cal_dep <- smearing_factor(p_dep + e_dep, p_dep)
+ok["dependent_residuals_are_detected"] <-
+  max(cal_dep$s_by_bin) / min(cal_dep$s_by_bin) > 1.25
+ok["the_profile_is_monotone_in_the_right_direction"] <-
+  cal_dep$s_by_bin[1] > cal_dep$s_by_bin[5]
+
+# the weighted factor must then DIFFER, since it is the one that unbiases a sum
+# and the high-prediction points it weights carry a different S
+ok["weighted_differs_when_dependent"] <-
+  abs(cal_dep$s_weighted / cal_dep$s - 1) > 0.05
+
+# a small calibration set gets no profile rather than a noisy one: five bins of
+# 20 points each would produce a spread out of nothing and fire the warning
+ok["a_small_set_reports_no_profile"] <- {
+  set.seed(909)
+  small_p <- stats::runif(100, 2, 5)
+  length(smearing_factor(small_p + stats::rnorm(100, 0, 0.4),
+                         small_p)$s_by_bin) == 0L
+}
+
 cat(sprintf("  closed form              : S = %.4f, exp(sigma^2/2) = %.4f\n",
             cal$s, expected_s))
+cat(sprintf("  ensemble vs pooled rows  : n %d vs %d | S %.4f vs %.4f\n",
+            cal_run$n, cal_pooled$n, cal_run$s, cal_pooled$s))
+cat(sprintf("  independence check       : flat %.2fx | dependent %.2fx (fires above 1.25x)\n",
+            max(cal_ind$s_by_bin) / min(cal_ind$s_by_bin),
+            max(cal_dep$s_by_bin) / min(cal_dep$s_by_bin)))
 cat(sprintf("  trade-off                : MAE %.2f -> %.2f | RMSE %.2f -> %.2f | bias %+.2f -> %+.2f\n",
             mae(naive), mae(corr), rmse(naive), rmse(corr),
             mean(naive) - mean(yt), mean(corr) - mean(yt)))

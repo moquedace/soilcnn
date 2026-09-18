@@ -591,22 +591,23 @@ published in this repository's outputs and it is a median surface.
 
 ### The correction, measured on the same data
 
-Duan's smearing estimator (1983, JASA 78:605–610), calibrated on the 9,276
-cross-validated residuals of `cfg_003` in log space:
+Duan's smearing estimator (1983, JASA 78:605–610), calibrated on the
+cross-validated **ensemble** residuals of `cfg_003` in log space — one per
+point, 3,092 of them:
 
 ```
-S = mean(exp(residual)) = 1.3594
+S = mean(exp(residual)) = 1.3461
 ```
 
-The residuals are near-lognormal — `exp(mean + sd²/2) = 1.3587` against the
-empirical 1.3594 — so the estimator behaves exactly as the theory says.
+The residuals are near-lognormal — `exp(mean + sd²/2)` reproduces the empirical
+value to three figures — so the estimator behaves as the theory says.
 
 Applied to the 591 frozen test points:
 
-| surface | mean | bias | MAE | RMSE | CCC | total stock |
-|---|---|---|---|---|---|---|
-| median (`expm1`) | 29.82 | **−24.4%** | 18.15 | 28.07 | 0.4748 | −24.4% |
-| mean (smeared) | 40.90 | **+3.7%** | 19.14 | 27.07 | **0.5692** | +3.7% |
+| surface | bias | MAE | RMSE | CCC | total stock |
+|---|---|---|---|---|---|
+| median (`expm1`) | **−24.4%** | 18.15 | 28.06 | 0.4751 | −24.4% |
+| mean (smeared) | **+2.7%** | 19.02 | 27.00 | **0.5683** | +2.7% |
 
 **MAE going up is the trade-off, not a regression.** The median minimises
 absolute error; the mean minimises squared error. Correcting toward the mean
@@ -614,9 +615,58 @@ must improve RMSE and worsen MAE, and a change that improved both would mean
 something other than a median-to-mean move had happened. The test asserts
 exactly that pair of directions.
 
-CCC improves by 0.094 — nearly three times the seed noise floor — because CCC
+CCC improves by 0.093 — nearly three times the seed noise floor — because CCC
 penalises bias, and removing a −24% bias is the largest single improvement
 anything has produced in this project.
+
+### What the scalar cannot claim
+
+Two measurements bound it, and both were made after the correction was already
+working. They are recorded because an S quoted to four figures invites more
+confidence than it has earned.
+
+**The target is bracketed, not pinned.** Measuring S directly on the deployed
+10-seed ensemble's own held-out residuals gives **1.2590** on the refit
+validation fold (449 points) and **1.3890** on the test set (591 points) — a
+10% span that straddles every candidate. Residual *variance* falls with ensemble
+size exactly as theory predicts (sd 0.6698 at one seed → 0.6507 at three →
+0.6393 at ten), but the residual *mean* moves four times further and in
+inconsistent directions. Any choice inside that bracket is a coin flip on
+accuracy.
+
+**Duan assumes the residual is independent of the prediction, and here it is
+not.** S by quintile of the prediction, on the out-of-fold ensemble:
+
+| quintile (low → high prediction) | q1 | q2 | q3 | q4 | q5 |
+|---|---|---|---|---|---|
+| S | 1.795 | 1.382 | 1.258 | 1.142 | 1.154 |
+| share of observed total | 9.3% | 13.6% | 17.4% | 24.0% | 35.7% |
+
+One scalar is set largely by the low-prediction points and then applied to the
+high-prediction pixels, which carry 60% of the stock. The functional that
+actually unbiases a **sum** — the `exp(f)`-weighted mean of `exp(e)` — is
+**1.2370**, 8% below the unweighted factor. That is eight times the size of the
+per-seed-versus-ensemble question which turned this up.
+
+**Both obvious repairs were measured, and both are worse.** Calibrated
+out-of-fold, applied blind to the frozen test set:
+
+| factor | bias | RMSE |
+|---|---|---|
+| 1.3461 global, unweighted | **+2.7%** | 27.00 |
+| 1.2370 `exp(f)`-weighted for a total | −5.8% | 26.72 |
+| per-quintile S | −3.9% | 26.48 |
+
+The refinements move the bias *away* from zero. The reason is a mismatch neither
+models: the calibration models are trained on the CV folds (~53% of the points)
+and the deployed model on the refit split (~69%), so the calibration residuals
+are systematically larger and their structure does not transfer. That transfer
+gap dominates both refinements.
+
+So the plain scalar stays, and `print.smearing_cal()` now prints the quintile
+profile and warns when it spreads more than 25%, to keep the violation visible
+rather than assumed away. Correcting it needs a calibration set produced by the
+deployed model, which this design does not currently generate.
 
 **Nothing is replaced.** Stage 04 writes `smearing.rds` beside the conformal
 calibration, stage 05 reads it and writes `soc_smeared_mean_ton_ha` beside the
