@@ -35,6 +35,29 @@ install_load_pkg(pkg)
 # menos tempo = menos fragmentacao de RAM.
 n_row_shards <- 250
 
+# ── OVERRIDABLE, and the reason is not convenience ────────────────────────────
+#
+# These three were literals with no override, so running at any other shard grid
+# meant editing this file -- and the only person who ever wants another grid is
+# someone testing the sharding itself, who then has to remember to edit it back.
+# A test that requires a source edit is a test that runs once.
+#
+# The idiom is 05_predict_spatial.R:60-72's: an environment variable wins when
+# it is set, the literal stands otherwise, so nothing changes for a normal run.
+#
+# SOC_N_ROW_SHARDS / SOC_N_COL_SHARDS / SOC_MAX_CONCURRENT
+.env_int <- function(name, default) {
+  v <- Sys.getenv(name)
+  if (!nzchar(v)) return(default)
+  n <- suppressWarnings(as.integer(v))
+  if (is.na(n) || n < 1L) {
+    stop(name, " is set to '", v, "', which is not a positive integer.",
+         call. = FALSE)
+  }
+  message("  ", name, " = ", n, " (from the environment)")
+  n
+}
+
 # Fatias de coluna: cada fatia reduz strip_ncol por 1/n_col_shards -> RAM
 # por processo proporcional. n_col_shards=4 divide ~240 MB/linha em ~60 MB.
 n_col_shards <- 4
@@ -72,6 +95,10 @@ n_col_shards <- 4
 # -> Reavalie via 05c_estimate_eta.R conforme os primeiros shards reais terminam.
 max_concurrent <- 3
 
+
+n_row_shards   <- .env_int("SOC_N_ROW_SHARDS",   n_row_shards)
+n_col_shards   <- .env_int("SOC_N_COL_SHARDS",   n_col_shards)
+max_concurrent <- .env_int("SOC_MAX_CONCURRENT", max_concurrent)
 poll_interval_s <- 30
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
@@ -170,12 +197,26 @@ launch_shard <- function(idx) {
   cs <- shards$col_shard[idx]
   log_file <- file.path(log_dir,
     sprintf("shard_r%03dof%03d_c%03dof%03d.log", rs, n_row_shards, cs, n_col_shards))
+  # THE ENVIRONMENT IS PASSED, NOT ASSUMED.
+  #
+  # 05_predict_spatial.R:115-118 reads SOC_PREDICT_RASTER_DIR to decide WHICH
+  # rasters to predict over. Spawning without `env` left that to processx
+  # inheriting the parent environment -- true today, undocumented, and silent
+  # when it is not: the worker falls back to raster_table_used.csv, which is the
+  # 250 m grid, and 05b later merges 250 m tiles under 20 km filenames. Nothing
+  # in either script would say so.
+  #
+  # c("current", ...) keeps the inherited environment and adds to it, so a
+  # session that did not set the variable behaves exactly as before.
   p <- processx::process$new(
     rscript_bin,
     args = c(worker_script,
              as.character(rs), as.character(cs),
              as.character(n_row_shards), as.character(n_col_shards),
              as.character(max_concurrent)),
+    env = if (nzchar(Sys.getenv("SOC_PREDICT_RASTER_DIR"))) {
+      c("current", SOC_PREDICT_RASTER_DIR = Sys.getenv("SOC_PREDICT_RASTER_DIR"))
+    } else NULL,
     stdout  = log_file,
     stderr  = log_file,
     cleanup = TRUE
