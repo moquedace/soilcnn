@@ -2747,3 +2747,85 @@ four lenses also argued the A-vs-B gap was "within SE(S), therefore noise"; the
 synthesis rejected that as the wrong variance (the comparison is paired, t=5.1)
 and it should not appear in any write-up. The conclusion survived; two of its
 supporting arguments did not.
+
+
+## B2: the two-config branch, and an `all.equal` that tolerated 26 seconds
+
+Options 3 and 6 of `docs/b2_two_configs_decision.md`, implemented. The branch
+that writes `paired_by_seed.csv` had never executed, because no selection rule
+ever returns two configs -- so reaching it means naming two by hand, and naming
+them means freezing them over a `selection.rds` that is this project's evidence
+that nobody chose the final model after seeing the test set.
+
+The design: copy the tuning run, delete the COPY's frozen selection, drive the
+real stage 04 against the copy in a child process, assert, then delete the copy
+and prove the original never moved. Three seeds rather than ten -- the branch is
+a `pivot_wider` and four subtractions, identical at either count, and ten seeds
+buy power in a comparison nobody may act on because it is on the test set.
+25 minutes against 1-3.5 hours.
+
+### What the review found, and why two of them were the same shape
+
+Four adversarial lenses, then a judge that re-checked each finding against the
+repo. Five survived; two made the script's headline claim untrue, which is the
+worst defect available in a file whose purpose is to prove something.
+
+**`all.equal()` on timestamps has a 26.7-second window.** The check named "its
+modification time never moved" used
+`isTRUE(all.equal(as.numeric(orig_mtime), as.numeric(now_mtime)))`.
+`all.equal.numeric` switches to a RELATIVE comparison once `mean(abs(target))`
+exceeds the tolerance; an mtime is ~1.79e9 and the default tolerance is 1.49e-8,
+so the effective absolute window is **1.49e-8 x 1.79e9 = 26.7 seconds**.
+
+That is exactly the failure its sibling cannot see: `b2_09` compares bytes, so a
+rewrite with *identical content* moves only the timestamp. The two checks were
+written to cover for each other and left a joint hole. Now `identical()`, with
+the trap recorded -- `all.equal` is the obvious thing for the next reader to
+reach for, and nothing about it looks wrong.
+
+**The cleanup check reported "none was made" while a directory sat on disk.**
+`final_dir_made` was only assigned on the happy path, after stage 04 exits 0.
+But `04_final_model.R` creates its output directory at line 197, **before** its
+own validations at 201-203 and long before training -- so any failure past that
+line leaves a `final_<timestamp>` behind, the cleanup is skipped, and the check
+short-circuits to TRUE. The leftover is not inert: stage 05 resolves
+`final_run_id = "latest"` by globbing `^final_`, so a half-built directory from
+a failed B2 becomes the model the next map is drawn from. The target is now
+derived from disk at cleanup time by difference against a listing taken before
+the run -- and nothing outside that set is touched, so a concurrent stage 04 of
+Cassio's is never swept up.
+
+**A deleted original would have killed the script instead of reporting it.** The
+final `readBin()` sits outside the `tryCatch`, so the single catastrophe the
+script exists to detect would have surfaced as a connection error with no
+ledger, no verdict and no FAIL.
+
+**A comment claimed a check that did not exist.** The justification for putting
+the copy inside the work tree said the copy's record would carry a git commit
+"which is one of the things asserted below". Nothing asserted it. B2 is the only
+run in the project that exercises the `git -C` fix end to end -- a child process
+writing a record into a directory inside the work tree -- so a green B2 read as
+covering that fix and covered none of it. Now `b2_13`.
+
+**One of four columns was verified while the ledger said four.** The
+recomputation checked `d_ccc` only; `d_mae`, `d_rmse` and `d_mqi` rested on a
+check that four column NAMES exist, which no arithmetic error can fail. Stage 04
+computes them as four near-identical `paste0()` lines, which is exactly where a
+copy-paste sign inversion lives. Widened to all four in the same pivot.
+
+Two more found by re-reading afterwards: `seed` arrives as text from
+`read_csv2()` and would have joined to nothing against the integer column,
+failing `b2_08` for a reason that is not the defect it hunts; and the
+subtraction's direction is only meaningful if `c1` is the config the script
+asked for first, so the order is now tied back to the request.
+
+### The provenance fix this uncovered
+
+`freeze_selection()` captured `git_commit` with a bare `system2("git",
+"rev-parse", ...)`, which resolves against the PROCESS's working directory. The
+field was therefore NA whenever R sat outside the repo -- silently, in the one
+field that exists for a third party to check the claim. Noticed only because a
+test run printed `config, rule, metric, time` where the run before had printed
+`..., commit 3649fd8`; nothing failed, the provenance just quietly thinned. Now
+resolved with `git -C` against the record's own directory, and the message says
+when it could not be resolved at all.

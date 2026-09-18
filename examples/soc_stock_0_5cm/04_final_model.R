@@ -75,6 +75,68 @@ selection_metric <- "val_ccc"
 # larger sample: ten seeds here against three there.
 seeds <- c(7, 28, 42L, 94, 123L, 333, 456L, 666, 789L, 2025L)
 
+# ── Overrides, for driving this stage from outside ────────────────────────────
+#
+# THE rm(list = ls()) AT THE TOP IS WHY THESE ARE ENVIRONMENT VARIABLES.
+#
+# Every other example script can be driven by setting a variable before the
+# source(). This one cannot: line 20 erases the workspace, deliberately, so that
+# a stale object from a previous run can never leak into a final model.
+# Sys.setenv() survives that erasure; a workspace object does not.
+#
+# Nothing here changes what the stage does by default -- unset, every one of
+# them leaves the values above exactly as written. They exist so that a caller
+# can run the REAL script rather than a copy of it: _b2_two_config_check.R
+# points this stage at a throwaway copy of a tuning run, and a check that runs
+# a duplicate of the code is a check of the duplicate.
+#
+#   soc_final_tuning_run_id   which tuning run to read ("latest", or a run id)
+#   soc_final_config_ids      comma-separated config ids, e.g. "cfg_003,cfg_002"
+#   soc_final_seeds           comma-separated integers, e.g. "7,28,42"
+#
+# Naming config ids here is the same act as naming them at the top of the file,
+# so it takes the same path: selection_rule_applied becomes "manual" and the
+# frozen record says so.
+.env_chr <- function(name, default) {
+  v <- trimws(Sys.getenv(name))
+  if (!nzchar(v)) default else v
+}
+.env_csv <- function(name, default, as_int = FALSE) {
+  v <- trimws(Sys.getenv(name))
+  if (!nzchar(v)) return(default)
+  parts <- trimws(strsplit(v, ",", fixed = TRUE)[[1]])
+  parts <- parts[nzchar(parts)]
+  if (length(parts) == 0L) {
+    stop(name, " is set to '", v, "', which parses to no values.", call. = FALSE)
+  }
+  if (!as_int) return(parts)
+  n <- suppressWarnings(as.integer(parts))
+  # A seed that silently becomes NA would be a unit trained under an unknown
+  # RNG state and labelled with one, which is worse than refusing to start.
+  if (anyNA(n)) {
+    stop(name, " is set to '", v, "' and these are not integers: ",
+         paste(parts[is.na(n)], collapse = ", "), call. = FALSE)
+  }
+  n
+}
+
+tuning_run_id       <- .env_chr("soc_final_tuning_run_id", tuning_run_id)
+selected_config_ids <- .env_csv("soc_final_config_ids", selected_config_ids)
+seeds               <- .env_csv("soc_final_seeds", seeds, as_int = TRUE)
+
+if (nzchar(Sys.getenv("soc_final_config_ids")) ||
+    nzchar(Sys.getenv("soc_final_seeds")) ||
+    nzchar(Sys.getenv("soc_final_tuning_run_id"))) {
+  message("\n-- Driven by environment overrides --")
+  message("  tuning run : ", tuning_run_id)
+  message("  configs    : ",
+          if (is.null(selected_config_ids)) "(by the selection rule)"
+          else paste(selected_config_ids, collapse = ", "))
+  message("  seeds      : ", paste(seeds, collapse = ", "),
+          "  (", length(seeds), ")")
+  message("  Unset these variables to return to the values written in this file.")
+}
+
 device <- setup_torch_device(n_threads = 30, use_cuda = TRUE)
 
 # ── Final training hyperparameters ────────────────────────────────────────────

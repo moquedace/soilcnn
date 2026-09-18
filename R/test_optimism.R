@@ -44,6 +44,24 @@
 #' @param metric    The selection metric.
 #' @param note      Anything a reader would need to reconstruct the decision.
 #' @return The selection record, invisibly.
+#' The short commit of the work tree a given directory belongs to, or NA.
+#'
+#' `-C` is the whole point: without it git answers for the process's working
+#' directory, which has nothing to do with the file being written.
+.git_commit_at <- function(dir) {
+  out <- tryCatch(
+    suppressWarnings(system2("git", c("-C", shQuote(normalizePath(dir,
+                                                                 winslash = "/",
+                                                                 mustWork = FALSE)),
+                                      "rev-parse", "--short", "HEAD"),
+                             stdout = TRUE, stderr = FALSE)),
+    error = function(e) character(0))
+  if (length(out) == 0L || is.na(out[1]) || !nzchar(trimws(out[1]))) {
+    return(NA_character_)
+  }
+  trimws(out[1])
+}
+
 freeze_selection <- function(run_dir, config_id, rule = "one_se",
                              metric = "val_ccc", note = NA_character_) {
   stopifnot(is.character(config_id), length(config_id) >= 1L)
@@ -73,13 +91,24 @@ freeze_selection <- function(run_dir, config_id, rule = "one_se",
     frozen_at = Sys.time(),
     # The commit makes the claim checkable by a third party: the selection was
     # frozen against this state of the code, and git says when that state was.
-    git_commit = tryCatch(
-      suppressWarnings(trimws(system2("git", c("rev-parse", "--short", "HEAD"),
-                                      stdout = TRUE, stderr = FALSE)[1])),
-      error = function(e) NA_character_))
+    #
+    # RESOLVED AGAINST THE RECORD'S OWN DIRECTORY, not the process's. This ran
+    # `git rev-parse` with no -C, so it asked whatever directory R happened to
+    # be sitting in -- and returned NA whenever that was outside the repo, which
+    # a script doing setwd() elsewhere makes routine. The field then read NA
+    # with nothing saying why, in the one place whose whole job is to let
+    # someone else check the claim. It was noticed only because a test run
+    # printed "config, rule, metric, time" where the run before had printed
+    # "..., commit 3649fd8".
+    git_commit = .git_commit_at(sel_dir))
   safe_save_rds(rec, path, compress = FALSE)
   message("Selection frozen: ", paste(config_id, collapse = ", "),
           " (", rule, " on ", metric, ") -> ", path)
+  if (is.na(rec$git_commit)) {
+    message("  NOTE: no git commit recorded -- ", sel_dir, " is not inside a ",
+            "git work tree.\n  The record still fixes WHAT was chosen and ",
+            "WHEN; it cannot fix against which state of the code.")
+  }
   invisible(rec)
 }
 
