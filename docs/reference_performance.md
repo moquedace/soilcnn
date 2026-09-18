@@ -522,3 +522,69 @@ It builds its template from `raster_table_used.csv`'s first entry — always the
 250 m raster — and compares with `stopOnError = FALSE`, so at 20 km all nine
 layers warn and a genuinely broken mosaic would warn identically. That is why the
 geometry is re-checked here against a real 20 km raster.
+
+---
+
+## The finding nothing in the framework could see: a −24% bias
+
+Stage 06 ran for the first time in months as part of B5. It computes one number
+the framework does not, and that number is the most consequential result of the
+run.
+
+Final model `cfg_003`, 10-seed ensemble, on the 591 frozen test points:
+
+| | mean | median | max |
+|---|---|---|---|
+| observed | 39.45 | 31.18 | 173.4 |
+| predicted (ensemble median) | 29.84 | 25.60 | 112.9 |
+
+```
+bias = -9.61 t/ha  =  -24.4% of the observed mean  =  53% of the MAE
+```
+
+**More than half of the average error is a systematic shortfall**, not scatter.
+Using the ensemble *mean* instead of the median recovers 0.4 t/ha, so this is
+not the seed ensemble — it is the model.
+
+### Why
+
+Not a coding error: a modelling choice nobody had written down. The target is
+trained on `log1p` with a SmoothL1 loss, so the network estimates a conditional
+**median** in log space, and `expm1()` of that is the conditional median of the
+stock — not its mean. The target is right-skewed (mean/median = 1.27 on this
+test set), so the median sits systematically below the mean, and the extremes
+are compressed besides (max predicted 112.9 against 173.4 observed).
+
+### Why nothing caught it
+
+`calc_metrics()` returned `n, ccc, r2, mae, nse, rmse, rpd, mqi` and **not one
+of them carries a sign**. MAE and RMSE are unsigned by construction; R², NSE and
+RPD are insensitive to an offset in the relevant range; CCC penalises bias but
+mixes it with scatter, so a low CCC never says which one it is. A map that is a
+quarter light passed every check the framework makes.
+
+`calc_metrics()` now returns `bias` (signed, native units) and `bias_pct`
+(relative to the observed mean), and both propagate to the comparison tables.
+
+### What it means for the map
+
+**Do not sum this map for a total stock.** At −24.4% the total would be a
+quarter light. The 20 km map's own numbers already showed it without anyone
+reading them that way: the global sampled median came out at 25.22 t/ha against
+a training median of 29.3.
+
+Three ways forward, in increasing order of work:
+
+1. **Say what the map is.** It is a conditional median surface. That is a
+   legitimate and useful product — it is the right thing for "what is the
+   typical stock here" — and it is the wrong thing for a total. Labelling it
+   costs nothing and is honest.
+2. **Correct the back-transform.** A smearing estimator (Duan 1983) rescales
+   `expm1()` by the mean of the exponentiated residuals, which recovers the mean
+   without retraining. Cheap, and it can be calibrated on the same out-of-fold
+   residuals the conformal interval uses.
+3. **Target the mean directly** — train on the native scale with a loss whose
+   minimiser is the mean, and pay for it in sensitivity to the right tail.
+
+Option 1 is not optional whichever else is chosen: the current map is already
+published in this repository's outputs and it is a median surface.

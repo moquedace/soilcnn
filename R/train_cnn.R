@@ -797,10 +797,10 @@ run_cnn_tuning <- function(
       test_perf[] <- lapply(test_perf, function(z) z[NA_integer_])
     }
     val_metrics <- val_perf %>%
-      dplyr::select(n, ccc, r2, mae, nse, rmse, rpd, mqi) %>%
+      dplyr::select(n, ccc, r2, mae, nse, rmse, rpd, mqi, bias, bias_pct) %>%
       dplyr::rename_with(~ paste0("val_", .x))
     test_metrics <- test_perf %>%
-      dplyr::select(n, ccc, r2, mae, nse, rmse, rpd, mqi) %>%
+      dplyr::select(n, ccc, r2, mae, nse, rmse, rpd, mqi, bias, bias_pct) %>%
       dplyr::rename_with(~ paste0("test_", .x))
     row <- dplyr::bind_cols(
       tibble::tibble(

@@ -62,7 +62,8 @@ ccc <- function(obs, pred) {
 #'
 #' @param obs  Numeric vector of observed values.
 #' @param pred Numeric vector of predicted values (same length as obs).
-#' @return A one-row tibble with columns: n, ccc, r2, mae, nse, rmse, rpd, mqi.
+#' @return A one-row tibble with columns: n, ccc, r2, mae, nse, rmse, rpd,
+#'   mqi, bias (signed, native units) and bias_pct (relative to mean(obs)).
 calc_metrics <- function(obs, pred) {
   obs  <- as.numeric(obs)
   pred <- as.numeric(pred)
@@ -74,7 +75,8 @@ calc_metrics <- function(obs, pred) {
   if (length(obs) < 2) {
     return(tibble::tibble(n = length(obs), ccc = NA_real_, r2 = NA_real_,
                           mae = NA_real_, nse = NA_real_, rmse = NA_real_,
-                          rpd = NA_real_, mqi = NA_real_))
+                          rpd = NA_real_, mqi = NA_real_,
+                          bias = NA_real_, bias_pct = NA_real_))
   }
 
   ccc_val <- ccc(obs, pred)
@@ -104,8 +106,42 @@ calc_metrics <- function(obs, pred) {
     (ccc_val * nse_val) / (mae_val / mean_obs)
   }
 
+  # ── THE SIGNED BIAS, AND WHY IT TOOK THIS LONG ────────────────────────────
+  #
+  # Every metric above is blind to the SIGN of the error. MAE and RMSE are
+  # unsigned by construction; R2, NSE and RPD are unchanged by a constant
+  # offset in the right circumstances; and CCC penalises bias but mixes it with
+  # scatter, so a low CCC never says which one it is.
+  #
+  # The consequence was measured on this project's own final model, by a script
+  # (06_avaliacao_grafica.R) that had not run in months and computed the bias
+  # itself:
+  #
+  #   observed on test   mean 39.45   median 31.18
+  #   predicted          mean 29.84   median 25.60
+  #   bias              -9.61 t/ha, -24.4%, and 53% OF THE MAE
+  #
+  # More than half the average error was a systematic shortfall, and nothing in
+  # the framework could see it. For a stock map that is the number that matters:
+  # summing the map for a total gives a quarter less carbon than the data say.
+  #
+  # The cause is not a coding error but a modelling choice that nobody had
+  # written down: the target is trained on log1p with a SmoothL1 loss, so the
+  # network estimates a conditional MEDIAN in log space, and expm1() of that is
+  # the conditional median of the stock -- not its mean. The target is
+  # right-skewed (mean/median = 1.27 here), so the median is systematically
+  # below the mean, and the extremes are compressed besides.
+  #
+  # bias_pct is relative to mean(obs) so it is comparable across targets and
+  # depths; bias stays in native units because that is what a user subtracts.
+  bias_val <- mean(pred - obs, na.rm = TRUE)
+  bias_pct_val <- if (is.finite(mean_obs) && mean_obs != 0) {
+    100 * bias_val / mean_obs
+  } else NA_real_
+
   tibble::tibble(n = length(obs), ccc = ccc_val, r2 = r2_val, mae = mae_val,
-                 nse = nse_val, rmse = rmse_val, rpd = rpd_val, mqi = mqi_val)
+                 nse = nse_val, rmse = rmse_val, rpd = rpd_val, mqi = mqi_val,
+                 bias = bias_val, bias_pct = bias_pct_val)
 }
 
 # ── Aggregated tables ─────────────────────────────────────────────────────────
