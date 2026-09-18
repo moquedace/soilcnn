@@ -1124,11 +1124,34 @@ message(sprintf("  strip_ncol       : %d (vs r_ncol %d -> %.1fx less RAM)",
                 strip_ncol, r_ncol, r_ncol / strip_ncol))
 
 rs_get <- function(layer, col) raster_summary[[col]][raster_summary$layer == layer]
+# THE LAST PLACE THE TWO MEANS COULD BE CONFUSED, AND IT WAS.
+#
+# This printed "median map" and "mean map" -- and "mean map" is
+# ensemble_mean_ton_ha, the mean ACROSS THE SEEDS of expm1(prediction). That
+# is still a conditional median of the stock, and still low by ~24%. The band
+# that may be summed is the smeared one, and it was not printed at all.
+#
+# The bands were renamed to make that distinction unmissable (ensemble_mean
+# against smeared_mean); printing them here under the label "mean map" put it
+# straight back. Whoever reads this summary to get a number is exactly the
+# person who must not take the wrong one.
 message("\n  Central tendency (", target_unit, "):")
-message(sprintf("    median map -> median ~%.2f | mean %.2f | max %.2f",
+message(sprintf("    median over seeds -> median ~%.2f | mean %.2f | max %.2f",
                 global_med, rs_get("median", "gmean"), rs_get("median", "gmax")))
-message(sprintf("    mean map   ->            mean %.2f | max %.2f",
+message(sprintf("    mean over seeds   ->            mean %.2f | max %.2f",
                 rs_get("mean", "gmean"), rs_get("mean", "gmax")))
+message("      ^ both are conditional MEDIANS of the stock. Do not sum them.")
+if (!is.null(smear_cal)) {
+  message(sprintf("    smeared mean      ->            mean %.2f | max %.2f",
+                  rs_get("mean_smeared", "gmean"),
+                  rs_get("mean_smeared", "gmax")))
+  message(sprintf(
+    "      ^ the conditional MEAN (S = %.4f). The only band you may sum.",
+    smear_cal$s))
+} else {
+  message("    smeared mean      -> NOT WRITTEN. No band here may be summed ",
+          "for a total.")
+}
 
 message("\n  Rasters: ", output_raster_dir_w)
 message("  Logs:    ", output_log_dir)
