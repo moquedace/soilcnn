@@ -72,8 +72,16 @@ tuning_base  <- file.path(project_root, "outputs", "tuning",
                           "soc_stock_modeling", target_label)
 
 # The stage 03 run every capability measures itself against. PINNED BY NAME, not
-# resolved as "latest": baselines_20260917_014054 also holds a fold_plan.rds and
-# sorts after it, so "latest" would silently pick the baselines run.
+# resolved as "latest": every capability below is only readable beside the
+# others, and beside the 03 numbers, if all of them are defined against ONE run.
+# "latest" would silently re-point the whole sweep at the next 03 run somebody
+# starts, and every capability would still report PASS -- a PASS carries no
+# record of which run produced it. Point this line at a newer run on purpose.
+#
+# NOT because "latest" would land on a baselines run: those keep their
+# fold_plan.rds one level down, one per family, so 03b_run_baselines.R:92, which
+# scans for a TOP-LEVEL fold_plan.rds, never sees them, and sort(decreasing =
+# TRUE) puts "soc_" ahead of "baselines_" anyway.
 cnn_run_dir <- file.path(tuning_base, "soc_0_5cm_20260916_232318")
 
 # ── The harness ───────────────────────────────────────────────────────────────
