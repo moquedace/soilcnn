@@ -190,7 +190,7 @@ For the reasoning behind every architectural and training choice see [`docs/desi
 | File | Purpose |
 |------|---------|
 | [`R/utils.R`](R/utils.R) | Safe I/O helpers, torch device setup |
-| [`R/metrics.R`](R/metrics.R) | `ccc()` · R² · MAE · NSE · RMSE · MQI, per split and per quantile group |
+| [`R/metrics.R`](R/metrics.R) | `ccc()` · R² · MAE · NSE · RMSE · MQI · **signed bias**, per split and per quantile group |
 | [`R/cnn_architecture.R`](R/cnn_architecture.R) | Conv blocks, residual connections, SE attention, gate types, full model |
 | [`R/tune_grid.R`](R/tune_grid.R) | `make_tune_grid()` · `make_manual_tune_grid()` with documented parameter ranges |
 | [`R/patches.R`](R/patches.R) | One patch-indexing path, shared by extraction and prediction |
@@ -204,8 +204,10 @@ For the reasoning behind every architectural and training choice see [`docs/desi
 | [`R/train_table.R`](R/train_table.R) | `run_table_resample()` — tabular models, same comparison table |
 | [`R/caret_adapter.R`](R/caret_adapter.R) | `caret_spec()` — borrow ~230 models, never caret's resampling |
 | [`R/aoa.R`](R/aoa.R) | Dissimilarity index · area of applicability |
+| [`R/knndm.R`](R/knndm.R) | `knndm_folds()` · `prediction_sample()` — folds whose geometry matches what prediction faces, not what a block grid happens to give |
 | [`R/conformal.R`](R/conformal.R) | `conformal_calibrate()` · `picp_report()` — intervals with a coverage guarantee, and the check that they keep it |
 | [`R/occlusion.R`](R/occlusion.R) | `spatial_occlusion()` — does the trained network use the neighbourhood, or only the centre pixel? |
+| [`R/smearing.R`](R/smearing.R) | `smearing_factor()` · `smear()` — the back-transform of a log-trained median, and the one surface that may be summed |
 | [`R/test_optimism.R`](R/test_optimism.R) | `freeze_selection()` · `score_test_grid()` — the test set, scored only after the choice is locked |
 | [`R/api.R`](R/api.R) | **The front end**: `dsm_load()` · `spatial_cv()` · `dsm_train()` |
 | [`R/load_all.R`](R/load_all.R) | One `source()` for every module, in dependency order |
@@ -383,6 +385,39 @@ interval at all. When a group falls far below, that is where exchangeability —
 the theorem's only assumption — is breaking, which is the same place the area of
 applicability is pointing at.
 
+### A median surface and a mean surface, and they are not the same map
+
+```r
+sm <- smearing_from_run(tuning_dir, config_id)   # Duan (1983), one scalar
+mean_surface <- smear(log1p(median_surface), sm, lower_limit = 0)
+```
+
+Train on `log1p` with a SmoothL1 loss and the network estimates a conditional
+**median** in log space. `expm1()` of a median is the median of the stock — not
+its mean. On a right-skewed target the two are far apart, and the gap lands
+entirely on anyone who sums the map:
+
+| surface | bias on the frozen test set | may be summed for a total? |
+|---|---|---|
+| median (`expm1`) | **−24.4%** | **no** |
+| mean (smeared) | +2.7% | yes |
+
+Duan's smearing estimator corrects it with one scalar, calibrated on the same
+out-of-fold **ensemble** residuals the conformal interval uses — the deployed
+prediction is the ensemble median, so the calibrated residual has to be the
+ensemble's and not one seed's.
+
+**Nothing is replaced.** Stage 05 writes `soc_smeared_mean_ton_ha` *beside* the
+median band and labels both, because they answer different questions: the median
+is the typical stock at a pixel and minimises absolute error; the mean is the
+only one you may add up. Silently swapping one for the other trades a known bias
+for an unknown one.
+
+`print.smearing_cal()` also reports S by quintile of the prediction, because
+Duan's derivation assumes the residual is independent of the prediction and that
+is checkable — in the worked example it runs 1.80 at the low end to 1.15 at the
+high end, which the print warns about rather than silently averaging away.
+
 ---
 
 ## Tuneable parameters
@@ -408,7 +443,7 @@ The table below summarises the search space. See [`docs/tuning_guide.md`](docs/t
 
 ## Evaluation metrics
 
-All splits (train · validation · test) are evaluated with six metrics, also broken down by **quantile group** of the observed values (Q0–Q25, …, Q99–Q100):
+All splits (train · validation · test) are evaluated with eight metrics, also broken down by **quantile group** of the observed values (Q0–Q25, …, Q99–Q100):
 
 | Metric | Description |
 |--------|-------------|
@@ -419,6 +454,10 @@ All splits (train · validation · test) are evaluated with six metrics, also br
 | **RMSE** | Root Mean Squared Error |
 | **RPD** | Ratio of Performance to Deviation = sd(obs) / RMSE — standard pedometric benchmark (<1.4 poor, 1.4–2.0 fair, >2.0 good) |
 | **MQI** | Model Quality Index = (CCC × NSE) / (MAE / mean(obs)) |
+| **bias** | `mean(pred − obs)`, **signed**, in native units |
+| **bias_pct** | the same relative to `mean(obs)`, so it compares across targets and depths |
+
+The last two were added late, and the reason is worth stating: every other metric on this list is blind to the *sign* of the error. MAE and RMSE are unsigned by construction; R², NSE and RPD are unmoved by a constant offset in the right circumstances; CCC penalises bias but mixes it with scatter, so a low CCC never says which one it is. This framework's own final model was under-predicting its test set by **24.4%** — more than half its MAE — and nothing in the tables could see it.
 
 Model selection across configs ranks by **validation CCC** (descending), then **validation MAE** (ascending) as a tiebreaker — or by `one_se()`, which takes the simplest config within one standard error of the best and is the default in stage 04.
 
@@ -466,7 +505,7 @@ A CUDA-capable GPU is strongly recommended. CPU training is supported but ~10–
 
 ## Applied example
 
-The [`examples/soc_stock_0_5cm/`](examples/soc_stock_0_5cm/) directory contains a complete end-to-end run predicting **soil organic carbon stock (0–5 cm, ton/ha)** from 181 global raster predictors and ~37,000 WOSIS profiles.
+The [`examples/soc_stock_0_5cm/`](examples/soc_stock_0_5cm/) directory contains a complete end-to-end run predicting **soil organic carbon stock (0–5 cm, ton/ha)** from 181 global raster predictors and WOSIS profiles: 4,154 rows extracted, 3,766 surviving QC, 3,728 reaching the patch store.
 
 | Script | What it does |
 |--------|-------------|
@@ -479,6 +518,11 @@ The [`examples/soc_stock_0_5cm/`](examples/soc_stock_0_5cm/) directory contains 
 | [`05a_run_parallel.R`](examples/soc_stock_0_5cm/05a_run_parallel.R) | Orchestrator: splits the raster into a tile grid, runs many `05` workers concurrently, resumes on restart |
 | [`05b_merge_spatial_parts.R`](examples/soc_stock_0_5cm/05b_merge_spatial_parts.R) | Mosaics all finished tiles into the final wall-to-wall rasters |
 | [`05c_estimate_eta.R`](examples/soc_stock_0_5cm/05c_estimate_eta.R) | Re-runnable at any time while `05a_run_parallel.R` is in flight — reports progress and ETA |
+| [`06_avaliacao_grafica.R`](examples/soc_stock_0_5cm/06_avaliacao_grafica.R) | Graphical evaluation of the final model · it was this script, computing the bias itself, that first exposed the −24.4% back-transform defect |
+| [`07_area_of_applicability.R`](examples/soc_stock_0_5cm/07_area_of_applicability.R) | Dissimilarity index and AOA mask over the prediction grid |
+| [`99_check_pipeline.R`](examples/soc_stock_0_5cm/99_check_pipeline.R) | Numeric consistency across every artefact the pipeline wrote, against a saved snapshot |
+| [`99b_check_pipeline_visual.R`](examples/soc_stock_0_5cm/99b_check_pipeline_visual.R) | The same, but showing the actual thing on screen: where the profiles are, whether tuning improved anything, what the patches look like |
+| [`_capability_sweep.R`](examples/soc_stock_0_5cm/_capability_sweep.R) | Exercises the framework paths a second user would reach for first — reports *ran*, *asserted* and *measured* separately, because a path that ran without being asserted is the interesting row |
 
 ---
 
