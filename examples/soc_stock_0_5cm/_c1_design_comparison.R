@@ -114,7 +114,8 @@ required_checks <- c(
   "c1_04",  # the same frozen test set
   "c1_05",  # the designs really are different (a guard against running one twice)
   "c1_06",  # every config has repetitions under both designs
-  "c1_07"   # the noise floor is estimable under both, or the ranking is unreadable
+  "c1_07",  # the noise floor is estimable under both, or the ranking is unreadable
+  "c1_08"   # the ranking's own reliability is measurable, or rho means nothing
 )
 
 # ── 1. Read, and refuse anything that is not comparable ──────────────────────
@@ -262,12 +263,88 @@ cmp$rank_knn <- rank(-cmp[[paste0("knn_", mean_col)]], ties.method = "min")
 rho <- suppressWarnings(stats::cor(cmp$rank_blk, cmp$rank_knn, method = "spearman"))
 tau <- suppressWarnings(stats::cor(cmp$rank_blk, cmp$rank_knn, method = "kendall"))
 
+# THE CEILING, WITHOUT WHICH rho IS UNINTERPRETABLE.
+#
+# A low between-design rho reads as "the designs disagree". It reads identically
+# when NEITHER design can order these configs -- and that is the live case here:
+# the 3x3x3 run measured a seed noise floor of 0.031 against a 0.024 gap between
+# the top two configs.
+#
+# So rank the configs from one seed, rank them again from another, within the
+# SAME design, and correlate. That is the reproducibility of the ranking when
+# only the draw changes, and the between-design rho cannot exceed it. Averaged
+# over every pair of seeds, then projected by Spearman-Brown to the n-seed mean
+# the comparison actually used -- because rho above is computed on means over
+# n seeds, not on one.
+rank_reliability <- function(units, label) {
+  sds <- sort(unique(units$seed))
+  if (length(sds) < 2L) return(list(r1 = NA_real_, rk = NA_real_, pairs = 0L))
+  per_seed <- lapply(sds, function(sd) {
+    units %>%
+      dplyr::filter(.data$seed == sd) %>%
+      dplyr::group_by(.data$config_id) %>%
+      dplyr::summarise(m = mean(.data[[c1_metric]], na.rm = TRUE),
+                       .groups = "drop")
+  })
+  rr <- c()
+  for (i in seq_len(length(sds) - 1L)) {
+    for (j in (i + 1L):length(sds)) {
+      j2 <- dplyr::inner_join(per_seed[[i]], per_seed[[j]], by = "config_id",
+                              suffix = c("_a", "_b"))
+      if (nrow(j2) >= 3L) {
+        rr <- c(rr, suppressWarnings(
+          stats::cor(j2$m_a, j2$m_b, method = "spearman")))
+      }
+    }
+  }
+  rr <- rr[is.finite(rr)]
+  if (length(rr) == 0L) return(list(r1 = NA_real_, rk = NA_real_, pairs = 0L))
+  r1 <- mean(rr)
+  k  <- length(sds)
+  # Spearman-Brown. Negative or zero r1 means single-seed rankings are
+  # unrelated; projecting that is meaningless, so it is not projected.
+  rk <- if (r1 > 0) k * r1 / (1 + (k - 1) * r1) else r1
+  list(r1 = r1, rk = rk, pairs = length(rr))
+}
+
+rel_blk <- rank_reliability(blk$units, "block")
+rel_knn <- rank_reliability(knn$units, "kNNDM")
+ceiling_rho <- suppressWarnings(min(rel_blk$rk, rel_knn$rk, na.rm = TRUE))
+
+check_that("c1_08", "the ranking's own reliability is measurable",
+           is.finite(rel_blk$rk) && is.finite(rel_knn$rk),
+           sprintf("block %.3f | kNNDM %.3f (over %d and %d seed pair(s))",
+                   rel_blk$rk, rel_knn$rk, rel_blk$pairs, rel_knn$pairs))
+
 message("\n-- The ranking: does the order survive the design? --")
-message(sprintf("  Spearman rho : %+.3f", rho))
-message(sprintf("  Kendall tau  : %+.3f   (%.0f%% of config PAIRS ordered the same way)",
+message(sprintf("  Spearman rho between designs : %+.3f", rho))
+message(sprintf("  Kendall tau                  : %+.3f   (%.0f%% of config PAIRS ordered alike)",
                 tau, 100 * (tau + 1) / 2))
-message(sprintf("  biggest rank move: %d place(s)",
+message(sprintf("  biggest rank move            : %d place(s)",
                 max(abs(cmp$rank_blk - cmp$rank_knn))))
+message(sprintf("\n  CEILING -- the same design, different seeds:"))
+message(sprintf("    block  : %+.3f single seed -> %+.3f at %d seeds",
+                rel_blk$r1, rel_blk$rk, length(unique(blk$units$seed))))
+message(sprintf("    kNNDM  : %+.3f single seed -> %+.3f at %d seeds",
+                rel_knn$r1, rel_knn$rk, length(unique(knn$units$seed))))
+
+if (is.finite(ceiling_rho)) {
+  if (ceiling_rho < 0.3) {
+    message("\n  NEITHER DESIGN CAN ORDER THESE CONFIGS. The ranking barely ",
+            "reproduces when only\n  the seed changes, so the between-design ",
+            "rho is not evidence about the designs --\n  it is evidence that ",
+            "the configs are not separated. Read the LEVEL, not the order.")
+  } else if (rho >= ceiling_rho - 0.05) {
+    message("\n  The between-design rho is AT the ceiling: the designs agree ",
+            "as closely as one\n  design agrees with itself. The choice ",
+            "changes what you report, not what you rank.")
+  } else {
+    message("\n  The between-design rho is BELOW the ceiling by ",
+            sprintf("%.3f", ceiling_rho - rho),
+            ". The designs disagree by more\n  than seed noise explains, ",
+            "which is a real difference in what they select for.")
+  }
+}
 
 # ── 4. The winner ─────────────────────────────────────────────────────────────
 
@@ -308,6 +385,8 @@ safe_write_csv2(
     n_configs = nrow(cmp),
     median_delta = stats::median(cmp$delta),
     spearman_rho = rho, kendall_tau = tau,
+    rho_ceiling_block = rel_blk$rk, rho_ceiling_knndm = rel_knn$rk,
+    rho_ceiling = ceiling_rho,
     max_rank_move = max(abs(cmp$rank_blk - cmp$rank_knn)),
     noise_floor_block = nf_blk$median_sd, noise_floor_knndm = nf_knn$median_sd,
     winner_block = win_blk, winner_knndm_in_block_ids = win_knn_as_blk,
@@ -330,9 +409,9 @@ print_wide(checks, n = Inf)
 
 verdict <- length(missing_checks) == 0L && length(failed_checks) == 0L
 message("\n", strrep("=", 78))
-message(sprintf("C1: %s | %d of %d checks present and true | rho %+.3f | winner %s",
+message(sprintf("C1: %s | %d of %d checks | rho %+.3f (ceiling %+.3f) | winner %s",
                 if (verdict) "PASS" else "FAIL",
-                sum(checks$ok), length(required_checks), rho,
+                sum(checks$ok), length(required_checks), rho, ceiling_rho,
                 if (identical(win_blk, win_knn_as_blk)) "unchanged" else "CHANGED"))
 message(strrep("=", 78))
 
