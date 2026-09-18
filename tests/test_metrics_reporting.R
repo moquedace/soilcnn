@@ -271,26 +271,26 @@ bias_obs  <- c(10, 20, 30, 40, 50)
 bias_pred <- bias_obs - 6                      # every prediction 6 units low
 bm <- calc_metrics(bias_obs, bias_pred)
 
-results["bias_is_signed_and_exact"] <- isTRUE(all.equal(bm$bias, -6))
-results["bias_pct_is_relative_to_obs"] <-
+ok["bias_is_signed_and_exact"] <- isTRUE(all.equal(bm$bias, -6))
+ok["bias_pct_is_relative_to_obs"] <-
   isTRUE(all.equal(bm$bias_pct, 100 * -6 / mean(bias_obs)))
 
 # THE ASYMMETRY THAT MATTERS: over-prediction must come back with the other
 # sign. A bias reported as abs() would be no better than MAE.
-results["bias_sign_flips_with_direction"] <-
+ok["bias_sign_flips_with_direction"] <-
   isTRUE(all.equal(calc_metrics(bias_obs, bias_obs + 6)$bias, 6))
 
 # ...and MAE cannot tell those two apart, which is the whole point.
-results["mae_cannot_tell_the_direction"] <-
+ok["mae_cannot_tell_the_direction"] <-
   isTRUE(all.equal(calc_metrics(bias_obs, bias_obs - 6)$mae,
                    calc_metrics(bias_obs, bias_obs + 6)$mae))
 
-results["unbiased_predictions_give_zero_bias"] <-
+ok["unbiased_predictions_give_zero_bias"] <-
   abs(calc_metrics(bias_obs, bias_obs + c(-2, 2, -2, 2, 0))$bias) < 1e-12
 
 # The NA row must carry the same columns, or bind_rows() across a failed unit
 # and a successful one invents columns and the comparison table changes shape.
-results["na_row_has_the_bias_columns"] <- {
+ok["na_row_has_the_bias_columns"] <- {
   z <- calc_metrics(c(1), c(1))          # n < 2 -> the NA branch
   all(c("bias", "bias_pct") %in% names(z)) && is.na(z$bias)
 }
@@ -301,8 +301,8 @@ set.seed(11)
 skew_obs  <- exp(stats::rnorm(4000, log(30), 0.55))          # mean > median
 skew_pred <- rep(stats::median(skew_obs), length(skew_obs))  # a perfect median
 sm <- calc_metrics(skew_obs, skew_pred)
-results["a_perfect_median_is_a_biased_mean"] <- sm$bias < -1
-results["and_the_skew_is_what_causes_it"] <-
+ok["a_perfect_median_is_a_biased_mean"] <- sm$bias < -1
+ok["and_the_skew_is_what_causes_it"] <-
   mean(skew_obs) / stats::median(skew_obs) > 1.1
 
 cat(sprintf("  signed bias              : a -6 offset reads %.1f (MAE reads %.1f either way)
