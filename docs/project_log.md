@@ -1182,7 +1182,7 @@ Moved to after the resolution.
 Not in the numbered plan, and the end-to-end dev run does not exist without it:
 predicting the 250 m grid is measured in days.
 
-`predict_raster_dir` (env var `SOC_PREDICT_RASTER_DIR`) remaps the raster paths
+`predict_raster_dir` (env var `soc_predict_raster_dir`) remaps the raster paths
 by **file name**, keeping the training channel ORDER exactly -- the
 alphabetical order a directory listing returns is not the contract. A missing
 predictor aborts: the network has a weight for every one of them.

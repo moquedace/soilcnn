@@ -75,13 +75,13 @@ if (length(.cli_args) >= 4L) {
   n_row_shards  <- as.integer(.cli_args[3])
   n_col_shards  <- as.integer(.cli_args[4])
   if (length(.cli_args) >= 5L) max_concurrent <- as.integer(.cli_args[5])
-} else if (nzchar(Sys.getenv("SOC_ROW_SHARD_ID"))) {
-  row_shard_id  <- as.integer(Sys.getenv("SOC_ROW_SHARD_ID"))
-  col_shard_id  <- as.integer(Sys.getenv("SOC_COL_SHARD_ID"))
-  n_row_shards  <- as.integer(Sys.getenv("SOC_N_ROW_SHARDS"))
-  n_col_shards  <- as.integer(Sys.getenv("SOC_N_COL_SHARDS"))
-  if (nzchar(Sys.getenv("SOC_MAX_CONCURRENT"))) {
-    max_concurrent <- as.integer(Sys.getenv("SOC_MAX_CONCURRENT"))
+} else if (nzchar(Sys.getenv("soc_row_shard_id"))) {
+  row_shard_id  <- as.integer(Sys.getenv("soc_row_shard_id"))
+  col_shard_id  <- as.integer(Sys.getenv("soc_col_shard_id"))
+  n_row_shards  <- as.integer(Sys.getenv("soc_n_row_shards"))
+  n_col_shards  <- as.integer(Sys.getenv("soc_n_col_shards"))
+  if (nzchar(Sys.getenv("soc_max_concurrent"))) {
+    max_concurrent <- as.integer(Sys.getenv("soc_max_concurrent"))
   }
 }
 
@@ -113,8 +113,8 @@ is_partitioned <- n_total_shards > 1L
 # such a run proves -- never the map. The block below says so out loud, records
 # the resolution it actually ran at, and refuses to be silent about it.
 predict_raster_dir <- NULL
-if (nzchar(Sys.getenv("SOC_PREDICT_RASTER_DIR"))) {
-  predict_raster_dir <- Sys.getenv("SOC_PREDICT_RASTER_DIR")
+if (nzchar(Sys.getenv("soc_predict_raster_dir"))) {
+  predict_raster_dir <- Sys.getenv("soc_predict_raster_dir")
 }
 
 config_id    <- "auto"

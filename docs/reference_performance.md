@@ -478,3 +478,47 @@ not arrive there.
 (`ALTLIST classes must provide a Set_elt method`) before reaching any code here.
 That is an xgboost/R build incompatibility on this machine, not a framework
 defect, and testing an adapter through a broken backend measures the backend.
+
+---
+
+## B4 — the sharded path and the mosaic (2026-09-17)
+
+2×2 shards at 20 km, four workers, 16.1 min, then 05a's own merge of 36 tiles
+(9 bands × 4 shards).
+
+| band | max abs diff, 2×2 vs 1×1 | tolerance |
+|---|---|---|
+| ensemble_median | 4.6e-05 | 1.2e-02 |
+| ensemble_mean | 2.3e-05 | 1.2e-02 |
+| ensemble_sd | 2.5e-05 | 4.8e-03 |
+| ensemble_mad | 1.0e-04 | 5.8e-03 |
+| ensemble_min | 6.9e-05 | 9.9e-03 |
+| ensemble_max | 8.4e-05 | 1.5e-02 |
+| valid_mask | **0** | 1.1e-03 |
+| conformal_90_lower | 4.8e-05 | 8.4e-03 |
+| conformal_90_upper | 4.6e-05 | 1.6e-02 |
+
+**The mosaic reproduces the single-tile map.** Worst case 1.0e-04 t/ha, two
+orders of magnitude inside the tolerance, and the validity mask matches exactly.
+No seam, no dropped tile, no tile from another grid, and the workers predicted
+the 20 km grid rather than falling back to 250 m. Geometry, valid-pixel count
+and the three summary statistics agree on all nine bands.
+
+The residual 1e-04 is expected and is why the tolerance is relative: the 2×2 run
+gets a different thread count per worker, its block boundaries fall elsewhere so
+the inference batches hold different pixels, and `expm1()` amplifies a float32
+discrepancy by about 26 at the median and 113 at the maximum.
+
+### Two things the run taught about the scripts themselves
+
+**05a already runs 05b.** Line 283, documented in its own header at line 29. The
+first version of the check ran the merge a second time — harmless, since it is
+idempotent over the same tiles, but it verified a mosaic the *check* had produced
+rather than the one the *pipeline* produces. Checking your own side effect is not
+checking the pipeline. The check now reads 05a's merge log instead.
+
+**05b's geometry check is inert whenever the prediction rasters are overridden.**
+It builds its template from `raster_table_used.csv`'s first entry — always the
+250 m raster — and compares with `stopOnError = FALSE`, so at 20 km all nine
+layers warn and a genuinely broken mosaic would warn identically. That is why the
+geometry is re-checked here against a real 20 km raster.

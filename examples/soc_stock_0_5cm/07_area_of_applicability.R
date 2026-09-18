@@ -62,8 +62,8 @@ config_id    <- "auto"     # or a specific config
 # a directory = predict the DI on that grid instead (see 05's own note: it does
 # not resample, and the window is counted in pixels).
 predict_raster_dir <- NULL
-if (nzchar(Sys.getenv("SOC_PREDICT_RASTER_DIR"))) {
-  predict_raster_dir <- Sys.getenv("SOC_PREDICT_RASTER_DIR")
+if (nzchar(Sys.getenv("soc_predict_raster_dir"))) {
+  predict_raster_dir <- Sys.getenv("soc_predict_raster_dir")
 }
 
 # Rows of raster read at once. The DI is an exact nearest-neighbour search, so

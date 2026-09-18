@@ -132,14 +132,14 @@ if (dir.exists(parts_dir)) {
 
 # ── STEP 1: 05a at 2 x 2 ──────────────────────────────────────────────────────
 #
-# 05a now takes the grid from the environment and passes SOC_PREDICT_RASTER_DIR
+# 05a now takes the grid from the environment and passes soc_predict_raster_dir
 # to its workers explicitly rather than relying on inheritance. Before that fix
 # this step needed a patched copy of 05a -- and a test that requires editing the
 # script it tests is a test that runs once.
-Sys.setenv(SOC_PREDICT_RASTER_DIR = raster_dir_20km,
-           SOC_N_ROW_SHARDS = n_row_shards,
-           SOC_N_COL_SHARDS = n_col_shards,
-           SOC_MAX_CONCURRENT = 4L)
+Sys.setenv(soc_predict_raster_dir = raster_dir_20km,
+           soc_n_row_shards = n_row_shards,
+           soc_n_col_shards = n_col_shards,
+           soc_max_concurrent = 4L)
 
 t0 <- Sys.time()
 a_res <- processx::run(rscript_bin,
@@ -156,9 +156,9 @@ stopifnot(a_res$status == 0L)
 # They live in the session, and a later real 05a run in the same session would
 # silently take 2 x 2 instead of 250 x 4 -- four enormous workers instead of a
 # thousand small ones, which is an out-of-memory failure an hour in with no
-# indication of why. SOC_PREDICT_RASTER_DIR is left alone deliberately: 05b and
+# indication of why. soc_predict_raster_dir is left alone deliberately: 05b and
 # 05c ignore it, and the next 05 in this session is meant to stay at 20 km.
-Sys.unsetenv(c("SOC_N_ROW_SHARDS", "SOC_N_COL_SHARDS", "SOC_MAX_CONCURRENT"))
+Sys.unsetenv(c("soc_n_row_shards", "soc_n_col_shards", "soc_max_concurrent"))
 
 # ── STEP 1b: the two guards 05a does not have ─────────────────────────────────
 #
@@ -190,21 +190,28 @@ stopifnot(length(tile_files) == 9L * n_row_shards * n_col_shards,
           all(grepl(grid_pat, basename(tile_files))))
 tiles_mtime <- max(file.info(tile_files)$mtime)
 
-# ── STEP 2: 05b merges ────────────────────────────────────────────────────────
+# ── STEP 2: the merge 05a already did ─────────────────────────────────────────
 #
-# EXPECT NINE WARNINGS about the mosaic geometry differing from the template.
-# 05b builds that template from raster_table_used.csv's first entry, which is the
-# 250 m raster, and compares with stopOnError = FALSE. It never reads
-# SOC_PREDICT_RASTER_DIR, so at 20 km every layer warns.
+# 05a RUNS 05b ITSELF, at 05a_run_parallel.R:283-291, and says so in its header
+# at line 29. The first version of this script ran 05b a second time -- harmless,
+# because the merge is idempotent over the same tiles, but it doubled the merge
+# and it verified a mosaic this script had produced rather than the one the
+# PIPELINE produces. Checking your own side effect is not checking the pipeline.
 #
-# Those warnings are not breakage -- AND THEIR ABSENCE WOULD NOT BE CORRECTNESS.
-# 05b's geometry check is dead for this run, which is precisely why the check
-# below redoes it against a real 20 km raster instead of trusting 05b's silence.
-b_res <- processx::run(rscript_bin,
-                       args = file.path(script_dir, "05b_merge_spatial_parts.R"),
-                       stdout = "|", stderr = "|", echo = TRUE,
-                       error_on_status = FALSE)
-stopifnot(b_res$status == 0L)
+# So the merge is not re-run. What is checked is 05a's own merge log and the
+# nine files it left behind.
+#
+# EXPECT NINE WARNINGS in that log about the mosaic geometry differing from the
+# template. 05b builds the template from raster_table_used.csv's first entry --
+# the 250 m raster -- and compares with stopOnError = FALSE. It never reads the
+# prediction-raster override, so at 20 km every layer warns.
+#
+# Those warnings are not breakage, AND THEIR ABSENCE WOULD NOT BE CORRECTNESS.
+# 05b's geometry check is dead for this run, which is exactly why the checks
+# below redo it against a real 20 km raster rather than trusting 05b's silence.
+merge_log <- file.path(log_dir, "merge.log")
+stopifnot(file.exists(merge_log))
+message("05a's merge log: ", merge_log)
 
 bands <- c("ensemble_median_ton_ha", "ensemble_mean_ton_ha", "ensemble_sd_ton_ha",
            "ensemble_mad_ton_ha", "ensemble_min_ton_ha", "ensemble_max_ton_ha",

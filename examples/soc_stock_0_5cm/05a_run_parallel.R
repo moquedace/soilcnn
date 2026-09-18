@@ -45,7 +45,7 @@ n_row_shards <- 250
 # The idiom is 05_predict_spatial.R:60-72's: an environment variable wins when
 # it is set, the literal stands otherwise, so nothing changes for a normal run.
 #
-# SOC_N_ROW_SHARDS / SOC_N_COL_SHARDS / SOC_MAX_CONCURRENT
+# soc_n_row_shards / soc_n_col_shards / soc_max_concurrent
 .env_int <- function(name, default) {
   v <- Sys.getenv(name)
   if (!nzchar(v)) return(default)
@@ -96,9 +96,9 @@ n_col_shards <- 4
 max_concurrent <- 3
 
 
-n_row_shards   <- .env_int("SOC_N_ROW_SHARDS",   n_row_shards)
-n_col_shards   <- .env_int("SOC_N_COL_SHARDS",   n_col_shards)
-max_concurrent <- .env_int("SOC_MAX_CONCURRENT", max_concurrent)
+n_row_shards   <- .env_int("soc_n_row_shards",   n_row_shards)
+n_col_shards   <- .env_int("soc_n_col_shards",   n_col_shards)
+max_concurrent <- .env_int("soc_max_concurrent", max_concurrent)
 poll_interval_s <- 30
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
@@ -199,7 +199,7 @@ launch_shard <- function(idx) {
     sprintf("shard_r%03dof%03d_c%03dof%03d.log", rs, n_row_shards, cs, n_col_shards))
   # THE ENVIRONMENT IS PASSED, NOT ASSUMED.
   #
-  # 05_predict_spatial.R:115-118 reads SOC_PREDICT_RASTER_DIR to decide WHICH
+  # 05_predict_spatial.R:115-118 reads soc_predict_raster_dir to decide WHICH
   # rasters to predict over. Spawning without `env` left that to processx
   # inheriting the parent environment -- true today, undocumented, and silent
   # when it is not: the worker falls back to raster_table_used.csv, which is the
@@ -214,8 +214,8 @@ launch_shard <- function(idx) {
              as.character(rs), as.character(cs),
              as.character(n_row_shards), as.character(n_col_shards),
              as.character(max_concurrent)),
-    env = if (nzchar(Sys.getenv("SOC_PREDICT_RASTER_DIR"))) {
-      c("current", SOC_PREDICT_RASTER_DIR = Sys.getenv("SOC_PREDICT_RASTER_DIR"))
+    env = if (nzchar(Sys.getenv("soc_predict_raster_dir"))) {
+      c("current", soc_predict_raster_dir = Sys.getenv("soc_predict_raster_dir"))
     } else NULL,
     stdout  = log_file,
     stderr  = log_file,
