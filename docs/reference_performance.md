@@ -588,3 +588,46 @@ Three ways forward, in increasing order of work:
 
 Option 1 is not optional whichever else is chosen: the current map is already
 published in this repository's outputs and it is a median surface.
+
+### The correction, measured on the same data
+
+Duan's smearing estimator (1983, JASA 78:605–610), calibrated on the 9,276
+cross-validated residuals of `cfg_003` in log space:
+
+```
+S = mean(exp(residual)) = 1.3594
+```
+
+The residuals are near-lognormal — `exp(mean + sd²/2) = 1.3587` against the
+empirical 1.3594 — so the estimator behaves exactly as the theory says.
+
+Applied to the 591 frozen test points:
+
+| surface | mean | bias | MAE | RMSE | CCC | total stock |
+|---|---|---|---|---|---|---|
+| median (`expm1`) | 29.82 | **−24.4%** | 18.15 | 28.07 | 0.4748 | −24.4% |
+| mean (smeared) | 40.90 | **+3.7%** | 19.14 | 27.07 | **0.5692** | +3.7% |
+
+**MAE going up is the trade-off, not a regression.** The median minimises
+absolute error; the mean minimises squared error. Correcting toward the mean
+must improve RMSE and worsen MAE, and a change that improved both would mean
+something other than a median-to-mean move had happened. The test asserts
+exactly that pair of directions.
+
+CCC improves by 0.094 — nearly three times the seed noise floor — because CCC
+penalises bias, and removing a −24% bias is the largest single improvement
+anything has produced in this project.
+
+**Nothing is replaced.** Stage 04 writes `smearing.rds` beside the conformal
+calibration, stage 05 reads it and writes `soc_mean_smeared_ton_ha` beside the
+median band. Each answers its own question:
+
+| question | surface |
+|---|---|
+| what is the typical stock here? | the median map |
+| what is the total stock over this area? | the smeared mean map, and only it |
+
+In stage 05 the correction is exact and free: `expm1` is monotone, so the median
+commutes with it and `log1p(ensemble median)` *is* the ensemble median in log
+space. The band is `(1 + median) × S − 1`, with no second matrix of predictions
+and no second pass over the network.

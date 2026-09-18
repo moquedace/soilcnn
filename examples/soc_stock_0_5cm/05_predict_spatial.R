@@ -774,6 +774,32 @@ w_mad    <- open_writer("soc_uncert_mad_ton_ha",  "ensemble_mad_ton_ha")
 w_min    <- open_writer("soc_pred_min_ton_ha",    "ensemble_min_ton_ha")
 w_max    <- open_writer("soc_pred_max_ton_ha",    "ensemble_max_ton_ha")
 w_mask   <- open_writer("valid_patch_mask",       "valid_mask", datatype = "INT1U")
+
+# ── The MEAN surface, beside the median one ───────────────────────────────────
+#
+# The ensemble median is a conditional median, and expm1() of a median is a
+# median. On a right-skewed target that sits below the mean -- measured at
+# -24.4% on this project's test set -- so the median map must not be summed for
+# a total. Stage 04 calibrates Duan's smearing factor on the out-of-fold
+# residuals and saves it; read here rather than recomputed, for the same reason
+# the conformal q is read: two code paths producing "the correction" is how a
+# map ends up carrying one nobody measured.
+#
+# NOTHING IS REPLACED. Both surfaces are written and each answers its own
+# question.
+smear_cal <- NULL
+spath <- file.path(final_run_dir, config_id, "smearing.rds")
+if (file.exists(spath)) {
+  smear_cal <- readRDS(spath)
+  message(sprintf("Smearing: S = %.4f from %d held-out residuals -- a mean surface will be written beside the median one.",
+                  smear_cal$s, smear_cal$n))
+} else {
+  message("Smearing: no calibration at ", spath,
+          "\n  The map carries the MEDIAN surface only, which must NOT be summed for a total.")
+}
+w_smear <- if (!is.null(smear_cal)) {
+  open_writer("soc_mean_smeared_ton_ha", "conditional_mean_ton_ha")
+}
 w_lower  <- if (!is.null(conformal_cal)) {
   open_writer(sprintf("soc_pi%02d_lower_ton_ha", conformal_level),
               sprintf("conformal_%02d_lower_ton_ha", conformal_level))
@@ -783,7 +809,7 @@ w_upper  <- if (!is.null(conformal_cal)) {
               sprintf("conformal_%02d_upper_ton_ha", conformal_level))
 }
 writers  <- purrr::compact(list(w_median, w_mean, w_sd, w_mad, w_min, w_max,
-                                w_mask, w_lower, w_upper))
+                                w_mask, w_lower, w_upper, w_smear))
 
 abort_and_cleanup <- function(msg) {
   for (w in writers) try(terra::writeStop(w$rast), silent = TRUE)
@@ -820,6 +846,7 @@ for (b in seq_along(block_starts)) {
   blk_mask   <- rep(0L, blk_len)
   blk_lower  <- rep(NA_real_, blk_len)
   blk_upper  <- rep(NA_real_, blk_len)
+  blk_smear  <- rep(NA_real_, blk_len)
 
   if (cb$n_req > 0L) {
     # Convert GLOBAL indices (row-1)*r_ncol+col into tile-block indices
@@ -841,6 +868,14 @@ for (b in seq_along(block_starts)) {
       blk_mad[tv]    <- cb$mad
       blk_min[tv]    <- cb$min
       blk_max[tv]    <- cb$max
+
+      if (!is.null(smear_cal)) {
+        # EXACT, AND FREE. expm1 is monotone increasing, so the median commutes
+        # with it: log1p(ensemble median) IS the ensemble median in log space.
+        # No second matrix of predictions, no second pass over the network.
+        #   smeared = exp(log1p(med)) * S - 1 = (1 + med) * S - 1
+        blk_smear[tv] <- pmax((1 + cb$median) * smear_cal$s - 1, 0)
+      }
 
       if (!is.null(conformal_cal)) {
         # The ensemble SPREAD is the difficulty score of the normalised
@@ -888,6 +923,9 @@ for (b in seq_along(block_starts)) {
   if (!is.null(conformal_cal)) {
     terra::writeValues(w_lower$rast, blk_lower, bs_local, cb$out_nrows)
     terra::writeValues(w_upper$rast, blk_upper, bs_local, cb$out_nrows)
+  }
+  if (!is.null(smear_cal)) {
+    terra::writeValues(w_smear$rast, blk_smear, bs_local, cb$out_nrows)
   }
 
   rss_mb <- ps::ps_memory_info(.proc_handle)[["rss"]] / 1e6
@@ -941,8 +979,9 @@ f_mad    <- w_mad$file;    f_min  <- w_min$file;  f_max <- w_max$file
 f_mask   <- w_mask$file
 f_lower  <- if (!is.null(conformal_cal)) w_lower$file else NULL
 f_upper  <- if (!is.null(conformal_cal)) w_upper$file else NULL
+f_smear  <- if (!is.null(smear_cal))     w_smear$file else NULL
 written_files <- c(f_median, f_mean, f_sd, f_mad, f_min, f_max, f_mask,
-                   f_lower, f_upper)
+                   f_lower, f_upper, f_smear)
 
 sanity_ok <- TRUE
 if (!is_partitioned && n_valid_total == 0L) {
@@ -1016,7 +1055,8 @@ safe_write_csv2(prediction_config,
 raster_summary <- purrr::map_dfr(
   purrr::compact(list(median = f_median, mean = f_mean, sd = f_sd,
                       mad = f_mad, min = f_min, max = f_max, mask = f_mask,
-                      pi_lower = f_lower, pi_upper = f_upper)),
+                      pi_lower = f_lower, pi_upper = f_upper,
+                      mean_smeared = f_smear)),
   function(f) {
     r <- terra::rast(f)
     tibble::tibble(

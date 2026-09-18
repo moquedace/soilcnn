@@ -538,6 +538,58 @@ train_config_all_seeds <- function(cfg, config_id) {
           compress = FALSE)
       }
       safe_write_csv2(ens, file.path(cfg_out_dir, "ensemble_predictions.csv"))
+
+      # ══════════════════════════════════════════════════════════════════════
+      # THE BACK-TRANSFORM: a median surface and a mean surface
+      #
+      # expm1() of a conditional median is a median. The target is right-skewed,
+      # so this model under-predicted the frozen test set by 24.4% -- more than
+      # half its MAE -- and every metric except the new signed bias was blind to
+      # it. Anyone summing the map for a total carbon stock got a quarter less
+      # than the data say.
+      #
+      # Duan's smearing estimator corrects it with one scalar, calibrated on the
+      # same out-of-fold residuals the conformal interval uses. NOTHING IS
+      # REPLACED: the median surface is the right answer to "what is the typical
+      # stock here" and the mean surface is the only one that may be summed.
+      # Both are written and both are labelled.
+      # ══════════════════════════════════════════════════════════════════════
+      sm <- smearing_from_run(tuning_dir, config_id)
+      if (!is.null(sm)) {
+        print(sm)
+        safe_save_rds(sm, file.path(cfg_out_dir, "smearing.rds"),
+                      compress = FALSE)
+
+        # MEASURED ON THE TEST SET, which the factor was not calibrated on.
+        # The trade-off is reported rather than buried: correcting toward the
+        # mean must improve RMSE and worsen MAE, and a run where it improved
+        # both would mean something other than a median-to-mean move happened.
+        tst <- dplyr::filter(preds, .data$dataset_role == "test") %>%
+          dplyr::group_by(.data$sample_id) %>%
+          dplyr::summarise(obs = dplyr::first(.data$obs),
+                           pred = stats::median(.data$pred), .groups = "drop")
+        if (nrow(tst) > 0L) {
+          # expm1 is monotone, so the median commutes with it: log1p of the
+          # ensemble median IS the ensemble median in log space. No re-reading.
+          corrected <- smear(log1p(tst$pred), sm, lower_limit = 0)
+          m_naive <- calc_metrics(tst$obs, tst$pred)
+          m_smear <- calc_metrics(tst$obs, corrected)
+          message("\n-- [", config_id, "] back-transform, on the test set --")
+          print(dplyr::bind_rows(
+            dplyr::mutate(m_naive, surface = "median (expm1)", .before = 1),
+            dplyr::mutate(m_smear, surface = "mean (smeared)", .before = 1)))
+          message(sprintf(
+            "   total stock: observed %.0f | median surface %.0f (%+.1f%%) | mean surface %.0f (%+.1f%%)",
+            sum(tst$obs), sum(tst$pred),
+            100 * (sum(tst$pred) / sum(tst$obs) - 1),
+            sum(corrected), 100 * (sum(corrected) / sum(tst$obs) - 1)))
+          message("   The median surface answers \"typical stock here\"; only the")
+          message("   mean surface may be summed for a total.")
+        }
+      } else {
+        message("\nSmearing: the tuning run wrote no transform-space residuals, ",
+                "so no mean surface.")
+      }
     } else {
       message("\n-- [", config_id, "] conformal skipped: ", nrow(cal_rows),
               " calibration point(s), ", nrow(chk_rows), " to check on.")
