@@ -155,93 +155,93 @@ gerar_graficos_cnn <- function(
         draw()
         mtext(heading,outer=TRUE,side=3,line=2.8,adj=0,cex=1.55,font=2,col=ink)
         mtext(subheading,outer=TRUE,side=3,line=1.2,adj=0,cex=.88,col=ink_soft)
-        mtext(paste("SOC 0\u20135 cm |",config_id,"| Resultados salvos \u2022 gr\u00e1ficos gerados em R"),outer=TRUE,side=1,line=.7,adj=0,cex=.75,col=ink_soft)
+        mtext(paste("SOC 0\u20135 cm |",config_id,"| Saved results \u2022 figures generated in R"),outer=TRUE,side=1,line=.7,adj=0,cex=.75,col=ink_soft)
       },finally=dev.off())
     }
     figure_index[[length(figure_index)+1L]] <<- list(slug=slug,heading=heading,caption=caption)
   }
-  figure_panel("01_ranking","01 | Quem chegou mais perto do topo?",
-    sprintf("%d configura\u00e7\u00f5es \u2022 CCC de valida\u00e7\u00e3o; MAE como desempate",nrow(ranking)),function() {
+  figure_panel("01_ranking","01 | Who got closest to the top?",
+    sprintf("%d configs \u2022 validation CCC; MAE as tiebreaker",nrow(ranking)),function() {
       r <- ranking[nrow(ranking):1,]; yy <- seq_len(nrow(r))
       par(mar=c(5,7,2,1))
-      plot(r$val_ccc,yy,type="n",xlim=c(0,max(r$val_ccc)+.07),yaxt="n",ylab="",xlab="CCC de valida\u00e7\u00e3o \u2014 maior \u00e9 melhor")
+      plot(r$val_ccc,yy,type="n",xlim=c(0,max(r$val_ccc)+.07),yaxt="n",ylab="",xlab="Validation CCC -- higher is better")
       abline(v=seq(0,.7,.1),col="#edf1f4");segments(0,yy,r$val_ccc,yy,col="#dbe5e9",lwd=3)
       points(r$val_ccc,yy,pch=19,col=window_colours[as.character(r$window_sizes)],cex=1.25)
       axis(2,at=yy,labels=r$config_id,las=1,cex.axis=.85)
       text(r$val_ccc+.01,yy,sprintf("%.3f",r$val_ccc),adj=0,cex=.8)
       top <- which(r$rank<=3)
-      text(.01,yy[top],paste(r$embed_pool[top],ifelse(r$gate_type[top]=="no_gate_concat","\u00b7 concatena\u00e7\u00e3o","\u00b7 gate vetorial")),adj=0,cex=.8)
-      legend("bottomleft",legend=names(window_colours),col=window_colours,pch=19,bty="n",ncol=2,title="Janelas (pixels)",cex=.85)
-    },"Uma execu\u00e7\u00e3o por configura\u00e7\u00e3o. A pequena diferen\u00e7a entre os primeiros colocados n\u00e3o estabelece superioridade estat\u00edstica.",height_in=10)
-  figure_panel("02_desempenho_custo","02 | Qual desempenho cabe no seu or\u00e7amento?",
-    "Tempo observado \u00d7 CCC de valida\u00e7\u00e3o \u2022 \u00e1rea dos c\u00edrculos proporcional aos par\u00e2metros",function() {
+      text(.01,yy[top],paste(r$embed_pool[top],ifelse(r$gate_type[top]=="no_gate_concat","\u00b7 concat","\u00b7 vector gate")),adj=0,cex=.8)
+      legend("bottomleft",legend=names(window_colours),col=window_colours,pch=19,bty="n",ncol=2,title="Windows (pixels)",cex=.85)
+    },"One run per config. The small gap between the top-ranked configs does not establish statistical superiority.",height_in=10)
+  figure_panel("02_desempenho_custo","02 | What performance fits your budget?",
+    "Observed runtime \u00d7 validation CCC \u2022 circle area proportional to parameters",function() {
       plot(ranking$runtime_min,ranking$val_ccc,pch=21,bg=adjustcolor(window_colours[as.character(ranking$window_sizes)],alpha.f=.75),col="white",
         cex=sqrt(ranking$parameters/1e6)*.65,xlim=c(0,max(ranking$runtime_min)*1.16),ylim=range(ranking$val_ccc)+c(-.02,.02),
-        xlab="Tempo de treinamento (min)",ylab="CCC de valida\u00e7\u00e3o")
+        xlab="Training time (min)",ylab="Validation CCC")
       f <- ranking[order(ranking$runtime_min),]; f <- f[f$val_ccc>c(-Inf,head(cummax(f$val_ccc),-1)),]
       lines(f$runtime_min,f$val_ccc,lty=2,col=teal)
       text(ranking$runtime_min[1:3],ranking$val_ccc[1:3],ranking$config_id[1:3],pos=c(3,1,3),cex=.85,font=2)
-      legend("bottomright",legend=names(window_colours),col=window_colours,pch=19,bty="n",ncol=2,title="Janelas (pixels)",cex=.8)
-    },"Linha tracejada: fronteira de efici\u00eancia observada. Tempos dependem de \u00e9pocas, hardware e condi\u00e7\u00f5es da execu\u00e7\u00e3o. Par\u00e2metros contados a partir da arquitetura do c\u00f3digo atual.")
-  figure_panel("03_aprendizado","03 | Trajet\u00f3rias de aprendizado por semente",
-    "Cada cor \u00e9 uma semente \u2022 c\u00edrculos marcam os checkpoints escolhidos",function() {
-      plot(NA,xlim=c(1,max(vapply(hist,function(h) max(h$epoch),numeric(1)))),ylim=range(unlist(lapply(hist,`[[`,"train_loss"))),log="y",xlab="\u00c9poca",ylab="SmoothL1 em log1p (escala log)",main="Treino \u2022 trajet\u00f3ria completa")
+      legend("bottomright",legend=names(window_colours),col=window_colours,pch=19,bty="n",ncol=2,title="Windows (pixels)",cex=.8)
+    },"Dashed line: observed efficiency frontier. Times depend on epochs, hardware and run conditions. Parameters counted from the current code's architecture.")
+  figure_panel("03_aprendizado","03 | Learning trajectories by seed",
+    "Each colour is a seed \u2022 circles mark the chosen checkpoints",function() {
+      plot(NA,xlim=c(1,max(vapply(hist,function(h) max(h$epoch),numeric(1)))),ylim=range(unlist(lapply(hist,`[[`,"train_loss"))),log="y",xlab="Epoch",ylab="SmoothL1 on log1p (log scale)",main="Training \u2022 full trajectory")
       for(i in seq_along(seeds)) lines(hist[[i]]$epoch,hist[[i]]$train_loss,col=seed_colours[i])
       late <- unlist(lapply(hist,function(h) h$validation_loss[h$epoch>=10]))
-      plot(NA,xlim=c(1,max(vapply(hist,function(h) max(h$epoch),numeric(1)))),ylim=c(min(late)-.005,quantile(late,.99)+.006),xlab="\u00c9poca",ylab="SmoothL1 em log1p",main="Valida\u00e7\u00e3o \u2022 detalhe da converg\u00eancia")
+      plot(NA,xlim=c(1,max(vapply(hist,function(h) max(h$epoch),numeric(1)))),ylim=c(min(late)-.005,quantile(late,.99)+.006),xlab="Epoch",ylab="SmoothL1 on log1p",main="Validation \u2022 convergence detail")
       for(i in seq_along(seeds)) {
         h <- hist[[i]]; lines(h$epoch,h$validation_loss,col=seed_colours[i]); b <- match(seed_perf$best_epoch[i],h$epoch)
         points(h$epoch[b],h$validation_loss[b],pch=21,bg=seed_colours[i],col="white",cex=1.1)
       }
       legend("topright",legend=seeds,col=seed_colours,lty=1,ncol=5,bty="n",cex=.6)
-    },"Valida\u00e7\u00e3o ampliada na regi\u00e3o de converg\u00eancia: perdas iniciais podem ficar fora do eixo. Treino inclui augmentation e dropout; valida\u00e7\u00e3o usa modo de avalia\u00e7\u00e3o.",panels=2)
+    },"Validation zoomed on the convergence region: early losses may fall off the axis. Training uses augmentation and dropout; validation runs in eval mode.",panels=2)
   original <- ranking[ranking$config_id==config_id,]
-  figure_panel("04_estabilidade","04 | O vencedor se repete em novas sementes?",
-    "Valida\u00e7\u00e3o \u2022 pontos = retreinamentos; barras = m\u00e9dia \u00b1 DP; losango = tuning original",function() {
+  figure_panel("04_estabilidade","04 | Does the winner repeat on new seeds?",
+    "Validation \u2022 points = retrainings; bars = mean \u00b1 SD; diamond = original tuning",function() {
       for(m in c("ccc","mae","rmse")) {
         z <- vm[[m]]; orig <- original[[paste0("val_",m)]]; lim <- range(c(z,orig,mean(z)+c(-1,1)*sd(z)))
-        plot(NA,xlim=c(-.3,1),ylim=lim+c(-1,1)*diff(lim)*.1,xaxt="n",xlab="",ylab="",main=switch(m,ccc="CCC (maior \u00e9 melhor)",mae="MAE (t/ha)",rmse="RMSE (t/ha)"))
+        plot(NA,xlim=c(-.3,1),ylim=lim+c(-1,1)*diff(lim)*.1,xaxt="n",xlab="",ylab="",main=switch(m,ccc="CCC (higher is better)",mae="MAE (t/ha)",rmse="RMSE (t/ha)"))
         abline(h=orig,col=laranja,lty=2); points(seq(-.15,.15,length.out=length(z)),z,pch=19,col=seed_colours)
         arrows(.45,mean(z)-sd(z),.45,mean(z)+sd(z),angle=90,code=3,length=.06,col=ink,lwd=2)
         points(.45,mean(z),pch=19);points(.8,orig,pch=18,col=laranja,cex=1.5)
-        axis(1,at=c(0,.45,.8),labels=c("Seeds","M\u00e9dia","Tuning"),cex.axis=.85)
+        axis(1,at=c(0,.45,.8),labels=c("Seeds","Mean","Tuning"),cex.axis=.85)
       }
-    },"O or\u00e7amento e as regras de parada tamb\u00e9m diferem entre tuning e retreinamento. Esta compara\u00e7\u00e3o n\u00e3o isola o efeito da semente.",panels=3)
-  figure_panel("05_ensemble_teste","05 | O ensemble acerta onde importa?",
-    sprintf("Teste \u2022 %s perfis \u2022 mediana de %d sementes em escala nativa",format(length(y),big.mark=".",decimal.mark=","),length(seeds)),function() {
+    },"Budget and stopping rules also differ between tuning and retraining. This comparison does not isolate the seed effect.",panels=3)
+  figure_panel("05_ensemble_teste","05 | Does the ensemble hit where it matters?",
+    sprintf("Test \u2022 %s profiles \u2022 median of %d seeds in native scale",format(length(y),big.mark=",",decimal.mark="."),length(seeds)),function() {
       lim <- max(y,med)*1.03
-      smoothScatter(y,med,nrpoints=0,colramp=colorRampPalette(c("#ffffff","#92d2cb",teal,"#183247")),xlim=c(0,lim),ylim=c(0,lim),xlab="Observado (t/ha)",ylab="Predito (t/ha)",asp=1)
+      smoothScatter(y,med,nrpoints=0,colramp=colorRampPalette(c("#ffffff","#92d2cb",teal,"#183247")),xlim=c(0,lim),ylim=c(0,lim),xlab="Observed (t/ha)",ylab="Predicted (t/ha)",asp=1)
       abline(0,1,lty=2,col=laranja,lwd=2)
-      smoothScatter(y,med-y,nrpoints=0,colramp=colorRampPalette(c("#ffffff","#92d2cb",teal,"#183247")),xlab="Observado (t/ha)",ylab="Predito \u2212 observado (t/ha)")
+      smoothScatter(y,med-y,nrpoints=0,colramp=colorRampPalette(c("#ffffff","#92d2cb",teal,"#183247")),xlab="Observed (t/ha)",ylab="Predicted \u2212 observed (t/ha)")
       abline(h=0,lty=2,col=laranja)
-      legend("bottomleft",legend=c(sprintf("CCC: %.3f",ens["ccc"]),sprintf("MAE: %.2f t/ha",ens["mae"]),sprintf("RMSE: %.2f t/ha",ens["rmse"]),sprintf("Vi\u00e9s: %+.2f t/ha",ens["bias"])),bty="n",cex=.9)
-    },"Cor mais escura indica maior densidade de perfis (densidade suavizada). Res\u00edduos negativos indicam subestima\u00e7\u00e3o. M\u00e9tricas recalculadas para a mediana do ensemble.",panels=2)
-  figure_panel("06_tamanho_ensemble","06 | Quanto se ganha ao combinar sementes?",
-    sprintf("Todas as %d combina\u00e7\u00f5es \u2022 linha = mediana; faixa = percentis 5\u201395",nrow(comb)),function() {
+      legend("bottomleft",legend=c(sprintf("CCC: %.3f",ens["ccc"]),sprintf("MAE: %.2f t/ha",ens["mae"]),sprintf("RMSE: %.2f t/ha",ens["rmse"]),sprintf("Bias: %+.2f t/ha",ens["bias"])),bty="n",cex=.9)
+    },"Darker colour means higher profile density (smoothed density). Negative residuals indicate underestimation. Metrics recomputed for the ensemble median.",panels=2)
+  figure_panel("06_tamanho_ensemble","06 | How much does combining seeds gain?",
+    sprintf("All %d combinations \u2022 line = median; band = 5\u201395 percentiles",nrow(comb)),function() {
       for(m in c("ccc","mae","rmse")) {
         q <- t(vapply(seq_along(seeds),function(k) quantile(comb[comb$k==k,m],c(.05,.5,.95)),numeric(3)))
         x <- seq_along(seeds)
-        plot(x,q[,2],type="n",ylim=range(q),xlab="N\u00famero de sementes",ylab="",main=switch(m,ccc="CCC (maior \u00e9 melhor)",mae="MAE (t/ha)",rmse="RMSE (t/ha)"))
+        plot(x,q[,2],type="n",ylim=range(q),xlab="Number of seeds",ylab="",main=switch(m,ccc="CCC (higher is better)",mae="MAE (t/ha)",rmse="RMSE (t/ha)"))
         polygon(c(x,rev(x)),c(q[,1],rev(q[,3])),col=adjustcolor(teal,alpha.f=.18),border=NA)
         lines(x,q[,2],type="o",pch=19,col=teal,lwd=2);points(tail(x,1),ens[m],pch=19,col=laranja,cex=1.3)
       }
-    },"An\u00e1lise descritiva no teste com arquitetura e sementes j\u00e1 fixadas. A faixa mede varia\u00e7\u00e3o entre combina\u00e7\u00f5es; n\u00e3o \u00e9 intervalo de confian\u00e7a. N\u00e3o seleciona o melhor subconjunto.",panels=3)
-  figure_panel("07_erros_por_faixa","07 | Onde est\u00e3o os erros mais importantes?",
-    "Faixas definidas pelos quantis observados do teste \u2022 grupos t\u00eam tamanhos diferentes",function() {
+    },"Descriptive analysis on test, with architecture and seeds already fixed. The band measures variation across combinations; not a confidence interval. It does not pick the best subset.",panels=3)
+  figure_panel("07_erros_por_faixa","07 | Where are the errors that matter most?",
+    "Bands from the observed test quantiles \u2022 groups differ in size",function() {
       for(m in c("mae","bias")) {
         barplot(faixas[[m]],names.arg=paste0(rotulos,"\nn=",faixas$n),col=c(rep(teal,5),rep(laranja,2)),border=NA,
-          cex.names=.68,ylab=if(m=="mae") "MAE (t/ha)" else "Predito \u2212 observado (t/ha)",main=if(m=="mae") "Magnitude do erro" else "Dire\u00e7\u00e3o do erro")
+          cex.names=.68,ylab=if(m=="mae") "MAE (t/ha)" else "Predicted \u2212 observed (t/ha)",main=if(m=="mae") "Error magnitude" else "Error direction")
         abline(h=0,col=ink)
       }
-    },"As duas \u00faltimas faixas destacam os maiores estoques. Limites em t/ha e m\u00e9tricas constam na tabela de apoio.",panels=2)
+    },"The last two bands highlight the largest stocks. Limits in t/ha and metrics are in the supporting table.",panels=2)
   write.csv2(comb,file.path(output_dir,"metricas_combinacoes.csv"),row.names=FALSE)
   write.csv2(faixas,file.path(output_dir,"metricas_faixas.csv"),row.names=FALSE)
   write.csv2(vm,file.path(output_dir,"metricas_seeds_validacao.csv"),row.names=FALSE)
   write.csv2(ranking,file.path(output_dir,"ranking_com_parametros.csv"),row.names=FALSE)
   write.csv2(data.frame(split="test",n=length(y),as.list(ens)),file.path(output_dir,"metricas_ensemble.csv"),row.names=FALSE)
   saveRDS(list(tuning_run_id=tuning_id,final_run_id=final_run_id,config_id=config_id,seeds=seeds,ensemble=ens),file.path(output_dir,"resumo.rds"))
-  cards <- vapply(figure_index,function(f) paste0('<section><h2>',f$heading,'</h2><a href="',f$slug,'.png"><img src="',f$slug,'.png"></a><p>',f$caption,'</p><a href="',f$slug,'.svg">SVG edit\u00e1vel</a> \u00b7 <a href="',f$slug,'.png">PNG</a></section>'),character(1))
-  pagina <- paste0('<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>A jornada da CNN \u2014 R</title><style>body{background:#edf2f5;color:#183247;font:17px/1.6 system-ui;margin:0}main{max-width:1150px;margin:auto;padding:40px 24px}h1{font-size:44px}section{background:white;padding:25px;border-radius:14px;margin:25px 0}img{width:100%}a{color:#087f8c}</style><main><h1>Da sele\u00e7\u00e3o ao ensemble</h1><p>Gr\u00e1ficos gerados integralmente em R, a partir dos resultados salvos.</p><p>',config_id,' \u00b7 ',length(seeds),' sementes \u00b7 CCC do ensemble: ',sprintf('%.3f',ens['ccc']),' \u00b7 MAE: ',sprintf('%.2f',ens['mae']),' t/ha.</p>',paste(cards,collapse='\n'),'<p>Sele\u00e7\u00e3o: valida\u00e7\u00e3o. Ensemble: teste. Split aleat\u00f3rio estratificado; n\u00e3o representa valida\u00e7\u00e3o espacial independente. Dispers\u00e3o entre sementes n\u00e3o cobre todas as fontes de incerteza.</p><p>Tuning: ',tuning_id,'<br>Final: ',final_run_id,'</p></main></html>')
+  cards <- vapply(figure_index,function(f) paste0('<section><h2>',f$heading,'</h2><a href="',f$slug,'.png"><img src="',f$slug,'.png"></a><p>',f$caption,'</p><a href="',f$slug,'.svg">Editable SVG</a> \u00b7 <a href="',f$slug,'.png">PNG</a></section>'),character(1))
+  pagina <- paste0('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>The CNN journey -- R</title><style>body{background:#edf2f5;color:#183247;font:17px/1.6 system-ui;margin:0}main{max-width:1150px;margin:auto;padding:40px 24px}h1{font-size:44px}section{background:white;padding:25px;border-radius:14px;margin:25px 0}img{width:100%}a{color:#087f8c}</style><main><h1>From selection to ensemble</h1><p>Figures generated entirely in R, from the saved results.</p><p>',config_id,' \u00b7 ',length(seeds),' seeds \u00b7 Ensemble CCC: ',sprintf('%.3f',ens['ccc']),' \u00b7 MAE: ',sprintf('%.2f',ens['mae']),' t/ha.</p>',paste(cards,collapse='\n'),'<p>Selection: validation. Ensemble: test. Stratified random split; not an independent spatial validation. Spread across seeds does not cover every source of uncertainty.</p><p>Tuning: ',tuning_id,'<br>Final: ',final_run_id,'</p></main></html>')
   writeLines(enc2utf8(pagina),file.path(output_dir,"galeria.html"),useBytes=TRUE)
   message("Figures written to: ",normalizePath(output_dir,winslash="/"))
   print(ens)

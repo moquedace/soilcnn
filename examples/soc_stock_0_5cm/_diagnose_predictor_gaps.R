@@ -187,9 +187,9 @@ if (nrow(plot_data) > 0) {
   p <- ggplot2::ggplot(plot_data, ggplot2::aes(x = na_pct_over_land, y = predictor)) +
     ggplot2::geom_col() +
     ggplot2::labs(
-      title = paste0(target_label, " — preditores com mais NA sobre terra"),
-      subtitle = paste0("Amostra: ", format(n_land, big.mark = ","), " pontos de terra"),
-      x = "% de NA sobre terra (amostrado)", y = NULL
+      title = paste0(target_label, " -- predictors with the most NA over land"),
+      subtitle = paste0("Sample: ", format(n_land, big.mark = ","), " land points"),
+      x = "% NA over land (sampled)", y = NULL
     ) +
     ggplot2::theme_bw()
 

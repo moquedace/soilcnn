@@ -121,9 +121,9 @@ p_map <- ggplot2::ggplot(split_meta, ggplot2::aes(x = x, y = y, color = dataset_
   ggplot2::coord_fixed() +
   ggplot2::scale_color_manual(values = c(train = "#1b9e77", validation = "#d95f02", test = "#7570b3")) +
   ggplot2::labs(
-    title = paste0(target_label, " — ", format(nrow(split_meta), big.mark = ","),
-                  " perfis WOSIS, por split"),
-    subtitle = "Sem mapa-base de propósito: o formato dos continentes deveria aparecer sozinho pela densidade de pontos",
+    title = paste0(target_label, " -- ", format(nrow(split_meta), big.mark = ","),
+                  " WOSIS profiles, by split"),
+    subtitle = "No base map on purpose: the shape of the continents should appear on its own from the point density",
     x = "Longitude", y = "Latitude", color = "Split"
   ) +
   ggplot2::theme_bw() +
@@ -232,10 +232,10 @@ if (is.null(tuning_run_id)) {
     ggplot2::scale_size_manual(values = c(`TRUE` = 4, `FALSE` = 2.5), guide = "none") +
     ggplot2::coord_cartesian(xlim = c(0, max(ranking_plot$val_ccc) * 1.05)) +
     ggplot2::labs(
-      title = paste0(target_label, " — leaderboard do tuning (", tuning_run_id, ")"),
-      subtitle = paste0(nrow(ranking), " configs | barra = 1 erro padrão sobre as repetições | ",
-                        "círculo com contorno preto = rank 1"),
-      x = "CCC de validação", y = NULL, color = "Janela(s)"
+      title = paste0(target_label, " -- tuning leaderboard (", tuning_run_id, ")"),
+      subtitle = paste0(nrow(ranking), " configs | bar = 1 standard error over the repetitions | ",
+                        "black-outlined circle = rank 1"),
+      x = "Validation CCC", y = NULL, color = "Window(s)"
     ) +
     ggplot2::theme_bw()
 
@@ -291,9 +291,9 @@ if (is.null(tuning_run_id)) {
       ggplot2::annotate("text", x = lims[1], y = lims[2], hjust = 0, vjust = 1,
                         label = sprintf("CCC = %.3f\nn = %d", ccc_val, nrow(pred_best))) +
       ggplot2::labs(
-        title = paste0(target_label, " — config vencedor (", best_id, "): observado x predito"),
-        subtitle = "Split de validação | linha tracejada = 1:1 (acerto perfeito)",
-        x = "SOC observado (t/ha)", y = "SOC predito (t/ha)"
+        title = paste0(target_label, " -- winning config (", best_id, "): observed vs predicted"),
+        subtitle = "Validation split | dashed line = 1:1 (perfect agreement)",
+        x = "Observed SOC (t/ha)", y = "Predicted SOC (t/ha)"
       ) +
       ggplot2::theme_bw()
 
@@ -346,9 +346,9 @@ if (is.null(final_run_id)) {
       ggplot2::geom_line(alpha = 0.8) +
       ggplot2::facet_wrap(~ config_id, scales = "free_y") +
       ggplot2::labs(
-        title = paste0(target_label, " — curvas de treino por seed (", final_run_id, ")"),
-        subtitle = "Perda de validação por época | feixe apertado = treino estável entre seeds",
-        x = "Época", y = "Perda de validação (loss)", color = "Seed"
+        title = paste0(target_label, " -- training curves per seed (", final_run_id, ")"),
+        subtitle = "Validation loss per epoch | tight bundle = training stable across seeds",
+        x = "Epoch", y = "Validation loss", color = "Seed"
       ) +
       ggplot2::theme_bw()
 
@@ -381,8 +381,8 @@ if (is.null(final_run_id)) {
       color = "black", linewidth = 0.6, size = 0.4
     ) +
     ggplot2::labs(
-      title = paste0(target_label, " — estabilidade entre seeds (test, ", final_run_id, ")"),
-      subtitle = "Pontos roxos = cada seed individual | barra preta = média ± desvio-padrão",
+      title = paste0(target_label, " -- stability across seeds (test, ", final_run_id, ")"),
+      subtitle = "Purple points = each individual seed | black bar = mean +- sd",
       x = NULL, y = "CCC (test)"
     ) +
     ggplot2::theme_bw()
@@ -431,12 +431,12 @@ if (is.null(final_run_id)) {
         ggplot2::geom_point(color = "#d95f02", alpha = 0.6, size = 1.8) +
         ggplot2::coord_fixed(xlim = lims, ylim = lims) +
         ggplot2::annotate("text", x = lims[1], y = lims[2], hjust = 0, vjust = 1,
-                          label = sprintf("CCC (mediana ensemble) = %.3f\nn = %d perfis | %d seeds",
+                          label = sprintf("CCC (ensemble median) = %.3f\nn = %d profiles | %d seeds",
                                           ccc_ens, nrow(df_cid), length(seeds))) +
         ggplot2::labs(
-          title = paste0(target_label, " — ensemble final (", cid, "): observado x predito"),
-          subtitle = "Split de TESTE (nunca visto em treino) | traço cinza = min-max entre seeds daquele perfil",
-          x = "SOC observado (t/ha)", y = "SOC predito (mediana das seeds, t/ha)"
+          title = paste0(target_label, " -- final ensemble (", cid, "): observed vs predicted"),
+          subtitle = "TEST split (never seen in training) | grey line = min-max across seeds for that profile",
+          x = "Observed SOC (t/ha)", y = "Predicted SOC (seed median, t/ha)"
         ) +
         ggplot2::theme_bw()
 
@@ -469,7 +469,7 @@ predictor_cols <- strsplit(manifest$predictor_cols_final, ";")[[1]]
 #     in depth (~33% loss in the interior before the fix) -- seeing this layer
 #     come out clean here closes the loop on that investigation
 channels_to_show <- c(
-  elevacao = "ensemble_digital_terrain_model_v1_1",
+  elevation = "ensemble_digital_terrain_model_v1_1",
   ndvi     = "landsat_2020_2025_ndvi",
   pnv      = "pnv_open_forest_evergreen_broadleaf"
 )
@@ -482,7 +482,7 @@ channel_idx <- match(channels_to_show, predictor_cols)
 names(channel_idx) <- names(channels_to_show)
 
 message("Chosen channels and their indices: ")
-print(tibble::tibble(nome = names(channel_idx), predictor = channels_to_show, indice = channel_idx))
+print(tibble::tibble(channel = names(channel_idx), predictor = channels_to_show, index = channel_idx))
 
 # The store keeps the RAW patches (unscaled) -- which is exactly what this part
 # wants to show: the data as it came off the raster, before any statistical
@@ -534,7 +534,7 @@ example_row <- seq_along(example_idx)
 # dataset_role column the store has not had since the split became an index,
 # and then indexed the empty result -- the same hard stop as above, twice.
 meta_examples <- store$meta[example_idx, ] %>%
-  dplyr::mutate(example_id = paste0("perfil ", dplyr::row_number(),
+  dplyr::mutate(example_id = paste0("profile ", dplyr::row_number(),
                                     "\nSOC=", round(target_native, 1), " t/ha"))
 
 # Builds a long data.frame: one row per (example, window, channel, pixel)
@@ -579,10 +579,10 @@ for (ch_name in names(channel_idx)) {
     ggplot2::scale_y_reverse() +
     ggplot2::facet_grid(example ~ window, switch = "y") +
     ggplot2::labs(
-      title = paste0(target_label, " — patches reais: ", ch_name,
+      title = paste0(target_label, " -- real patches: ", ch_name,
                     " (", channels_to_show[[ch_name]], ")"),
-      subtitle = "Valores brutos, como saem do raster (o store nao guarda patches escalados)",
-      x = NULL, y = NULL, fill = "valor bruto"
+      subtitle = "Raw values, as they come off the raster (the store keeps no scaled patches)",
+      x = NULL, y = NULL, fill = "raw value"
     ) +
     ggplot2::theme_minimal() +
     ggplot2::theme(
