@@ -2569,3 +2569,66 @@ first time, this new guard the second.
 because the buffer fix changed the folds. The larger grid starts from zero
 (~7 h at `tune_length = 24` rather than ~6 h resumed). That is the correct price
 of having fixed the buffer; the cheaper alternative was a meaningless result.
+
+
+## Three things found by reading the smearing wiring back, before running it
+
+The smearing estimator was wired into stages 04 and 05 and the suite passed
+21/21. Re-reading the diff before spending ~45 min on a re-run turned up three
+defects, none of which any test would have caught, because all three concern
+*which artefacts a run produces* rather than what any function computes.
+
+### 1. The new block inherited the wrong gate
+
+`smearing_from_run()` and `safe_write_csv2(ens, ...)` both sat inside
+
+```r
+if (nrow(cal_rows) >= 9L && nrow(chk_rows) > 0L) {   # the CONFORMAL condition
+```
+
+The smearing factor is calibrated on the **tuning** run's out-of-fold residuals
+— a different run, a different set of points. This run's conformal calibration
+count says nothing about whether it can be computed. `ensemble_predictions.csv`
+is not a conformal artefact either; it is the table every later stage reads.
+
+The gate mattered because `evaluate_test = FALSE` is now a supported mode:
+`chk_rows` is empty, the condition is FALSE, and stage 05 would have found no
+`smearing.rds`, written the median map alone, and printed a polite note calling
+it a deliberate choice. Both blocks moved up one nesting level.
+
+*Discarded alternative:* keeping the gate and adding `|| !evaluate_test`. That
+encodes the same confusion in a longer expression — the two things were never
+related.
+
+### 2. `conditional_mean_ton_ha` was one word from meaning the opposite
+
+The band name shipped as `conditional_mean_ton_ha`, next to an existing
+`ensemble_mean_ton_ha`:
+
+| band | what it is |
+|---|---|
+| `ensemble_mean_ton_ha` | mean **across the seeds** of `expm1(pred)` — still a conditional median of the stock, still low by 24% |
+| `smeared_mean_ton_ha` | the conditional **mean** of the stock — the only band that may be summed |
+
+Someone reaching for "the mean band" to total a region would have picked the
+wrong one and got a plausible number back. Renamed to `smeared_mean_ton_ha`
+(band `soc_smeared_mean_ton_ha`): *smeared* is the word that discriminates, and
+it is the word the correction is named after.
+
+### 3. A check that counted to nine
+
+`_b4_shard_merge_check.R` held nine band names as a literal, beside
+`stopifnot(nrow(ref_sum) == 9L)`. A tenth band gives that pairing two outcomes:
+stop with an arithmetic complaint that names no band, or relax the count and
+never check the new band at all — which is how a band reaches a map having
+passed nothing.
+
+The 1×1 summary stage 05 writes already names every band and every file it
+produced, so B4 now reads `layers` and `merged` from it. The script checks the
+run in front of it rather than the run it was written against.
+
+**The common shape.** Every unit test here asserts about a *function*. These
+three are properties of the *pipeline* — which files exist, what they are
+called, which of them a check looks at — and the suite is structurally unable to
+see them. Reading the diff back is not a substitute for tests; it is the only
+thing that covers this class at all right now.

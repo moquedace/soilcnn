@@ -798,7 +798,19 @@ if (file.exists(spath)) {
           "\n  The map carries the MEDIAN surface only, which must NOT be summed for a total.")
 }
 w_smear <- if (!is.null(smear_cal)) {
-  open_writer("soc_mean_smeared_ton_ha", "conditional_mean_ton_ha")
+  # THE NAME HAS TO CARRY THE DIFFERENCE.
+  #
+  # "conditional_mean_ton_ha" was one word away from "ensemble_mean_ton_ha" and
+  # meant the opposite thing about the very bias this band exists to remove:
+  #
+  #   ensemble_mean_ton_ha  mean ACROSS THE SEEDS of expm1(prediction). Still a
+  #                         conditional median of the stock, still low by 24%.
+  #   smeared_mean_ton_ha   the conditional MEAN of the stock. The only band
+  #                         here that may be summed for a total.
+  #
+  # Someone reaching for "the mean band" to total a region would have picked the
+  # wrong one and got a plausible number. "smeared" is the discriminating word.
+  open_writer("soc_smeared_mean_ton_ha", "smeared_mean_ton_ha")
 }
 w_lower  <- if (!is.null(conformal_cal)) {
   open_writer(sprintf("soc_pi%02d_lower_ton_ha", conformal_level),

@@ -619,7 +619,7 @@ penalises bias, and removing a −24% bias is the largest single improvement
 anything has produced in this project.
 
 **Nothing is replaced.** Stage 04 writes `smearing.rds` beside the conformal
-calibration, stage 05 reads it and writes `soc_mean_smeared_ton_ha` beside the
+calibration, stage 05 reads it and writes `soc_smeared_mean_ton_ha` beside the
 median band. Each answers its own question:
 
 | question | surface |

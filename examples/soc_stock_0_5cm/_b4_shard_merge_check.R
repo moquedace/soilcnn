@@ -109,7 +109,7 @@ ref_sum <- readr::read_csv2(file.path(log_dir, "prediction_raster_summary.csv"),
                             show_col_types = FALSE)
 stopifnot(ref_cfg$r_nrow[1] == exp_nrow, ref_cfg$r_ncol[1] == exp_ncol,
           ref_cfg$n_row_shards[1] == 1L, ref_cfg$n_col_shards[1] == 1L,
-          nrow(ref_sum) == 9L)
+          nrow(ref_sum) >= 7L)
 ref_n_valid <- as.integer(ref_cfg$n_valid[1])
 message("reference 1x1: n_valid = ", format(ref_n_valid, big.mark = ","))
 
@@ -213,19 +213,26 @@ merge_log <- file.path(log_dir, "merge.log")
 stopifnot(file.exists(merge_log))
 message("05a's merge log: ", merge_log)
 
-bands <- c("ensemble_median_ton_ha", "ensemble_mean_ton_ha", "ensemble_sd_ton_ha",
-           "ensemble_mad_ton_ha", "ensemble_min_ton_ha", "ensemble_max_ton_ha",
-           "valid_mask", "conformal_90_lower_ton_ha", "conformal_90_upper_ton_ha")
-layers <- c("median", "mean", "sd", "mad", "min", "max", "mask",
-            "pi_lower", "pi_upper")
-merged <- file.path(raster_dir,
-                    paste0(target_label, "_", config_id, "_", bands, ".tif"))
+# THE BAND LIST COMES FROM THE REFERENCE RUN, NOT FROM THIS FILE.
+#
+# It used to be nine names typed out here, alongside stopifnot(nrow(ref_sum) ==
+# 9L). That pairing has one failure mode and one worse one: stage 05 gains a
+# band and this script stops with an arithmetic complaint that says nothing
+# about the band -- or the assertion is relaxed and the new band is simply never
+# checked, which is how a band arrives in a map having passed nothing.
+#
+# The summary 05 wrote for the 1x1 run already names every band it produced, and
+# every file it wrote. Reading them is what makes this script check the run in
+# front of it instead of the run it was written against.
+layers <- ref_sum$layer
+merged <- file.path(raster_dir, basename(ref_sum$file))
+message("bands to check (from the 1x1 summary): ", paste(layers, collapse = ", "))
 
-# THE MERGE MUST HAVE HAPPENED. Without this, the nine files left over from the
-# 1x1 run satisfy "the nine bands exist" while 05b did nothing at all.
+# THE MERGE MUST HAVE HAPPENED. Without this, the files left over from the 1x1
+# run satisfy "the bands exist" while 05b did nothing at all.
 stopifnot(all(file.exists(merged)),
           all(file.info(merged)$mtime >= tiles_mtime))
-message("all 9 bands merged, and newer than the tiles they came from.")
+message("all ", length(merged), " bands merged, and newer than the tiles they came from.")
 
 # ── STEP 3: the checks ────────────────────────────────────────────────────────
 
