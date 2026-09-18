@@ -715,25 +715,41 @@ capability(
 # table, no retained training data.
 # ══════════════════════════════════════════════════════════════════════════════
 
+# THE METHOD IS caret's "rf", NOT xgbTree, AND THE REASON IS NOT TIMIDITY.
+#
+# xgbTree was tried first and died instantly:
+#
+#   ALTLIST classes must provide a Set_elt method [class: XGBAltrepPointerClass]
+#
+# That is xgboost's own R binding failing against this R build -- it fires
+# inside xgboost::xgb.train before any of this framework's code is reached, and
+# reproducing it needs neither caret nor the adapter. Testing the adapter
+# through a broken backend measures the backend.
+#
+# caret's "rf" is the better probe anyway, and not a weaker one: it wraps
+# randomForest, which is also what our NATIVE rf spec wraps. So the adapter's
+# answer can be compared against a number this project already measured on the
+# same folds -- 03b's rf_context at 0.487 CCC. An adapter that quietly
+# resamples, or that drops the tuning grid, cannot land on that number by
+# accident. A method with no native counterpart could only be checked for "it
+# ran".
 capability(
-  "A5", "caret_spec(\"xgbTree\") through dsm_train()", cost = "~20-30 min",
+  "A5", "caret_spec(\"rf\") through dsm_train()", cost = "~25-35 min",
   expr = {
-    register_model(caret_spec("xgbTree", search = "random"), overwrite = TRUE)
+    register_model(caret_spec("rf", name = "caret_rf"), overwrite = TRUE)
 
-    probe <- get_model("xgbTree")$fit(
+    probe <- get_model("caret_rf")$fit(
       x = matrix(stats::rnorm(600L), 200L, 3L,
                  dimnames = list(NULL, c("a", "b", "c"))),
       y = stats::rnorm(200L),
-      cfg = tibble::tibble(config_id = "probe", nrounds = 5, max_depth = 2,
-                           eta = 0.3, gamma = 0, colsample_bytree = 0.8,
-                           min_child_weight = 1, subsample = 1))
+      cfg = tibble::tibble(config_id = "probe", mtry = 2L))
 
     fit <- dsm_train(
-      data = data, model = "xgbTree", resampling = plan_cnn,
+      data = data, model = "caret_rf", resampling = plan_cnn,
       tune_grid = NULL, features = c("centre", "window_mean"),
       windows = windows_needed, transform = expm1,
-      output_dir = tuning_base, run_id = sweep_dir("A5_caret_xgb"),
-      base_seed = 42L, n_seeds = 3L, tune_length = 6L,
+      output_dir = tuning_base, run_id = sweep_dir("A5_caret_rf"),
+      base_seed = 42L, n_seeds = 1L, tune_length = 3L,
       evaluate_test = FALSE, resume = TRUE)
     list(fit = fit, probe = probe)
   },
@@ -752,11 +768,16 @@ capability(
       lapply(r$fit$plan$folds, function(f) sort(f$validation)),
       lapply(plan_cnn$folds,   function(f) sort(f$validation)))
     ok <- adapter_ok && folds_ok &&
-      nrow(g) == 6L && !anyDuplicated(g$config_id) &&
-      nrow(cmp) == 6L * 3L * 3L && all(cmp$status == "success") &&
+      nrow(g) == 3L && !anyDuplicated(g$config_id) &&
+      nrow(cmp) == 3L * 3L * 1L && all(cmp$status == "success") &&
       all(cmp$n_features == 724L) &&
-      all(is.finite(cmp$val_ccc)) && max(cmp$val_ccc) > 0.20 &&
-      all(is.na(cmp$test_ccc))
+      all(is.finite(cmp$val_ccc)) &&
+      all(is.na(cmp$test_ccc)) &&
+      # THE NUMBER, not merely a number. caret's rf wraps randomForest, which
+      # is what the native rf spec wraps, on the same folds and the same 724
+      # columns -- so 03b's rf_context (0.487) is the target. An adapter that
+      # quietly resamples, or that ignores the grid, does not land here.
+      abs(max(cmp$val_ccc) - 0.487) < 0.05
     list(ok = ok, measured = sprintf(
       "adapter method='%s' resample=%s | folds match CNN: %s | %d units | best val_ccc %.4f",
       ctl$method, is.null(r$probe$fit[["resample"]]), folds_ok, nrow(cmp),

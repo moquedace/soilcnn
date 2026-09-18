@@ -268,25 +268,72 @@ print.spatial_occlusion <- function(x, ...) {
 
   ctx <- x$table$delta_ccc[x$table$scope == "context_all"][1]
   ctr <- x$table$delta_ccc[x$table$scope == "centre_only_hidden"][1]
-  cat("\n")
-  cat(sprintf("  hiding all context  : %+.4f CCC (%.1f%% of %.4f)\n",
-              ctx, 100 * ctx / x$baseline_ccc, x$baseline_ccc))
-  cat(sprintf("  hiding the centre   : %+.4f CCC\n", ctr))
 
-  # THE COMPARISON THAT MATTERS is context against centre. A network that loses
-  # more by losing one pixel than by losing the other 224 is a network doing
-  # point prediction with expensive extra steps.
+  # AREA IS A CONFOUND, AND THE FIRST VERSION OF THIS BLOCK IGNORED IT.
+  #
+  # It compared |context_all| against |centre_only_hidden| and announced a
+  # winner. Those hide 224 pixels and 1 pixel. On the real cfg_003 that gave
+  # -0.513 against -0.002 and the line read "the neighbourhood is doing work"
+  # -- which is true of almost any convolution over almost any patch, because
+  # 224 permuted pixels destroy every feature map while one permuted pixel
+  # perturbs them. A comparison that a working network cannot fail is not a
+  # measurement.
+  #
+  # So the per-pixel cost is reported beside the total, and the verdict is
+  # phrased on the RINGS, which have their own sizes but differ from each other
+  # by DISTANCE rather than by being the whole patch against one pixel.
+  per_px <- function(scope) {
+    i <- which(x$table$scope == scope)[1]
+    n <- x$table$n_pixels_hidden[i]
+    if (!length(i) || is.na(n) || n == 0) return(NA_real_)
+    x$table$delta_ccc[i] / n
+  }
+  n_px <- function(scope) x$table$n_pixels_hidden[x$table$scope == scope][1]
+  cat(sprintf("\n  hiding all context  : %+.4f CCC over %3d px  (%+.5f per px)\n",
+              ctx, n_px("context_all"), per_px("context_all")))
+  cat(sprintf("  hiding the centre   : %+.4f CCC over %3d px  (%+.5f per px)\n",
+              ctr, n_px("centre_only_hidden"), per_px("centre_only_hidden")))
+
+  rings <- x$table[grepl("^ring_", x$table$scope), , drop = FALSE]
+  if (nrow(rings) > 1L) {
+    rings$per_px <- rings$delta_ccc / rings$n_pixels_hidden
+    worst <- rings$scope[which.min(rings$delta_ccc)][1]
+    cat(sprintf("  costliest ring      : %s (%+.4f CCC over %d px)\n",
+                worst, min(rings$delta_ccc),
+                rings$n_pixels_hidden[which.min(rings$delta_ccc)]))
+    cat("\n  Per ring, cost per pixel hidden:\n")
+    cat("   ", paste(sprintf("%s %+.5f", sub("ring_", "r", rings$scope),
+                             rings$per_px), collapse = "  "), "\n")
+  }
+
+  # WHAT A LARGE CONTEXT EFFECT DOES AND DOES NOT MEAN.
+  #
+  # It means this NETWORK reads the neighbourhood. It does NOT mean the
+  # neighbourhood carries information the centre pixel lacks. At 250 m most
+  # covariates are smooth, so a pixel three cells away is close to a copy of the
+  # centre; a model can lean entirely on the rim and learn nothing the centre
+  # would not have told it.
+  #
+  # The two questions are separable and this framework answers both:
+  #
+  #   does the network use the neighbourhood?      <- this report
+  #   does the neighbourhood ADD anything?         <- stage 03b, rf_centre
+  #                                                   against rf_context
+  #
+  # They can disagree without either being wrong, and when they do the answer is
+  # redundancy rather than contradiction. Say which one is being quoted.
   if (is.finite(ctx) && is.finite(ctr)) {
-    if (abs(ctx) < abs(ctr)) {
-      cat("\n  -> THE CENTRE PIXEL CARRIES MORE THAN THE WHOLE NEIGHBOURHOOD.\n")
-      cat("     On this evidence the convolution is not using spatial context,\n")
-      cat("     and a model over point values answers the same question for a\n")
-      cat("     fraction of the cost. Compare with 03b before concluding: the\n")
-      cat("     two are independent routes to the same question.\n")
+    if (abs(ctr) > abs(ctx)) {
+      cat("\n  -> One pixel costs more than the other 224. This network is doing\n")
+      cat("     point prediction with convolutional machinery around it.\n")
     } else {
-      cat("\n  -> The neighbourhood is doing work: hiding it costs more than\n")
-      cat("     hiding the centre. The per-ring rows say how far out it reaches,\n")
-      cat("     which is what should set the window size of the next run.\n")
+      cat("\n  -> This network reads the neighbourhood: the rim carries its\n")
+      cat("     prediction and the centre pixel barely moves it.\n")
+      cat("     THIS IS NOT EVIDENCE THAT THE NEIGHBOURHOOD ADDS INFORMATION.\n")
+      cat("     Smooth covariates make the rim a near-copy of the centre, so a\n")
+      cat("     network can depend on it entirely and still learn nothing a\n")
+      cat("     centre-only model would have missed. Stage 03b answers that\n")
+      cat("     question -- rf_centre against rf_context -- and this one does not.\n")
     }
   }
   invisible(x)

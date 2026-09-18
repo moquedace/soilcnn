@@ -366,3 +366,65 @@ knows, not a defect of the interval.
 
 Stage 07: AOA threshold DI = 0.6999, **78.7%** of valid cells inside (394,406 of
 501,246), 1.4 min.
+
+---
+
+## Spatial occlusion on cfg_003 — and the contradiction it appears to raise
+
+Stage 03 run `soc_0_5cm_20260916_232318`, config `cfg_003` (single 15×15 branch),
+fold 1, seed 42, validation rows (n = 1037), permutation occlusion.
+
+| scope | px hidden | CCC | ΔCCC | Δ per px |
+|---|---|---|---|---|
+| baseline | 0 | 0.4974 | — | — |
+| context_all | 224 | −0.0154 | **−0.5128** | −0.00229 |
+| centre_only | 1 | 0.4958 | −0.0016 | −0.00159 |
+| ring_01 | 8 | 0.4779 | −0.0195 | −0.00244 |
+| ring_02 | 16 | 0.4492 | −0.0482 | −0.00301 |
+| ring_03 | 24 | 0.4106 | −0.0868 | −0.00362 |
+| ring_04 | 32 | 0.3734 | **−0.1240** | −0.00388 |
+| ring_05 | 40 | 0.3835 | −0.1140 | −0.00285 |
+| ring_06 | 48 | 0.4687 | −0.0287 | −0.00060 |
+| ring_07 | 56 | 0.4969 | −0.0005 | −0.00001 |
+
+**Read the per-pixel column, not the totals.** The first version of the verdict
+compared `context_all` against `centre_only` — 224 pixels against 1 — and
+announced that the neighbourhood was doing the work. Almost any convolution over
+almost any patch produces that result, because 224 permuted pixels destroy every
+feature map while one perturbs them. A comparison a working network cannot fail
+is not a measurement, and the print now reports cost per pixel and says so.
+
+What survives the correction is the **ring profile**, and it is not flat:
+
+- cost per pixel rises from ring 1 to **ring 4** (≈1 km at 250 m) and then falls;
+- **ring 7, the outer border, costs essentially nothing** (−0.0005 over 56 px).
+  `cfg_003` uses `conv_padding = "valid_large"`, so the outermost ring is
+  plausibly cropped before it reaches the output — an architectural fact, not a
+  statement about soil.
+
+### The apparent contradiction with 03b, and its resolution
+
+03b measured `rf_context = rf_centre` (t = −0.10): the neighbourhood adds
+nothing to a forest. Occlusion says the CNN collapses without the neighbourhood
+and barely notices the centre. Both are correct, and the resolution is
+**redundancy, not contradiction**:
+
+> At 250 m most covariates are smooth, so a pixel three cells out is close to a
+> copy of the centre. A network can lean entirely on the rim and still learn
+> nothing a centre-only model would have missed.
+
+The two questions are separable, and the framework now answers each in one place:
+
+| question | answered by |
+|---|---|
+| does this network *use* the neighbourhood? | `spatial_occlusion()` — yes, almost entirely |
+| does the neighbourhood *add* anything? | 03b, `rf_centre` vs `rf_context` — no |
+
+Which is also why `rf_centre` (0.487) beats the CNN (0.473) while reading one
+pixel per channel: the centre alone already carries the signal, and the
+convolution spends 340,225 parameters rediscovering it in the rim.
+
+**The falsifiable follow-up**, and the one worth running next: measure the
+correlation between each channel's centre value and its ring-4 mean across the
+3,728 points. If it is high, redundancy is confirmed directly rather than
+inferred from two experiments agreeing about a third thing.
