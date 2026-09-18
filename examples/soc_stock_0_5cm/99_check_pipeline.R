@@ -956,18 +956,30 @@ add_snap <- function(k, v) {
   if (length(v) == 1L && !is.null(v) && !is.na(v)) snap_vals[[k]] <<- v
 }
 
+# SNAPSHOT KEYS ARE IN ENGLISH FROM 2026-09-18.
+#
+# Six of them were Portuguese (01_n_linhas, 01_mediana_alvo, 01_pct_problema,
+# 01_canais_constantes, 01_canais_com_na, 02_centros_divergentes). They are the
+# row labels of a regression baseline, so renaming them costs one noisy run:
+# compare_run_snapshot() full-joins on the key, so the first comparison against
+# an older snapshot reports six "gone" and six "new" and no real change.
+#
+# Nothing needs deleting. write_run_snapshot() writes a fresh snapshot at the
+# end of every run and the comparison reads the most recent one, so the run
+# after that is clean again. The old snapshots stay where they are -- they
+# record what the pipeline said in September and that is worth keeping.
 if (exists("dscheck")) {
-  add_snap("01_n_linhas",     dscheck$n_rows[1])
+  add_snap("01_n_rows",     dscheck$n_rows[1])
   add_snap("01_n_predictors", dscheck$n_predictors[1])
   add_snap("01_n_dummy",      dscheck$n_dummy_predictors[1])
   add_snap("01_n_percentage", dscheck$n_percentage_predictors[1])
   add_snap("01_n_continuous", dscheck$n_continuous_predictors[1])
-  add_snap("01_mediana_alvo", round(dscheck$median_target[1], 6))
+  add_snap("01_median_target", round(dscheck$median_target[1], 6))
 }
-if (exists("qc")) add_snap("01_pct_problema", qc$pct_any_problem[1])
+if (exists("qc")) add_snap("01_pct_any_problem", qc$pct_any_problem[1])
 if (exists("crisk")) {
-  add_snap("01_canais_constantes", sum(crisk$risk == "constant", na.rm = TRUE))
-  add_snap("01_canais_com_na",     sum(crisk$risk == "has_na",   na.rm = TRUE))
+  add_snap("01_n_channels_constant", sum(crisk$risk == "constant", na.rm = TRUE))
+  add_snap("01_n_channels_with_na",     sum(crisk$risk == "has_na",   na.rm = TRUE))
 }
 if (exists("manifest") && "n_points_valid" %in% names(manifest)) {
   add_snap("02_n_points_valid", manifest$n_points_valid[1])
@@ -993,7 +1005,7 @@ if (exists("blame") && nrow(blame) > 0L) {
   add_snap("02_pct_lost_any_channel", max(blame$pct_invalidated, na.rm = TRUE))
 }
 if (exists("cc") && !inherits(cc, "try-error")) {
-  add_snap("02_centros_divergentes", cc$n_mismatch)
+  add_snap("02_n_centres_mismatched", cc$n_mismatch)
 }
 add_snap("99_n_pass", sum(.results$status == "PASS"))
 add_snap("99_n_warn", sum(.results$status == "WARN"))
