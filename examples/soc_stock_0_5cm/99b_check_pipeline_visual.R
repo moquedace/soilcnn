@@ -72,10 +72,42 @@ dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
 
 message("\n-- Parte 1: mapa dos perfis por split --\n")
 
-split_meta_file <- file.path(metadata_dir, "split_metadata.csv")
-stopifnot(file.exists(split_meta_file))
+# THE SPLIT IS NOT A PROPERTY OF THE DATA ANY MORE.
+#
+# This read split_metadata.csv, a file NOTHING writes -- it was produced by the
+# stage 01 that stamped a role onto every point, and that stage stopped existing
+# when the split became an index rather than a column. The script has stopped on
+# this line ever since, which is why nobody noticed the three further breakages
+# below it.
+#
+# The split now lives in a fold_plan, so the map is drawn from the plan the
+# tuning run actually used, joined onto the store's coordinates. That is also a
+# better picture: it shows the plan that produced the numbers rather than a
+# stale file that once described a different one.
+tuning_base <- file.path(project_root, "outputs", "tuning",
+                         "soc_stock_modeling", target_label)
+plan_dirs <- list.dirs(tuning_base, recursive = FALSE, full.names = TRUE)
+plan_dirs <- plan_dirs[file.exists(file.path(plan_dirs, "fold_plan.rds"))]
+if (length(plan_dirs) == 0L) {
+  stop("No tuning run with a fold_plan.rds under ", tuning_base,
+       "\n  Run 03_run_tuning.R first -- the split is a plan now, not a file.",
+       call. = FALSE)
+}
+plan_dir  <- sort(plan_dirs, decreasing = TRUE)[1]
+fold_plan <- readRDS(file.path(plan_dir, "fold_plan.rds"))
+message("Fold plan: ", basename(plan_dir))
+print(fold_plan)
 
-split_meta <- readr::read_csv2(split_meta_file, show_col_types = FALSE)
+store_meta <- readr::read_csv2(file.path(patch_dir, "patch_meta.csv"),
+                               show_col_types = FALSE)
+
+# ONE ROLE PER POINT, FOR A MAP. A point is training in one fold and validation
+# in another, so "the role" is only well defined for the test set -- which is
+# the same in every fold -- and for fold 1 otherwise. The label says so.
+role_of <- rep("train", nrow(store_meta))
+role_of[fold_plan$folds[[1]]$validation] <- "validation (fold 1)"
+role_of[fold_plan$folds[[1]]$test]       <- "test (all folds)"
+split_meta <- dplyr::mutate(store_meta, dataset_role = role_of)
 
 message("Perfis totais: ", nrow(split_meta))
 print(dplyr::count(split_meta, dataset_role))
@@ -153,12 +185,37 @@ if (is.null(tuning_run_id)) {
   # A métrica CCC=0.xx da tabela é abstrata; ver os pontos ao redor da reta
   # 1:1 é o que de fato convence que o "melhor config" aprendeu algo físico,
   # não só um número que ficou bom por acaso na agregação.
-  best_id   <- ranking$config_id[ranking$rank == 1L]
-  pred_file <- file.path(tuning_run_dir, "predictions", paste0(best_id, "_pred_all.csv"))
+  # THE FILENAME CHANGED WHEN REPETITIONS ARRIVED, and this block has been
+  # skipping itself ever since. The tuning run writes ONE FILE PER UNIT --
+  # cfg_003_f1_s1_pred_all.csv -- not one per config, so file.exists() on
+  # "<config>_pred_all.csv" was FALSE and the whole panel silently did not
+  # appear. A guarded read that quietly produces nothing is worse than a hard
+  # stop: nothing in the output says a check was skipped.
+  #
+  # rank == 1 is also per UNIT now, so it names the luckiest single (fold, seed)
+  # of the best config. The config is taken from the unit that ranks first and
+  # then ALL of its units are pooled, which is what the panel claims to show.
+  best_id   <- ranking$config_id[ranking$rank == 1L][1]
+  unit_pat  <- sprintf("^%s_f[0-9]+_s[0-9]+_pred_all\\.csv$", best_id)
+  unit_files <- list.files(file.path(tuning_run_dir, "predictions"),
+                           pattern = unit_pat, full.names = TRUE)
+  if (length(unit_files) == 0L) {
+    message("  [SKIP] no per-unit predictions for ", best_id,
+            " under ", file.path(tuning_run_dir, "predictions"),
+            " -- the panel below needs them.")
+  }
+  pred_file <- unit_files
 
-  if (file.exists(pred_file)) {
-    pred_best <- readr::read_csv2(pred_file, show_col_types = FALSE) %>%
-      dplyr::filter(dataset_role == "validation")
+  if (length(pred_file) > 0L) {
+    # Every unit of the config, pooled. Each point appears once per seed, so the
+    # ensemble median is taken per point -- the same statistic the map uses.
+    pred_best <- purrr::map_dfr(pred_file, function(f) {
+      readr::read_csv2(f, show_col_types = FALSE) %>%
+        dplyr::filter(dataset_role == "validation")
+    }) %>%
+      dplyr::group_by(sample_id) %>%
+      dplyr::summarise(obs  = dplyr::first(obs),
+                       pred = stats::median(pred), .groups = "drop")
 
     ccc_val <- .lin_ccc(pred_best$obs, pred_best$pred)
     lims    <- range(c(pred_best$obs, pred_best$pred))
@@ -372,16 +429,43 @@ message("patch store carregado em ",
 
 set.seed(42)
 n_examples <- 6
-n_train <- nrow(store$meta[store$meta$dataset_role == "train", ])
-example_idx <- sample.int(n_train, n_examples)
+# THE STORE HAS NO dataset_role, and has not since the split became an index.
+# sample.int(n_train, 6) then drew from a count of zero rows. The examples are
+# drawn from the fold plan's own training index, which is where the answer lives.
+train_idx   <- fold_plan$folds[[1]]$train
+stopifnot(length(train_idx) >= n_examples)
+example_idx <- sort(sample(train_idx, n_examples))
 
+# THE WINDOWS ARE TORCH TENSORS, NOT R ARRAYS.
+#
+# `arr[idx, ch, , ]` below is base R indexing, and on a torch tensor it returns
+# a tensor -- as.vector() on which is not the numbers. Only the six example rows
+# are converted, so this costs a few MB rather than the 0.85 GB the whole store
+# would.
+#
+# This is the same mistake spatial_occlusion() made on 2026-09-17: dim() works
+# on both representations and hides the difference until an operation does not.
+as_r_array <- function(x, rows) {
+  if (inherits(x, "torch_tensor")) {
+    as.array(x[rows, , , , drop = FALSE]$to(device = "cpu"))
+  } else {
+    x[rows, , , , drop = FALSE]
+  }
+}
 window_arrays <- list(
-  `3x3`   = store$windows$w03,
-  `9x9`   = store$windows$w09,
-  `15x15` = store$windows$w15
+  `3x3`   = as_r_array(store$windows$w03, example_idx),
+  `9x9`   = as_r_array(store$windows$w09, example_idx),
+  `15x15` = as_r_array(store$windows$w15, example_idx)
 )
+# The arrays now hold ONLY the examples, in the order example_idx gave, so the
+# row index inside them is the example number and not the store row.
+example_row <- seq_along(example_idx)
 
-meta_examples <- store$meta[store$meta$dataset_role == "train", ][example_idx, ] %>%
+# example_idx already holds STORE ROW INDICES drawn from the plan's training
+# fold, so this indexes the store directly. The old form filtered on a
+# dataset_role column the store has not had since the split became an index,
+# and then indexed the empty result -- the same hard stop as above, twice.
+meta_examples <- store$meta[example_idx, ] %>%
   dplyr::mutate(example_id = paste0("perfil ", dplyr::row_number(),
                                     "\nSOC=", round(target_native, 1), " t/ha"))
 
@@ -392,7 +476,7 @@ patch_long <- purrr::map_dfr(seq_along(window_arrays), function(w_i) {
   w_size <- dim(arr)[3]
 
   purrr::map_dfr(seq_along(example_idx), function(e_i) {
-    idx <- example_idx[e_i]
+    idx <- example_row[e_i]          # row inside the extracted subset
     purrr::map_dfr(names(channel_idx), function(ch_name) {
       ch <- channel_idx[[ch_name]]
       mat <- arr[idx, ch, , ]

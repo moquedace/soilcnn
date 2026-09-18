@@ -6,8 +6,8 @@
 gerar_graficos_cnn <- function(
   project_root = "D:/usuario_armazenamento/cassio/R/deep_learning_caret",
   output_dir = file.path(project_root, "outputs", "avaliacao_grafica"),
-  final_run_id = "final_20260823_001856",
-  config_id = "cfg_014"
+  final_run_id = "latest",
+  config_id = "auto"
 ) {
   if (.Platform$OS.type == "windows") {
     local_antigo <- Sys.getlocale("LC_CTYPE")
@@ -16,13 +16,58 @@ gerar_graficos_cnn <- function(
   }
   ler <- function(f) read.csv2(f, stringsAsFactors=FALSE, check.names=FALSE)
   target <- "soc_stock_0_5cm"
-  final_dir <- file.path(project_root,"outputs/final_model/soc_stock_modeling",target,final_run_id)
+  # RESOLVED, NOT REMEMBERED.
+  #
+  # These two used to default to "final_20260823_001856" and "cfg_014", a run
+  # and a config that no longer exist -- so the script stopped on its second
+  # line for anyone who did not know to pass arguments. A default that names one
+  # particular past run is a default that is wrong from the day after it is
+  # written. 05 and 07 resolve the same two things the same way.
+  final_base <- file.path(project_root,"outputs/final_model/soc_stock_modeling",target)
+  if (identical(final_run_id,"latest")) {
+    runs <- list.dirs(final_base,recursive=FALSE,full.names=FALSE)
+    runs <- runs[grepl("^final_",runs)]
+    if(!length(runs)) stop("No final model run under: ",final_base,call.=FALSE)
+    final_run_id <- sort(runs,decreasing=TRUE)[1]
+  }
+  final_dir <- file.path(final_base,final_run_id)
   resumo <- readRDS(file.path(final_dir,"comparison/final_run_summary.rds"))
+  if (identical(config_id,"auto")) config_id <- resumo$selected_cfgs$config_id[1]
+  message("final_run_id: ",final_run_id," | config_id: ",config_id)
+
   tuning_id <- resumo$tuning_run_id
   tuning_dir <- file.path(project_root,"outputs/tuning/soc_stock_modeling",target,tuning_id)
-  ranking <- ler(file.path(tuning_dir,"comparison/comparison_ranked.csv"))
-  ranking <- ranking[order(ranking$rank),]
-  stopifnot(config_id %in% resumo$selected_cfgs$config_id, !anyDuplicated(ranking$config_id))
+  stopifnot(config_id %in% resumo$selected_cfgs$config_id)
+
+  # ONE ROW PER CONFIG, AGGREGATED HERE.
+  #
+  # comparison_ranked.csv is one row per UNIT -- (config, fold, seed) -- and has
+  # been since repetitions were introduced. This script reads it as one row per
+  # config: it draws one bar per row, sizes points by parameter count, and
+  # labelled the top three. Given 27 units it drew 27 bars for 3 configs and the
+  # duplicate check at the top is what stopped it.
+  #
+  # The fix is not to drop the check. The metrics are AVERAGED over repetitions,
+  # which is the number every decision in this project is read from; plotting a
+  # single unit would plot one draw of the seed. The architecture fields are
+  # identical within a config -- it is the same config -- so the first unit
+  # supplies them.
+  units <- ler(file.path(tuning_dir,"comparison/comparison_ranked.csv"))
+  stopifnot(nrow(units) > 0L, "config_id" %in% names(units))
+  num_mean <- function(d,col) if(col %in% names(d)) mean(as.numeric(d[[col]]),na.rm=TRUE) else NA_real_
+  ranking <- do.call(rbind,lapply(split(units,units$config_id),function(d) {
+    row <- d[1,,drop=FALSE]                       # architecture: same in every unit
+    row$val_ccc     <- num_mean(d,"val_ccc")
+    row$val_mae     <- num_mean(d,"val_mae")
+    row$runtime_min <- num_mean(d,"runtime_min")
+    row$n_units     <- nrow(d)
+    row$unit_id     <- NULL                       # meaningless once averaged
+    row
+  }))
+  ranking <- ranking[order(-ranking$val_ccc,ranking$val_mae),]
+  ranking$rank <- seq_len(nrow(ranking))
+  stopifnot(!anyDuplicated(ranking$config_id))
+  message("configs: ",nrow(ranking)," (from ",nrow(units)," units)")
   cfg <- resumo$selected_cfgs[resumo$selected_cfgs$config_id==config_id,,drop=FALSE]
   seed_perf <- ler(file.path(final_dir,"comparison/all_seed_results_test.csv"))
   seed_perf <- seed_perf[seed_perf$config_id==config_id,,drop=FALSE]
