@@ -145,10 +145,55 @@ if (is.null(tuning_run_id)) {
   tuning_run_dir <- file.path(tuning_base, tuning_run_id)
   message("Run de tuning: ", tuning_run_id)
 
-  ranking <- readr::read_csv2(
-    file.path(tuning_run_dir, "comparison", "comparison_ranked.csv"),
-    show_col_types = FALSE
-  )
+  # ONE ROW PER CONFIG, AGGREGATED FROM THE UNITS.
+  #
+  # comparison_ranked.csv is one row per (config, fold, seed) and has been since
+  # repetitions arrived. Everything below treats it as one row per config: it
+  # builds a factor whose levels are config_id -- which fails outright on the
+  # duplicates -- draws one lollipop per row, and says "N configs testados".
+  #
+  # comparison_by_config.csv is the aggregated table and is read in preference,
+  # because it carries the standard error the leaderboard should have been
+  # showing all along: a leaderboard without it invites reading a 0.02 gap as a
+  # result when the seed noise floor here is 0.03. The per-unit file is the
+  # fallback for older runs that predate it.
+  by_cfg_file <- file.path(tuning_run_dir, "comparison",
+                           "comparison_by_config.csv")
+  units_file  <- file.path(tuning_run_dir, "comparison",
+                           "comparison_ranked.csv")
+
+  ranking <- if (file.exists(by_cfg_file)) {
+    bc <- readr::read_csv2(by_cfg_file, show_col_types = FALSE)
+    # The architecture fields live only in the per-unit table; take them from
+    # the first unit of each config, where they are identical by construction.
+    un <- readr::read_csv2(units_file, show_col_types = FALSE)
+    arch_cols <- intersect(c("window_sizes", "conv_channels", "gate_type",
+                             "embedding_dim", "conv_padding", "base_lr",
+                             "runtime_min"), names(un))
+    arch <- un %>%
+      dplyr::group_by(config_id) %>%
+      dplyr::summarise(dplyr::across(dplyr::all_of(arch_cols),
+                                     ~ dplyr::first(.x)), .groups = "drop")
+    bc %>%
+      dplyr::rename(val_ccc = val_ccc_mean) %>%
+      dplyr::left_join(arch, by = "config_id")
+  } else {
+    un <- readr::read_csv2(units_file, show_col_types = FALSE)
+    un %>%
+      dplyr::group_by(config_id) %>%
+      # -config_id in both selections: it is the group key, and summarising the
+      # key alongside itself is either an error or a duplicated column depending
+      # on the dplyr version -- neither is what this wants.
+      dplyr::summarise(dplyr::across(dplyr::where(is.numeric) & !config_id,
+                                     ~ mean(.x, na.rm = TRUE)),
+                       dplyr::across(!dplyr::where(is.numeric) & !config_id,
+                                     ~ dplyr::first(.x)),
+                       n_units = dplyr::n(), .groups = "drop") %>%
+      dplyr::arrange(dplyr::desc(val_ccc)) %>%
+      dplyr::mutate(rank = dplyr::row_number())
+  }
+  stopifnot(!anyDuplicated(ranking$config_id))
+  message("configs no leaderboard: ", nrow(ranking))
 
   # ── Leaderboard: todos os configs, ordenados por val_ccc ──────────────────
   # Lollipop em vez de barra pura: a régua horizontal deixa mais fácil ver a
@@ -160,10 +205,23 @@ if (is.null(tuning_run_id)) {
       is_winner = rank == 1L
     )
 
+  # THE ERROR BAR IS THE POINT OF THIS PANEL.
+  #
+  # The comment above says the lollipop exists to make the DIFFERENCE between
+  # neighbours readable, "it is this that decides which config becomes the final
+  # model". Without a spread that difference cannot be judged: on this run the
+  # gap between first and second is 0.024 and the seed noise floor is 0.031, so
+  # the leaderboard's order is not evidence and the plot should show why.
+  has_se <- "val_ccc_se" %in% names(ranking_plot) &&
+    any(is.finite(ranking_plot$val_ccc_se))
+
   p_leaderboard <- ggplot2::ggplot(ranking_plot,
                                    ggplot2::aes(x = val_ccc, y = config_id)) +
     ggplot2::geom_segment(ggplot2::aes(x = 0, xend = val_ccc, yend = config_id,
                                        color = window_sizes), linewidth = 1) +
+    {if (has_se) ggplot2::geom_errorbarh(
+       ggplot2::aes(xmin = val_ccc - val_ccc_se, xmax = val_ccc + val_ccc_se),
+       height = 0.25, color = "grey30") else NULL} +
     ggplot2::geom_point(ggplot2::aes(color = window_sizes, size = is_winner)) +
     ggplot2::geom_point(data = dplyr::filter(ranking_plot, is_winner),
                         shape = 21, size = 5, stroke = 1.2, color = "black", fill = NA) +
@@ -171,7 +229,8 @@ if (is.null(tuning_run_id)) {
     ggplot2::coord_cartesian(xlim = c(0, max(ranking_plot$val_ccc) * 1.05)) +
     ggplot2::labs(
       title = paste0(target_label, " — leaderboard do tuning (", tuning_run_id, ")"),
-      subtitle = paste0(nrow(ranking), " configs testados | círculo com contorno preto = rank 1 (vencedor)"),
+      subtitle = paste0(nrow(ranking), " configs | barra = 1 erro padrão sobre as repetições | ",
+                        "círculo com contorno preto = rank 1"),
       x = "CCC de validação", y = NULL, color = "Janela(s)"
     ) +
     ggplot2::theme_bw()
