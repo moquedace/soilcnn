@@ -205,7 +205,28 @@ if (identical(config_id, "auto")) {
   tmp_summary_path <- file.path(final_run_dir, "comparison", "final_run_summary.rds")
   if (!file.exists(tmp_summary_path))
     stop("Could not resolve config_id = 'auto': ", tmp_summary_path)
-  config_id <- readRDS(tmp_summary_path)$selected_cfgs$config_id[1]
+  tmp_summary <- readRDS(tmp_summary_path)
+
+  # THE ORDER OF THE CHOICE, NOT THE ORDER OF THE GRID.
+  #
+  # This read selected_cfgs$config_id[1]. selected_cfgs is built in stage 04 as
+  # dplyr::filter(tune_grid_full, config_id %in% selected_config_ids), and
+  # filter preserves tune_grid_full's row order -- so with two configs selected,
+  # [1] is whichever appears first in the GRID, which need not be the one the
+  # selection rule put first. One config: identical either way. Two: this is
+  # which model goes on the map, decided silently.
+  #
+  # selected_config_ids is the chosen list in its own order and is written by
+  # stage 04 from 2026-09-18 onward. Runs older than that have only the grid
+  # order, so the fallback stays -- named, rather than left as the default.
+  config_id <- if (!is.null(tmp_summary$selected_config_ids)) {
+    tmp_summary$selected_config_ids[1]
+  } else {
+    message("  (this final run predates selected_config_ids; falling back to ",
+            "the grid order,\n   which differs from the selection order only ",
+            "when more than one config was fitted)")
+    tmp_summary$selected_cfgs$config_id[1]
+  }
   message("config_id resolved to: ", config_id)
 }
 
@@ -263,19 +284,19 @@ apply_predictor_scaling <- function(mat, pred_names, scaling, qc) {
 
 final_summary <- readRDS(summary_file)
 
-if (identical(config_id, "auto")) {
-  if (nrow(final_summary$all_seed_results) > 0) {
-    auto_rank <- final_summary$all_seed_results %>%
-      dplyr::group_by(config_id) %>%
-      dplyr::summarise(mean_ccc = mean(ccc, na.rm = TRUE), .groups = "drop") %>%
-      dplyr::arrange(dplyr::desc(mean_ccc))
-    config_id <- auto_rank$config_id[1]
-    message("config_id resolved to: ", config_id,
-            sprintf(" (mean test CCC %.4f)", auto_rank$mean_ccc[1]))
-  } else {
-    stop("config_id = 'auto' but final_run_summary$all_seed_results is empty.")
-  }
-}
+# A SECOND "auto" BLOCK USED TO SIT HERE, AND IT IS GONE.
+#
+# It was unreachable -- config_id is reassigned by the block above, so its
+# condition was always FALSE by the time control arrived. What it would have
+# done, had anyone reordered the two, is rank the configs by mean TEST CCC and
+# deploy the winner.
+#
+# That is selection on the test set. R/test_optimism.R exists to make the order
+# "choose, then look" enforceable, and stage 04 freezes the choice before a
+# single test score is computed; this would have undone both, on the last
+# stage, where nothing downstream could notice. Dead code that would violate
+# the project's central guarantee if it woke up is worse than no code, so it is
+# deleted rather than commented out.
 
 if (!config_id %in% final_summary$selected_cfgs$config_id) {
   stop("config_id '", config_id, "' not in final run summary.")

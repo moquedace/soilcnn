@@ -171,6 +171,20 @@ by_config <- if (file.exists(byconfig_file)) {
 # ranking IS decisive, which is the property that makes it safe as a default.
 #
 # selection_rule = "rank1" restores the old behaviour for someone who wants it.
+# WHAT WAS ASKED FOR, AND WHAT ACTUALLY HAPPENED, ARE TWO DIFFERENT FACTS.
+#
+# selection_rule holds the REQUEST and is a constant set at the top of this
+# file. selection_rule_applied holds what the code below actually did, and it is
+# that one which gets frozen into selection.rds.
+#
+# They diverge in two real cases, and the record used to report the request in
+# both: a hand-written selected_config_ids skips the rule altogether, and a
+# requested one_se that cannot be applied falls back to rank 1 (the branch below
+# even prints a note saying so). selection.rds is the file whose whole job is to
+# say how the final model was chosen -- the published selection optimism of
+# +0.0000 means nothing if that field describes a rule nobody ran.
+selection_rule_applied <- NULL
+
 if (is.null(selected_config_ids)) {
   selected_config_ids <- if (!is.null(by_config) &&
                              identical(selection_rule, "one_se") &&
@@ -178,6 +192,7 @@ if (is.null(selected_config_ids)) {
                              "n_params" %in% names(by_config)) {
     pick <- one_se(by_config, metric = selection_metric, complexity = "n_params")
     print_one_se(pick, metric = selection_metric)
+    selection_rule_applied <- "one_se"
     pick$config_id
   } else if (!is.null(by_config)) {
     if (identical(selection_rule, "one_se")) {
@@ -190,11 +205,33 @@ if (is.null(selected_config_ids)) {
               ", which this tuning run did not record. Falling back to rank 1.",
               "\n  (n_params is recorded by tuning runs from 2026-09 onward.)")
     }
+    # NOT "one_se". The rule was asked for and could not be applied, and the
+    # record has to carry that distinction or a reader six months from now sees
+    # a one_se selection that never ran.
+    selection_rule_applied <- if (identical(selection_rule, "one_se")) {
+      "rank1_after_one_se_unavailable"
+    } else {
+      "rank1"
+    }
     dplyr::filter(by_config, rank == 1L)$config_id
   } else {
+    # The per-UNIT table, which is one row per (config, fold, seed). Ranking on
+    # it lets a lucky seed outrank a steady mean, so the record names it
+    # separately from a rank 1 taken on the per-config means.
+    selection_rule_applied <- "rank1_from_units"
     dplyr::filter(ranking, rank == 1L)$config_id
   }
+} else {
+  selection_rule_applied <- "manual"
+  message("\nConfig(s) named by hand at the top of this script: ",
+          paste(selected_config_ids, collapse = ", "),
+          "\n  No selection rule was applied, and the frozen record will say so.")
 }
+
+# A record with no rule in it is not a record. This cannot fire as the code
+# stands -- every branch above sets it -- which is exactly when a guard is cheap
+# and the next branch someone adds is when it earns its place.
+stopifnot(is.character(selection_rule_applied), length(selection_rule_applied) == 1L)
 
 # If the winner's margin is smaller than the seed noise, SAY SO HERE, where
 # the choice is being made -- rather than letting the number travel onward as
@@ -227,7 +264,7 @@ if (!is.null(by_config) && nrow(by_config) > 1L &&
 # DIFFERENT choice after the grid has been scored is refused, because that is
 # the loop the lock exists to prevent.
 freeze_selection(tuning_dir, selected_config_ids,
-                 rule   = if (is.null(selection_rule)) "manual" else selection_rule,
+                 rule   = selection_rule_applied,
                  metric = selection_metric,
                  note   = paste("stage 04 on", format(Sys.time())))
 
@@ -653,7 +690,13 @@ safe_write_csv2(all_seed_results, file.path(output_dir, "comparison", "all_seed_
 safe_write_csv2(config_summary,   file.path(output_dir, "comparison", "config_summary_test.csv"))
 
 safe_save_rds(
-  list(selected_cfgs = selected_cfgs, seeds = seeds,
+  # selected_config_ids IS THE ORDER OF THE CHOICE. selected_cfgs comes from
+  # dplyr::filter(tune_grid_full, ...), and filter keeps the GRID's order -- so
+  # its first row is not necessarily the config that was chosen first. Stage 05
+  # resolves config_id = "auto" from this, and with two configs the difference
+  # is which model goes on the map.
+  list(selected_cfgs = selected_cfgs, selected_config_ids = selected_config_ids,
+       selection_rule = selection_rule_applied, seeds = seeds,
        all_seed_results = all_seed_results, config_summary = config_summary,
        run_id = run_id, tuning_run_id = tuning_run_id),
   file.path(output_dir, "comparison", "final_run_summary.rds"),
@@ -665,6 +708,24 @@ safe_save_rds(
 # seed isolates the effect of the architecture from the effect of the draw.
 # Reported as the mean difference, and whether it is consistent across seeds --
 # a mean difference smaller than the spread between seeds is a tie.
+
+# EXACTLY TWO, AND THE OTHER COUNTS SAY SO OUT LOUD.
+#
+# The block below names c1 and c2 and subtracts one from the other, so it is a
+# two-config comparison by construction and cannot simply be relaxed. What it
+# used to do with three configs was nothing at all, with no else branch and no
+# message: paired_by_seed.csv would just not exist, and whoever went looking for
+# it would find out then. This project has been bitten four times by a check
+# that skipped itself quietly; that is why the counts are reported here.
+if (length(selected_config_ids) > 2) {
+  message("\n-- Paired comparison SKIPPED: ", length(selected_config_ids),
+          " configs selected --")
+  message("   paired_by_seed.csv compares exactly two configs, seed by seed. ",
+          "With more than\n   two, the pair to compare is a choice this script ",
+          "will not make for you.")
+  message("   Everything else in this run is unaffected -- per-config results ",
+          "are in\n   comparison/config_summary_test.csv.")
+}
 
 if (length(selected_config_ids) == 2) {
   paired <- all_seed_results %>%
