@@ -777,11 +777,18 @@ capability(
       # is what the native rf spec wraps, on the same folds and the same 724
       # columns -- so 03b's rf_context (0.487) is the target. An adapter that
       # quietly resamples, or that ignores the grid, does not land here.
-      abs(max(cmp$val_ccc) - 0.487) < 0.05
+      #
+      # THE BEST CONFIG'S MEAN, not the best UNIT. The first version compared
+      # max(cmp$val_ccc) -- a per-unit maximum over 9 units -- against 0.487,
+      # which is a per-config mean over 9. Those are different quantities and
+      # the looser one is systematically higher, so the tolerance was doing the
+      # work the comparison should have done. It passed at 0.523 against 0.487;
+      # the right comparison is 0.483 against 0.487.
+      abs(r$fit$by_config$val_ccc_mean[1] - 0.487) < 0.02
     list(ok = ok, measured = sprintf(
-      "adapter method='%s' resample=%s | folds match CNN: %s | %d units | best val_ccc %.4f",
-      ctl$method, is.null(r$probe$fit[["resample"]]), folds_ok, nrow(cmp),
-      max(cmp$val_ccc, na.rm = TRUE)))
+      "method='%s' no-resample=%s | folds match CNN: %s | best config mean %.4f vs native rf_context 0.487",
+      ctl$method, is.null(r$probe$fit[["resample"]]), folds_ok,
+      r$fit$by_config$val_ccc_mean[1]))
   })
 
 # ══════════════════════════════════════════════════════════════════════════════

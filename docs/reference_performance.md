@@ -428,3 +428,53 @@ convolution spends 340,225 parameters rediscovering it in the rim.
 correlation between each channel's centre value and its ring-4 mean across the
 3,728 points. If it is high, redundancy is confirmed directly rather than
 inferred from two experiments agreeing about a third thing.
+
+---
+
+## Capability sweep, tier A — 8 of 8 (2026-09-17)
+
+| id | capability | measured |
+|---|---|---|
+| A7 | `occlusion_report()` | baseline 0.497 \| context −0.513 (224 px) \| centre −0.002 (1 px) |
+| A8 | `score_test_grid()` | cfg_003 test CCC 0.465, rank 1 of 3, **selection optimism +0.0000** |
+| A6 | `conformal_cv()` | PICP 0.8997 over 3,092 \| per fold 0.876 / 0.926 / 0.898 |
+| A1 | `random_cv()` | 36 units, val_ccc **0.622**, test set identical to the frozen 591 |
+| A2 | `holdout_cv()` | 2693 / 475 / 560 — drew its own test set, not the frozen one |
+| A3 | `region_cv()` | 31 FAO classes, none split, val_ccc **0.384** (sd 0.133 across folds) |
+| A4 | `features = "window_mean"` | 543 columns, means verified against base R |
+| A5 | `caret_spec("rf")` | `method = "none"`, folds match the CNN's, best config mean 0.483 |
+
+### The number this sweep produced by accident: validation design is worth 0.24 CCC
+
+The same forest, the same 181 centre values, the same points, under three
+resampling designs:
+
+| design | val_ccc | what it answers |
+|---|---|---|
+| `random_cv` | **0.622** | interpolation beside a known sample |
+| `spatial_cv` (03b `rf_centre`) | **0.487** | prediction into unvisited ground |
+| `region_cv` (leave-soil-class-out) | **0.384** | prediction into an unseen soil class |
+
+**0.24 CCC separates the easiest from the hardest**, which is larger than every
+difference this project has measured between model families (0.025), between CNN
+configs (0.034), or between window sizes. The choice of validation design
+dominates the choice of model, and a paper that reports one number without
+naming the design is reporting the design.
+
+`region_cv`'s spread is also the largest — sd 0.133 across folds against 0.031
+for spatial — which is what leaving out a whole soil class does: some classes
+are predictable from the others and some are not.
+
+### A5 confirms the caret adapter is a shim and nothing more
+
+caret's `rf` reaches **0.483** where the native `rf` spec reaches **0.487**, on
+the same folds and the same 724 columns, with `trainControl(method = "none")`,
+no resample table and no retained training data. Two independent wrappers of
+`randomForest` landing 0.004 apart is a stronger statement than any structural
+check: an adapter that quietly resampled, or that ignored the tuning grid, would
+not arrive there.
+
+`xgbTree` could not be used: it dies inside xgboost's own R binding
+(`ALTLIST classes must provide a Set_elt method`) before reaching any code here.
+That is an xgboost/R build incompatibility on this machine, not a framework
+defect, and testing an adapter through a broken backend measures the backend.
