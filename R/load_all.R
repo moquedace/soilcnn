@@ -40,7 +40,8 @@
 # THE ORDER IS THE DEPENDENCY ORDER, and it is written out rather than sorted:
 # an alphabetical list would put api.R first, which cannot work.
 .dlc_files <- c(
-  "utils.R",            # paths, safe IO, device
+  "utils.R",            # paths, safe IO, device, env overrides, "latest"
+  "checks.R",           # the check ledger every capability script uses
   "patches.R",          # patch geometry, shared by extraction and prediction
   "preprocess.R",       # QC (fold-independent) vs scaling (fold-dependent)
   "metrics.R",          # ccc() and the rest
@@ -63,11 +64,19 @@
   "api.R"               # dsm_load / spatial_cv / dsm_train
 )
 
+# A MISSING MODULE IS AN ERROR, NOT A WARNING. This used to warn and carry on,
+# and a warning scrolls past. The script then fails minutes later with "could
+# not find function" at the first call into the missing file -- or, worse,
+# does not fail, because the function it needed had a same-named fallback
+# somewhere. A framework that loads with pieces missing is not loaded.
 for (.f in .dlc_files) {
   .p <- file.path(.dlc_root, "R", .f)
-  if (file.exists(.p)) source(.p) else {
-    warning("Framework file missing, skipped: ", .f, call. = FALSE)
+  if (!file.exists(.p)) {
+    stop("Framework file missing: ", .p, "\n  The list in R/load_all.R names ",
+         "every module the framework needs; a partial load is refused.",
+         call. = FALSE)
   }
+  source(.p)
 }
 rm(.f, .p)
 
