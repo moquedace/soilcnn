@@ -280,27 +280,22 @@ compare_run_snapshot <- function(values, dir, exclude = character(0)) {
 # tibble"). Report output has to leave through one channel to keep its order.
 print_snapshot_diff <- function(cmp, n_show = 40L) {
   if (!cmp$has_previous) {
-    cat("  No previous snapshot -- this run becomes the reference.
-")
+    cat("  No previous snapshot -- this run becomes the reference.\n")
     return(invisible(NULL))
   }
-  cat("  Comparing with: ", cmp$previous_file, "
-", sep = "")
+  cat("  Comparing with: ", cmp$previous_file, "\n", sep = "")
 
   changed <- dplyr::filter(cmp$diff, status != "=")
   if (nrow(changed) == 0L) {
     cat("  EVERYTHING IDENTICAL to the previous run (", nrow(cmp$diff),
-        " values).
-",
+        " values).\n",
         sep = "")
   } else {
-    cat("  ", nrow(changed), " of ", nrow(cmp$diff), " values changed:
-",
+    cat("  ", nrow(changed), " of ", nrow(cmp$diff), " values changed:\n",
         sep = "")
     print_wide(dplyr::slice_head(changed, n = n_show), n = Inf)
     unchanged <- sum(cmp$diff$status == "=")
-    if (unchanged > 0L) cat("  (", unchanged, " inalterado(s))
-", sep = "")
+    if (unchanged > 0L) cat("  (", unchanged, " unchanged)\n", sep = "")
   }
   invisible(changed)
 }
@@ -481,8 +476,7 @@ early_stopping_bias <- function(history_dir, plateau = 20L,
 print_early_stopping_bias <- function(bias, threshold_rel = 0.02) {
   s <- attr(bias, "summary")
   cat("\n-- Optimism of early stopping (from histories, nothing retrained) --\n")
-  cat(sprintf("  measured on           : %s
-",
+  cat(sprintf("  measured on           : %s\n",
               if (is.null(s$loss_col)) "(unknown)" else s$loss_col))
   cat(sprintf("  units                 : %d\n", s$n_units))
   cat(sprintf("  plateau window        : %d epochs around the chosen one\n",

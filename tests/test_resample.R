@@ -629,8 +629,7 @@ ok["random_subsample_destroys_density"] <- d_rand  < 0.6 * d_full
 
 cat("  neighbours <1 km / point : full ", sprintf("%.1f", d_full),
     " | by block ", sprintf("%.1f", d_block),
-    " | random ", sprintf("%.1f", d_rand), "
-", sep = "")
+    " | random ", sprintf("%.1f", d_rand), "\n", sep = "")
 
 ok["subsample_is_reproducible"] <- identical(
   as.integer(block_subsample(meta$x, meta$y, 0.30, 25000, seed = 3L)),
@@ -696,8 +695,7 @@ ok["one_se_needs_repetitions"] <- inherits(
 
 cat("  one_se                   : the mean picks cfg_B (", bc$val_ccc_mean[1],
     "), one_se picks ", pick$config_id, " (",
-    format(pick$n_params / 1e6, digits = 2), "M parameters against 11M)
-",
+    format(pick$n_params / 1e6, digits = 2), "M parameters against 11M)\n",
     sep = "")
 
 # =============================================================================
@@ -800,8 +798,7 @@ ok["spatial_folds_quiet_when_balanced"] <- {
 cat("  block size               : cluster of 300 -> 5 deg gathers ",
     bshare$largest_n[bshare$block_size == 5], " into one block, 0.1 deg only ",
     bshare$largest_n[bshare$block_size == 0.1], "; suggested ",
-    as.numeric(sug), "
-", sep = "")
+    as.numeric(sug), "\n", sep = "")
 
 
 # =============================================================================
@@ -895,8 +892,7 @@ ok["paired_ignores_failed_units"] <- {
   p$n_pairs == 8L && p$dropped == 1L
 }
 
-cat(sprintf("  paired vs unpaired SE    : %.5f vs %.5f on a 0.02 shift under 0.30 fold spread
-",
+cat(sprintf("  paired vs unpaired SE    : %.5f vs %.5f on a 0.02 shift under 0.30 fold spread\n",
             pt$se, pt$se_unpaired))
 
 

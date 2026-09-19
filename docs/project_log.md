@@ -2829,3 +2829,96 @@ test run printed `config, rule, metric, time` where the run before had printed
 `..., commit 3649fd8`; nothing failed, the provenance just quietly thinned. Now
 resolved with `git -C` against the record's own directory, and the message says
 when it could not be resolved at all.
+
+## 2026-09-19 — Overnight review, batch 1: the framework stops where it used to shrug
+
+Six-lens audit over the whole repository (contracts, error paths, resume,
+documentation drift, tests, ease of use), 105 findings, each re-read at the
+line before anything was changed. The items below are the ones that could turn
+a wrong result into one that looks right; the rest are in
+`docs/status_and_roadmap.md` §3.
+
+### A locked file is an error, not a rename
+
+`safe_write_csv2`, `safe_save_rds` and `safe_torch_save` diverted to
+`<stem>_<timestamp>.<ext>` when the target could not be removed (a Windows
+handle held by Excel) and returned the new path invisibly. No caller read that
+return value. So the authoritative file kept its OLD contents while a fresh one
+sat beside it unread, and stage 04 would have ranked a stale
+`comparison_ranked.csv` without a word. Now `.refuse_locked()` stops and names
+the file. `.timestamped_path()` is gone with its two tests; the replacement
+test locks the target with a directory (portable — an open handle only blocks
+on Windows) and asserts that nothing was written beside it.
+
+*Alternative considered:* keep the divert but warn. Rejected: a warning during
+a 7-hour run scrolls off; the rename still leaves two files with one name.
+
+### `%>%` is bound in the framework
+
+`load_all.R` attaches nothing, and nine modules use the pipe, so a session
+without `library(dplyr)` died at the first `%>%` — after the store had loaded,
+in the README's own Quickstart. `utils.R` now binds `` `%>%` <- dplyr::`%>%` ``
+once. A later `library(dplyr)` rebinds the same function.
+
+### Three doors checked at the door
+
+- `load_patch_store()` reads `manifest$store_complete`. Stage 02 writes FALSE
+  when a window failed to save and stops — and the loader opened the store
+  anyway, because nothing looked. Its "missing file" message also named
+  `patches_<window>.pt`, a format this project never had.
+- `dsm_load()` checks `type_table` for `predictor`, `is_dummy`,
+  `is_percentage` (logical). A missing `is_dummy` died inside `case_when()`
+  when the first fold cache was built, minutes in. A `raster_table` whose
+  raster is missing, or without `terra`, used to fall through silently to
+  the manifest's cell size; it now says which of the three it was.
+- `dsm_train()` refuses a non-`dsm_data`, a non-`model_spec`, a caret-style
+  `resampling = "cv"`, and any `...` name that `train_one_cnn()` does not
+  take. A misspelt `patiense = 50` used to travel through two layers and fail
+  at the first unit, after the plan was written and the fold cache built.
+
+### `check_plan_unchanged()` no longer answers "fine" to a plan it cannot read
+
+It caught the read error and returned TRUE. Now it stops: the one case in
+which the check exists is the case it could not perform.
+
+### One home for "which config did the final run deploy"
+
+`selected_config_id(summary, label)` in `utils.R`. Three copies existed
+(05, `_b1`, `_b4`), and 05b, 06, 07 and `05a_test` read
+`selected_cfgs$config_id[1]` — the GRID's order, in which the runner-up can
+come first when two configs were fitted. All seven sites call the helper;
+`"auto"` can no longer travel on unresolved. Tested with a two-config summary
+in both orders.
+
+### A missing seed is an error; stage 04 records what it fitted
+
+Stage 05 warned "using only 2 available" and built the map, while
+`final_run_summary.rds` still listed three seeds. Stage 04 now stops when a
+requested seed did not finish (the tryCatch that swallowed it stays, so the
+error is printed first), writes `seeds_fitted`, and 05 refuses a checkpoint
+set that differs from it.
+
+### `setup_torch_device()` reads the machine
+
+The default was 8 and every example script overrode it with 30 — one
+workstation's number. NULL now means physical cores minus one.
+
+### Smaller
+
+- `06_avaliacao_grafica.R` was the eleventh alphabetical "latest" site; now
+  `latest_run_dir()`.
+- Raw `Sys.getenv()` reads in 05, 07 and `_b1` go through `env_chr`/`env_int`,
+  so `"two"` is refused instead of becoming NA.
+- `utils/install_load_pkg.R` used `require()`, which returns FALSE and let the
+  banner print "completed"; now `library()` with a stop that names torch's
+  `install_torch()` when that is the missing piece.
+- 21 strings across `R/`, `tests/` and `examples/` had a literal line break
+  where a newline escape had been — a heredoc artefact. Joined. Two Portuguese
+  leftovers in English files fixed.
+- The tautological test `resume_does_not_care_how_a_number_was_spelt`
+  (0.0001 and 1e-4 are the same double) now respells the RECORD, where the
+  value is text, and a sibling asserts that a genuinely different number is
+  still caught.
+
+Verification: `tools/r_lint.py` 0 findings, `tools/r_calls.py` 0 suspicious
+arguments over 72 files. `tests/run_all.R` is the author's to run before C1.

@@ -305,8 +305,7 @@ ok["a_perfect_median_is_a_biased_mean"] <- sm$bias < -1
 ok["and_the_skew_is_what_causes_it"] <-
   mean(skew_obs) / stats::median(skew_obs) > 1.1
 
-cat(sprintf("  signed bias              : a -6 offset reads %.1f (MAE reads %.1f either way)
-",
+cat(sprintf("  signed bias              : a -6 offset reads %.1f (MAE reads %.1f either way)\n",
             bm$bias, bm$mae))
 
 .report(ok, "test_metrics_reporting")

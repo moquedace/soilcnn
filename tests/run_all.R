@@ -102,8 +102,7 @@ cat(sprintf("\n  %d/%d passed in %.1f %s\n",
             as.numeric(el), units(el)))
 
 if (!run_slow) {
-  cat("  (slow tests SKIPPED -- run_slow <- FALSE at the top of this file)
-")
+  cat("  (slow tests SKIPPED -- run_slow <- FALSE at the top of this file)\n")
 }
 
 if (any(status != "PASS")) {

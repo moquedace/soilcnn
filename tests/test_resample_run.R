@@ -378,8 +378,7 @@ bad_cols <- shared[cls_before[shared] != cls_after[shared]]
 if (length(bad_cols)) {
   cat("  columns with a swapped type: ",
       paste(sprintf("%s (%s -> %s)", bad_cols, cls_before[bad_cols],
-                    cls_after[bad_cols]), collapse = ", "), "
-", sep = "")
+                    cls_after[bad_cols]), collapse = ", "), "\n", sep = "")
 }
 
 # -- 4/7. two folds -----------------------------------------------------------

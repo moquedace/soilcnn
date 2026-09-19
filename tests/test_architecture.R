@@ -186,8 +186,7 @@ row_nopad <- g2[1, ]; row_nopad$conv_padding <- NULL
 ok2["backcompat_defaults_to_same"] <- identical(
   unname(build_cnn_from_config(row_nopad, n_ch)$conv_padding_used[1]), "same")
 
-cat(sprintf("  valid vs same (15x15): %s vs %s params (%.2fx lighter)
-",
+cat(sprintf("  valid vs same (15x15): %s vs %s params (%.2fx lighter)\n",
             format(np(m_valid), big.mark = ","),
             format(np(m_same),  big.mark = ","),
             np(m_same) / np(m_valid)))

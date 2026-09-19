@@ -58,12 +58,35 @@ dsm_load <- function(patch_dir, points, type_table, windows = NULL,
 
   read_if_path <- function(z, what) {
     if (is.character(z) && length(z) == 1L) {
-      if (!file.exists(z)) stop(what, " not found: ", z, call. = FALSE)
-      readr::read_csv2(z, show_col_types = FALSE)
+      if (!file.exists(z)) {
+        stop(what, " not found: ", z, "\n  It is written by stage 01 ",
+             "(examples/soc_stock_0_5cm/01_prepare_dataset.R); run that first, ",
+             "or pass a data frame.", call. = FALSE)
+      }
+      safe_read_csv2(z)
     } else z
   }
   points     <- read_if_path(points,     "Point table")
   type_table <- read_if_path(type_table, "Predictor type table")
+
+  # THE TYPE TABLE IS CHECKED AT THE DOOR. Without `predictor` the store-spec
+  # check below is skipped (it compares against NULL), and a missing
+  # is_dummy / is_percentage died inside dplyr::case_when() when the first fold
+  # cache was built -- minutes in, with a message about a case_when clause.
+  need <- c("predictor", "is_dummy", "is_percentage")
+  gone <- setdiff(need, names(type_table))
+  if (length(gone) > 0L) {
+    stop("type_table is missing column(s): ", paste(gone, collapse = ", "),
+         ".\n  It needs predictor (channel name, in store order), is_dummy and ",
+         "is_percentage (logical) -- stage 01 writes predictor_type_table.csv.",
+         call. = FALSE)
+  }
+  for (lc in c("is_dummy", "is_percentage")) {
+    if (!is.logical(type_table[[lc]])) {
+      stop("type_table$", lc, " must be logical, got ", class(type_table[[lc]])[1],
+           ".", call. = FALSE)
+    }
+  }
 
   store  <- load_patch_store(patch_dir, windows, verbose = verbose)
   points <- align_points_to_meta(points, store$meta)
@@ -72,12 +95,26 @@ dsm_load <- function(patch_dir, points, type_table, windows = NULL,
   # are given in the SAME units as x/y, and getting that wrong produces either
   # an abort (harmless) or a split that only LOOKS spatial (not).
   if (is.null(cell_size) && !is.null(raster_table)) {
+    # LOUD, NOT QUIET. The caller asked for the strongest source of cell_size
+    # -- the raster itself. When that source is unusable this used to fall
+    # through to the store manifest without a word, and the resolution lock
+    # then compared the manifest with itself. Three ways it can be unusable,
+    # each named.
     rt <- read_if_path(raster_table, "raster_table_used.csv")
-    r1 <- rt$raster_file[1]
-    if (!is.null(r1) && file.exists(r1) &&
-        requireNamespace("terra", quietly = TRUE)) {
-      cell_size <- terra::res(terra::rast(r1))[1]
+    if (!"raster_file" %in% names(rt)) {
+      stop("raster_table has no raster_file column: ", raster_table, call. = FALSE)
     }
+    r1 <- rt$raster_file[1]
+    if (!file.exists(r1)) {
+      stop("raster_table names ", r1, ", which does not exist -- the predictor ",
+           "directory moved, or this table was written on another machine.",
+           "\n  Pass cell_size = <number> instead, or fix the path.", call. = FALSE)
+    }
+    if (!requireNamespace("terra", quietly = TRUE)) {
+      stop("Reading cell_size from a raster needs the terra package. Install it, ",
+           "or pass cell_size = <number>.", call. = FALSE)
+    }
+    cell_size <- terra::res(terra::rast(r1))[1]
   }
   if (is.null(cell_size)) {
     # The store recorded it at extraction time; that is a weaker source than
@@ -331,9 +368,39 @@ dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
                       resume = TRUE, evaluate_test = FALSE,
                       verbose = TRUE, ...) {
 
-  stopifnot(inherits(data, "dsm_data"))
+  # THE DOOR. Each of these used to fail later and worse: a wrong `data`
+  # died inside the store code, a caret-style resampling = "cv" died in a
+  # stopifnot() naming an internal expression, and a misspelt training
+  # argument travelled through `...` to fail at the FIRST UNIT -- after the plan
+  # was checked and written and the first fold cache built -- for the CNN, or
+  # to be swallowed by the table runners' own `...` for rf and mlp.
+  if (!inherits(data, "dsm_data")) {
+    stop("`data` must come from dsm_load(); got a ", class(data)[1], ".",
+         call. = FALSE)
+  }
   if (is.character(model)) model <- get_model(model)
-  stopifnot(inherits(model, "model_spec"))
+  if (!inherits(model, "model_spec")) {
+    stop("`model` must be a registered name (\"cnn\", \"rf\", \"mlp\", ...) or ",
+         "a model_spec(); got a ", class(model)[1], ".", call. = FALSE)
+  }
+  if (!inherits(resampling, c("resample_spec", "fold_plan"))) {
+    stop("`resampling` must be built with spatial_cv(), knndm_cv(), random_cv(), ",
+         "holdout_cv() or region_cv(), or be a fold_plan -- got a ",
+         class(resampling)[1], ". caret-style strings such as \"cv\" are not ",
+         "accepted here.", call. = FALSE)
+  }
+  if (identical(model$input, "patches")) {
+    dots <- names(list(...))
+    internal <- c("cfg", "n_channels", "loaders", "points_valid", "transform",
+                  "device")
+    allowed <- c(setdiff(names(formals(train_one_cnn)), internal), "release_store")
+    bad <- setdiff(dots, allowed)
+    if (length(bad) > 0L) {
+      stop("dsm_train() does not know argument(s): ", paste(bad, collapse = ", "),
+           ".\n  Training options for the CNN are: ",
+           paste(sort(allowed), collapse = ", "), call. = FALSE)
+    }
+  }
 
   # The buffer is derived from the LARGEST window in play. With an explicit
   # grid that is the largest window the grid asks for; with tune_length the

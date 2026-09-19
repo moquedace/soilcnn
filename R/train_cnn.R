@@ -579,7 +579,7 @@ run_cnn_tuning <- function(
   comparison <- tibble::tibble()
   done_ids   <- character(0)
   if (resume && file.exists(comparison_path)) {
-    # A RETOMADA LE O RDS, NUNCA O CSV.
+    # A RESUME READS THE RDS, NEVER THE CSV.
     #
     # The CSV is for humans; it does not preserve type. read_csv2() guesses,
     # and guessed wrong in two ways that have each killed a run here:

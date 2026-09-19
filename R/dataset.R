@@ -141,14 +141,25 @@ load_patch_store <- function(patch_dir, window_sizes = NULL, verbose = TRUE) {
   for (f in c(manifest_path, meta_path)) {
     if (!file.exists(f)) {
       stop("Patch store incomplete, missing: ", f,
-           "\nA patch store is written by the extraction step and must contain ",
-           "patches_<window>.pt, patch_meta.csv and patch_manifest.rds.",
+           "\nA patch store is written by stage 02 and must contain ",
+           "patches_wNN.rds, patch_meta.csv and patch_manifest.rds.",
            call. = FALSE)
     }
   }
 
   manifest <- readRDS(manifest_path)
-  meta     <- readr::read_csv2(meta_path, show_col_types = FALSE)
+  meta     <- safe_read_csv2(meta_path)
+
+  # THE STORE'S OWN VERDICT IS READ. Stage 02 writes store_complete = FALSE when
+  # a window failed to save, prints a warning, and stops -- and this loader
+  # then opened the store anyway, because nothing here looked. A store that
+  # declared itself incomplete trained a model.
+  if ("store_complete" %in% names(manifest) &&
+      !isTRUE(as.logical(manifest$store_complete[1]))) {
+    stop("This patch store's own manifest says it is INCOMPLETE (a window did ",
+         "not save; see patch_files.csv in the store).\n  Re-run stage 02 for ",
+         patch_dir, call. = FALSE)
+  }
 
   if (isTRUE(manifest$scaling_applied[1])) {
     stop("This patch store was written WITH scaling already applied, so it ",

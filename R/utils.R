@@ -1,18 +1,40 @@
 # Utility functions: safe I/O, directory helpers, device setup
-# These functions protect against file-lock issues common on Windows
-# and provide consistent output for all framework components.
+# Shared helpers: file writers that refuse a locked target, the point-table
+# contract, run-directory resolution, environment overrides.
+
+# ── The pipe ──────────────────────────────────────────────────────────────────
+#
+# load_all.R source()s files and attaches no package, so a session that has
+# not called library(dplyr) fails at the first `%>%` inside the framework --
+# after the store has loaded, in the README's own Quickstart. Nine modules use
+# it. Bound here, once, from the package that owns it; a later library(dplyr)
+# rebinds the same function and changes nothing.
+`%>%` <- dplyr::`%>%`
 
 # ── I/O helpers ──────────────────────────────────────────────────────────────
+#
+# A LOCKED FILE IS AN ERROR, NOT A RENAME. These writers used to divert to a
+# timestamped sibling when the target could not be removed (a Windows handle
+# held by Excel or a viewer), and return the new path invisibly. No caller ever
+# read that return value -- grep finds none -- so the authoritative file kept
+# its OLD contents while a fresh one sat beside it unread, and stage 04 would
+# have ranked a stale table without a word. Stopping costs a re-run; the rename
+# cost a wrong result that looked like a right one.
+.refuse_locked <- function(path) {
+  if (!file.exists(path)) return(invisible(TRUE))
+  removed <- suppressWarnings(try(file.remove(path), silent = TRUE))
+  if (inherits(removed, "try-error") || isFALSE(removed)) {
+    stop("Cannot overwrite ", path, " -- it is locked, most likely open in ",
+         "another program.\n  Close it and re-run. Nothing was written.",
+         call. = FALSE)
+  }
+  invisible(TRUE)
+}
 
 #' Write a CSV (semicolon-separated) safely, removing old file first if needed.
 safe_write_csv2 <- function(data, path) {
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
-  if (file.exists(path)) {
-    removed <- try(file.remove(path), silent = TRUE)
-    if (inherits(removed, "try-error") || isFALSE(removed)) {
-      path <- .timestamped_path(path, "csv")
-    }
-  }
+  .refuse_locked(path)
   readr::write_csv2(data, path)
   invisible(path)
 }
@@ -31,12 +53,7 @@ safe_read_csv2 <- function(path, ...) {
 
 safe_save_rds <- function(object, path, compress = FALSE) {
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
-  if (file.exists(path)) {
-    removed <- try(file.remove(path), silent = TRUE)
-    if (inherits(removed, "try-error") || isFALSE(removed)) {
-      path <- .timestamped_path(path, "rds")
-    }
-  }
+  .refuse_locked(path)
   saveRDS(object = object, file = path, compress = compress)
   invisible(path)
 }
@@ -70,31 +87,14 @@ safe_torch_save <- function(object, path) {
     stop("Refusing to torch_save(): a tensor of ",
          format(n_bytes, big.mark = ","), " bytes exceeds the 2^31 limit of ",
          "torch_save() in this torch build, which corrupts silently rather ",
-         "than erroring.
-Use saveRDS on a plain R array instead.",
+         "than erroring.\n  Use saveRDS on a plain R array instead.",
          call. = FALSE)
   }
 
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
-  if (file.exists(path)) {
-    removed <- try(file.remove(path), silent = TRUE)
-    if (inherits(removed, "try-error") || isFALSE(removed)) {
-      path <- .timestamped_path(path, "pt")
-    }
-  }
+  .refuse_locked(path)
   torch::torch_save(object, path)
   invisible(path)
-}
-
-.timestamped_path <- function(path, ext) {
-  file.path(
-    dirname(path),
-    paste0(
-      tools::file_path_sans_ext(basename(path)),
-      "_", format(Sys.time(), "%Y%m%d_%H%M%S"),
-      ".", ext
-    )
-  )
 }
 
 # ── the point table contract ───────────────────────────────────────────────
@@ -163,7 +163,17 @@ create_output_dirs <- function(dirs) {
 #' @param n_threads   Number of intra-op threads (set to available CPU cores).
 #' @param use_cuda    Use GPU if available.
 #' @return A torch_device object.
-setup_torch_device <- function(n_threads = 8, use_cuda = TRUE) {
+setup_torch_device <- function(n_threads = NULL, use_cuda = TRUE) {
+  # FROM THE MACHINE, NOT FROM A LITERAL. The default was 8 and every example
+  # script overrode it with 30 -- the author's workstation -- so a user on a
+  # laptop would have oversubscribed and a user on a bigger box would have
+  # idled. NULL reads the physical core count and leaves one for the OS.
+  if (is.null(n_threads)) {
+    cores <- parallel::detectCores(logical = FALSE)
+    if (is.na(cores)) cores <- 8L
+    n_threads <- max(1L, cores - 1L)
+  }
+  n_threads <- as.integer(n_threads)
   Sys.setenv(
     OMP_NUM_THREADS = as.character(n_threads),
     MKL_NUM_THREADS = as.character(n_threads)
@@ -193,7 +203,7 @@ setup_torch_device <- function(n_threads = 8, use_cuda = TRUE) {
   } else {
     torch::torch_device("cpu")
   }
-  message("Device: ", device$type)
+  message("Device: ", device$type, "  (", n_threads, " intra-op thread(s))")
   device
 }
 
@@ -426,8 +436,16 @@ check_plan_unchanged <- function(plan, run_dir, resume = TRUE) {
   path <- file.path(run_dir, "fold_plan.rds")
   if (!isTRUE(resume) || !file.exists(path)) return(invisible(TRUE))
 
-  old <- tryCatch(readRDS(path), error = function(e) NULL)
-  if (is.null(old) || is.null(old$folds)) return(invisible(TRUE))
+  # UNREADABLE IS NOT ABSENT. This used to catch a read error, treat the run
+  # as having no plan, and let the resume proceed -- the one situation in
+  # which the check exists could not be performed, and it answered "fine".
+  old <- tryCatch(readRDS(path), error = function(e) {
+    stop("fold_plan.rds exists in ", run_dir, " but cannot be read (",
+         conditionMessage(e), ").\n  A resume cannot be verified against a ",
+         "plan that will not open. Use a new run_id, or delete the directory ",
+         "deliberately.", call. = FALSE)
+  })
+  if (is.null(old$folds)) return(invisible(TRUE))
 
   same <- length(old$folds) == length(plan$folds) &&
     all(vapply(seq_along(plan$folds), function(j) {
@@ -665,4 +683,32 @@ env_csv <- function(name, default, as_int = FALSE) {
   message("  ", name, " = ", paste(parts, collapse = ", "),
           "  (", length(parts), ", from the environment)")
   parts
+}
+
+# ── Which config a final run deployed: the choice's order, not the grid's ─────
+#
+# final_run_summary.rds carries selected_cfgs, built in stage 04 as
+# dplyr::filter(tune_grid_full, config_id %in% selected_config_ids). filter()
+# keeps tune_grid_full's row order -- the GRID's -- so with two configs its
+# first row can be the runner-up. selected_config_ids is the chosen list in the
+# order it was chosen (written from 2026-09-18 on). Three copies of this rule
+# existed, two of them still reading the grid order; one home.
+#'
+#' @param summary the list read from comparison/final_run_summary.rds.
+#' @param label   what to call the run in messages.
+#' @return the config id, or stop() -- "auto" must never travel on unresolved.
+selected_config_id <- function(summary, label = "this final run") {
+  id <- if (!is.null(summary$selected_config_ids)) {
+    summary$selected_config_ids[1]
+  } else {
+    message("  (", label, " predates selected_config_ids; falling back to the ",
+            "grid order, which differs\n   from the selection order only when ",
+            "more than one config was fitted)")
+    summary$selected_cfgs$config_id[1]
+  }
+  if (is.null(id) || is.na(id) || !nzchar(id) || identical(id, "auto")) {
+    stop("No config could be resolved from ", label, "'s final_run_summary.rds.",
+         call. = FALSE)
+  }
+  id
 }

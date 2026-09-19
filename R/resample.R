@@ -489,15 +489,13 @@ print_block_choice <- function(chosen) {
   # the way it happens to today is a bug waiting for a dplyr release.
   pick <- as.numeric(chosen)
   cat("
--- Block size, measured on these points --
-")
+-- Block size, measured on these points --\n")
   print_wide(dplyr::mutate(
     tab,
     largest_share = sprintf("%.1f%%", 100 * largest_share),
     chosen        = ifelse(block_size == pick, "  <--", "")), n = Inf)
   cat(sprintf("
-  chosen: %g  (largest block <= %.0f%% of the points)
-",
+  chosen: %g  (largest block <= %.0f%% of the points)\n",
               as.numeric(chosen), 100 * ms))
   invisible(chosen)
 }
@@ -1335,15 +1333,12 @@ print_one_se <- function(pick, metric = "val_ccc", digits = 4L) {
   n_tied <- attr(pick, "within_one_se")
   cat("  one_se (", metric, "): ", n_tied,
       " config(s) within one standard error of the best",
-      " (threshold ", round(attr(pick, "band"), digits), ")
-", sep = "")
+      " (threshold ", round(attr(pick, "band"), digits), ")\n", sep = "")
   cat("    chosen: ", pick$config_id[1], sep = "")
   if (isTRUE(attr(pick, "simpler_than_best"))) {
-    cat("  -- SIMPLER than the top-ranked config
-")
+    cat("  -- SIMPLER than the top-ranked config\n")
   } else {
-    cat("  -- same as the top-ranked config; the rule changed nothing
-")
+    cat("  -- same as the top-ranked config; the rule changed nothing\n")
   }
   invisible(pick)
 }

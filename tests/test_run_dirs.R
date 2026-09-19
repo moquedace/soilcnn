@@ -195,19 +195,26 @@ ok["csv_on_disk_uses_semicolon_and_comma"] <-
 safe_write_csv2(tbl[1, ], csv)
 ok["csv_overwrite_replaces"] <- nrow(safe_read_csv2(csv)) == 1L
 
-# ── 5. safe_save_rds and the timestamped fallback ────────────────────────────
+# ── 5. safe_save_rds, and A LOCKED FILE IS AN ERROR ──────────────────────────
 rds <- file.path(scratch, "round", "obj.rds")
 p2 <- safe_save_rds(list(a = 1, b = "x"), rds)
 ok["rds_round_trip"] <- identical(readRDS(rds), list(a = 1, b = "x"))
 ok["rds_returns_the_path"] <- identical(normalizePath(p2), normalizePath(rds))
 
-# .timestamped_path is the escape hatch when a file cannot be removed (Windows
-# holds a handle). Its shape is what other code greps for, so it is asserted.
-tp <- .timestamped_path("D:/some/dir/report.csv", "csv")
-ok["timestamped_path_keeps_dir_and_stem"] <-
-  identical(dirname(tp), "D:/some/dir") && startsWith(basename(tp), "report_")
-ok["timestamped_path_has_a_timestamp_and_the_ext"] <-
-  grepl("^report_[0-9]{8}_[0-9]{6}[.]csv$", basename(tp))
+# A target that cannot be removed used to be silently side-stepped: the writer
+# wrote report_<timestamp>.csv beside it and returned that path, which no caller
+# read, so the authoritative file kept its old contents. Now it stops. The lock
+# is simulated with a directory at the target path -- file.remove() refuses a
+# directory on every platform, where an open handle only blocks on Windows.
+locked <- file.path(scratch, "round", "locked.csv")
+dir.create(locked, recursive = TRUE, showWarnings = FALSE)
+r <- try(safe_write_csv2(tibble::tibble(a = 1), locked), silent = TRUE)
+ok["a_locked_target_stops"] <-
+  inherits(r, "try-error") && grepl("locked", conditionMessage(attr(r, "condition")))
+ok["nothing_is_written_beside_a_locked_target"] <-
+  !any(grepl("^locked_", list.files(file.path(scratch, "round"))))
+r <- try(safe_save_rds(list(1), locked), silent = TRUE)
+ok["the_rds_writer_stops_on_a_lock_too"] <- inherits(r, "try-error")
 
 # ── 6. .drop_test_rows: ONE RULE, THREE SHAPES ───────────────────────────────
 #
@@ -262,11 +269,38 @@ kept2 <- suppressMessages(.resumable_units(done, rec, grid2))
 ok["resume_refits_a_relabelled_config"] <- !("cfg_002_f1_s1" %in% kept2)
 ok["resume_leaves_the_matching_one_alone"] <- "cfg_001_f1_s1" %in% kept2
 
-# 7 and 7L and "7" are one value; a numeric written either way must match
-grid3 <- grid
-grid3$base_lr <- c(0.0001, 0.0003)      # same numbers, different spelling
+# 7 and 7L and "7" are one value; a numeric written either way must match.
+# The alternative spelling has to sit on the RECORD side, where it is text --
+# 0.0001 and 1e-4 are the same double, so respelling the grid tests nothing.
+rec3 <- rec
+rec3$base_lr <- c("0.0001", "0.0003", "0.001")
 ok["resume_does_not_care_how_a_number_was_spelt"] <-
-  setequal(suppressMessages(.resumable_units(done, rec, grid3)), kept)
+  setequal(suppressMessages(.resumable_units(done, rec3, grid)), kept)
+# ...and a genuinely different number is still caught
+rec4 <- rec
+rec4$base_lr <- c("0.0002", "3e-04", "1e-03")
+ok["resume_still_sees_a_changed_number"] <-
+  !("cfg_001_f1_s1" %in% suppressMessages(.resumable_units(done, rec4, grid)))
+
+# ── 7b. selected_config_id: THE CHOICE'S ORDER, NOT THE GRID'S ───────────────
+#
+# Three copies of this rule existed; two read the grid order. With two configs
+# selected, selected_cfgs (a filter over the grid) can list the runner-up
+# first. selected_config_ids is the chosen list in its own order.
+summ_new <- list(selected_config_ids = c("cfg_007", "cfg_002"),
+                 selected_cfgs = tibble::tibble(config_id = c("cfg_002", "cfg_007")))
+ok["selected_config_is_the_first_chosen_not_the_first_in_the_grid"] <-
+  identical(selected_config_id(summ_new, "x"), "cfg_007")
+summ_old <- list(selected_cfgs = tibble::tibble(config_id = c("cfg_002", "cfg_007")))
+ok["an_old_summary_falls_back_to_the_grid_and_says_so"] <- {
+  msg <- character(0)
+  r <- withCallingHandlers(selected_config_id(summ_old, "x"),
+    message = function(m) { msg <<- c(msg, conditionMessage(m)); invokeRestart("muffleMessage") })
+  identical(r, "cfg_002") && any(grepl("predates", msg))
+}
+ok["auto_never_travels_on"] <- inherits(
+  try(selected_config_id(list(selected_config_ids = "auto"), "x"), silent = TRUE),
+  "try-error")
 
 # degenerate inputs pass straight through instead of erroring
 ok["resume_with_nothing_done_is_a_no_op"] <-
