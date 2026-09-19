@@ -192,11 +192,10 @@ qc_table_file          <- file.path(metadata_dir, "qc_table.csv")
 patch_manifest_file    <- file.path(patch_dir, "patch_manifest.rds")
 
 if (identical(final_run_id, "latest")) {
-  run_dirs <- list.dirs(final_model_base, recursive = FALSE, full.names = FALSE)
-  run_dirs <- run_dirs[grepl("^final_", run_dirs)]
-  if (length(run_dirs) == 0) stop("No final model runs found in: ", final_model_base)
-  final_run_id <- sort(run_dirs, decreasing = TRUE)[1]
-  message("final_run_id resolved to: ", final_run_id)
+  final_run_id <- latest_run_dir(
+    final_model_base, prefix = "final_",
+    require_file = file.path("comparison", "final_run_summary.rds"),
+    label = "final_run_id")
 }
 
 final_run_dir <- file.path(final_model_base, final_run_id)

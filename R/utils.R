@@ -485,3 +485,67 @@ check_plan_unchanged <- function(plan, run_dir, resume = TRUE) {
   if (is.null(x) || !is.data.frame(x) || !"dataset_role" %in% names(x)) return(x)
   dplyr::filter(x, .data$dataset_role != "test")
 }
+
+#' The most recent run under `base`, by time, and only if it finished.
+#'
+#' WHY THIS IS NOT sort(dirs, decreasing = TRUE)[1].
+#'
+#' That expression means "last alphabetically", which equals "most recent" only
+#' while every run id is a timestamp sharing one prefix. Runs given names broke
+#' it silently: `soc_0_5cm_design_spatial` sorts ahead of
+#' `soc_0_5cm_20260916_232318` because 'd' > '2', so "latest" started resolving
+#' to a run that had died on its first unit, and stage 04 would have refit the
+#' final model against it without a word.
+#'
+#' It also never asked whether the run FINISHED. Stage 04 creates its output
+#' directory before its own validations run, so a failure leaves a
+#' final_<timestamp> behind that "latest" would then deploy -- which is what
+#' B2's review found from the other direction.
+#'
+#' @param base         directory holding the run directories.
+#' @param prefix       run ids must start with this (e.g. "soc_", "final_").
+#' @param require_file path INSIDE a run that only exists when it finished, e.g.
+#'   "comparison/comparison_by_config.csv". A run without it is not a candidate.
+#'   NULL accepts any directory, which is almost never what you want.
+#' @param label        what to call these runs in messages.
+#' @return The run id (basename), or stop() when nothing qualifies.
+latest_run_dir <- function(base, prefix, require_file = NULL, label = "run") {
+  if (!dir.exists(base)) {
+    stop("No ", label, " directory at all: ", base, call. = FALSE)
+  }
+  ids <- list.dirs(base, recursive = FALSE, full.names = FALSE)
+  ids <- ids[startsWith(ids, prefix)]
+  if (length(ids) == 0L) {
+    stop("No ", label, " under ", base, " starting with \"", prefix, "\".",
+         call. = FALSE)
+  }
+
+  finished <- if (is.null(require_file)) {
+    ids
+  } else {
+    ids[file.exists(file.path(base, ids, require_file))]
+  }
+  if (length(finished) == 0L) {
+    stop("No FINISHED ", label, " under ", base, ".\n  ", length(ids),
+         " director(ies) are there, but none carries ", require_file,
+         ",\n  which is what says the run completed. The newest by time is '",
+         ids[which.max(file.info(file.path(base, ids))$mtime)],
+         "'.\n  Finish it, or name the run explicitly instead of \"latest\".",
+         call. = FALSE)
+  }
+
+  # MTIME, not the name. A resumed run legitimately becomes the newest again,
+  # which is the behaviour wanted; a name cannot express that.
+  when <- file.info(file.path(base, finished,
+                              if (is.null(require_file)) "." else require_file))$mtime
+  pick <- finished[which.max(when)]
+
+  skipped <- setdiff(ids, finished)
+  message(label, " resolved to: ", pick,
+          sprintf("  (newest of %d finished, %s)", length(finished),
+                  format(max(when), "%Y-%m-%d %H:%M")))
+  if (length(skipped) > 0L) {
+    message("  skipped as unfinished: ", paste(skipped, collapse = ", "))
+  }
+  pick
+}

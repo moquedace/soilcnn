@@ -172,11 +172,10 @@ output_tuning_dir <- file.path(project_root, "outputs", "tuning",
 
 # Resolve "latest" to the most recent tuning run
 if (identical(tuning_run_id, "latest")) {
-  run_dirs <- list.dirs(output_tuning_dir, recursive = FALSE, full.names = FALSE)
-  run_dirs <- run_dirs[grepl("^soc_", run_dirs)]
-  if (length(run_dirs) == 0) stop("No tuning run found in: ", output_tuning_dir)
-  tuning_run_id <- sort(run_dirs, decreasing = TRUE)[1]
-  message("tuning_run_id resolved to: ", tuning_run_id)
+  tuning_run_id <- latest_run_dir(
+    output_tuning_dir, prefix = "soc_",
+    require_file = file.path("comparison", "comparison_ranked.csv"),
+    label = "tuning_run_id")
 }
 
 tuning_dir   <- file.path(output_tuning_dir, tuning_run_id)
