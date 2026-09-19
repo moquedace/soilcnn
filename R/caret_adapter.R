@@ -208,3 +208,16 @@ caret_available <- function(pattern = NULL) {
       paste(m$parameters$parameter, collapse = ", "), character(1))
   )
 }
+
+#' @export
+print.caret_fitted <- function(x, ...) {
+  cat("<caret_fitted> method \"", x$method, "\" | ", length(x$features),
+      " feature(s)\n", sep = "")
+  bt <- tryCatch(x$fit$bestTune, error = function(e) NULL)
+  if (!is.null(bt) && ncol(bt) > 0L) {
+    cat("  tuned at: ", paste(names(bt), unlist(bt), sep = " = ", collapse = ", "),
+        "\n", sep = "")
+  }
+  invisible(x)
+}
+

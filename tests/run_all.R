@@ -55,7 +55,8 @@ test_files <- c(
   "test_architecture.R",     # embed_pool wiring
   "test_augmentation.R",     # D4 symmetries
   "test_run_dirs.R",         # "latest" by time, the pt-br csv round trip, resume identity
-  "test_checks.R"            # the check ledger cannot pass by doing nothing
+  "test_checks.R",           # the check ledger cannot pass by doing nothing
+  "test_fold_cache.R"        # scaling from the fold's own training rows; store_complete; patch centres
 )
 
 # Slow: these train real torch models (~3 min). They are the only ones that

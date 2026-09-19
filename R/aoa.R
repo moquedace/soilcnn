@@ -261,3 +261,13 @@ print_aoa <- function(di, threshold, label = "prediction area") {
   }
   invisible(inside)
 }
+
+#' @export
+print.di_reference <- function(x, ...) {
+  cat("<di_reference> ", x$n, " training row(s) x ", x$p, " predictor(s)",
+      if (length(unique(x$weights)) == 1L) " | unweighted" else " | importance-weighted",
+      "\n  mean pairwise distance (the DI's unit): ",
+      format(x$avg_dist, digits = 4), "\n", sep = "")
+  invisible(x)
+}
+

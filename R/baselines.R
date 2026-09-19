@@ -152,6 +152,8 @@ rf_spec <- function() {
                 class = "rf_fitted")
     },
 
+    # (print methods for rf_fitted and mlp_fitted are at the end of this file)
+
     predict = function(object, x, ...) {
       # The column ORDER is the contract: a forest indexes features by
       # position, and a table rebuilt in another order predicts confidently
@@ -413,3 +415,32 @@ cnn_spec <- function() {
 }
 
 register_model(cnn_spec(), overwrite = TRUE)
+
+# ── print methods ─────────────────────────────────────────────────────────────
+#
+# Typing the object used to dump the backend's own print -- a randomForest
+# call, or an nn_module with every layer -- and the two things a reader
+# wants first (what was it fitted on, how big is it) were not on the screen.
+#' @export
+print.rf_fitted <- function(x, ...) {
+  n_tree <- tryCatch(
+    if (identical(x$backend, "ranger")) x$fit$num.trees else x$fit$ntree,
+    error = function(e) NA_integer_)
+  cat("<rf_fitted> ", x$backend, " | ", n_tree, " trees | mtry ", x$mtry,
+      " | ", length(x$features), " feature(s)\n", sep = "")
+  cat("  features: ", paste(utils::head(x$features, 6L), collapse = ", "),
+      if (length(x$features) > 6L) ", ..." else "", "\n", sep = "")
+  invisible(x)
+}
+
+#' @export
+print.mlp_fitted <- function(x, ...) {
+  cat("<mlp_fitted> ", length(x$features), " feature(s) | best epoch ",
+      x$best_epoch, " | best validation loss ",
+      format(x$best_val_loss, digits = 4), " | on ", x$device$type, "\n",
+      sep = "")
+  cat("  features: ", paste(utils::head(x$features, 6L), collapse = ", "),
+      if (length(x$features) > 6L) ", ..." else "", "\n", sep = "")
+  invisible(x)
+}
+

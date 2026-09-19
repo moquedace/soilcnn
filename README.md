@@ -444,7 +444,7 @@ The table below summarises the search space. See [`docs/tuning_guide.md`](docs/t
 
 ## Evaluation metrics
 
-All splits (train · validation · test) are evaluated with eight metrics, also broken down by **quantile group** of the observed values (Q0–Q25, …, Q99–Q100):
+All splits (train · validation · test) are evaluated with nine metrics, also broken down by **quantile group** of the observed values (Q0–Q25, …, Q99–Q100):
 
 | Metric | Description |
 |--------|-------------|
@@ -488,19 +488,37 @@ What the interval bands come from instead is [calibrated uncertainty](#calibrate
 
 ## Dependencies
 
+The framework itself (`R/`) needs:
+
 ```r
 install.packages(c(
   "torch", "coro",                          # deep learning
-  "terra", "sf",                            # geospatial
   "dplyr", "tidyr", "readr", "tibble",      # data wrangling
-  "purrr", "janitor", "ggplot2", "stringr", # utilities
-  "DescTools",                              # CCC calculation
-  "matrixStats",                            # rowMedians / rowSds for ensemble aggregation
-  "ps", "processx"                          # spatial prediction: RSS monitoring, worker orchestration (05a_run_parallel.R)
+  "purrr", "matrixStats", "DescTools"       # ensemble aggregation, CCC
+))
+torch::install_torch()                      # ONCE: the C++ backend, ~200 MB
+```
+
+`install.packages("torch")` puts the R package in place; the backend is a
+separate download that `library(torch)` asks for the first time. Until
+`install_torch()` has run, nothing here trains.
+
+The worked example (`examples/`) adds:
+
+```r
+install.packages(c(
+  "terra", "sf",                            # rasters and points
+  "janitor", "ggplot2", "stringr",          # 01 and 06
+  "ps", "processx",                         # 05a: worker orchestration, RSS monitoring
+  "randomForest", "ranger", "caret"         # baselines (03b); ranger optional
 ))
 ```
 
-A CUDA-capable GPU is strongly recommended. CPU training is supported but ~10–20× slower.
+Every example script begins with `install_load_pkg(...)`, which installs what
+is missing and then **stops** if a package will not load — it used to say
+"completed" either way.
+
+A CUDA-capable GPU is strongly recommended. CPU training is supported but ~10–20× slower; `setup_torch_device()` uses every physical core but one unless told otherwise.
 
 ---
 
