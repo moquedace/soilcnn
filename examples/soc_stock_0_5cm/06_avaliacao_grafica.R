@@ -24,15 +24,18 @@ gerar_graficos_cnn <- function(
   # particular past run is a default that is wrong from the day after it is
   # written. 05 and 07 resolve the same two things the same way.
   final_base <- file.path(project_root,"outputs/final_model/soc_stock_modeling",target)
+  # latest_run_dir() and selected_config_id() live in R/utils.R: newest
+  # FINISHED run by time (this was the eleventh alphabetical "latest" site),
+  # and the config in selection order rather than grid order.
+  source(file.path(project_root, "R", "utils.R"))
   if (identical(final_run_id,"latest")) {
-    runs <- list.dirs(final_base,recursive=FALSE,full.names=FALSE)
-    runs <- runs[grepl("^final_",runs)]
-    if(!length(runs)) stop("No final model run under: ",final_base,call.=FALSE)
-    final_run_id <- sort(runs,decreasing=TRUE)[1]
+    final_run_id <- latest_run_dir(final_base, prefix = "final_",
+      require_file = file.path("comparison", "final_run_summary.rds"),
+      label = "final_run_id")
   }
   final_dir <- file.path(final_base,final_run_id)
   resumo <- readRDS(file.path(final_dir,"comparison/final_run_summary.rds"))
-  if (identical(config_id,"auto")) config_id <- resumo$selected_cfgs$config_id[1]
+  if (identical(config_id,"auto")) config_id <- selected_config_id(resumo, final_run_id)
   message("final_run_id: ",final_run_id," | config_id: ",config_id)
 
   tuning_id <- resumo$tuning_run_id

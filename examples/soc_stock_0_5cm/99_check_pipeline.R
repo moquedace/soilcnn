@@ -64,8 +64,7 @@ patch_meta_dir <- file.path(metadata_dir, "patches")
 # sent to stderr, so it is the text that moves to stdout.
 #
 # .say() mimics message(): pastes its arguments and adds the line break.
-.say <- function(...) cat(paste0(...), "
-", sep = "")
+.say <- function(...) cat(paste0(...), "\n", sep = "")
 
 add_check <- function(stage, check, status, detail = "") {
   .results <<- dplyr::bind_rows(
@@ -141,8 +140,7 @@ if (file.exists(f_tconfig)) {
     if ("subsample" %in% names(.tc)) .say("  ", .tc$subsample[1])
     .say("  Comparable only with another run of the same profile.",
          "  See docs/reference_performance.md")
-    .say(strrep("!", 90), "
-")
+    .say(strrep("!", 90), "\n")
   }
 }
 

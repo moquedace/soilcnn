@@ -75,14 +75,15 @@ if (length(.cli_args) >= 4L) {
   n_row_shards  <- as.integer(.cli_args[3])
   n_col_shards  <- as.integer(.cli_args[4])
   if (length(.cli_args) >= 5L) max_concurrent <- as.integer(.cli_args[5])
-} else if (nzchar(Sys.getenv("soc_row_shard_id"))) {
-  row_shard_id  <- as.integer(Sys.getenv("soc_row_shard_id"))
-  col_shard_id  <- as.integer(Sys.getenv("soc_col_shard_id"))
-  n_row_shards  <- as.integer(Sys.getenv("soc_n_row_shards"))
-  n_col_shards  <- as.integer(Sys.getenv("soc_n_col_shards"))
-  if (nzchar(Sys.getenv("soc_max_concurrent"))) {
-    max_concurrent <- as.integer(Sys.getenv("soc_max_concurrent"))
-  }
+} else {
+  # env_int() refuses a value that is not a positive integer; as.integer()
+  # used to turn "2 " or "two" into NA and the stopifnot() below then named
+  # an expression instead of the variable that was wrong.
+  row_shard_id   <- env_int("soc_row_shard_id",   row_shard_id)
+  col_shard_id   <- env_int("soc_col_shard_id",   col_shard_id)
+  n_row_shards   <- env_int("soc_n_row_shards",   n_row_shards)
+  n_col_shards   <- env_int("soc_n_col_shards",   n_col_shards)
+  max_concurrent <- env_int("soc_max_concurrent", max_concurrent)
 }
 
 stopifnot(
@@ -112,10 +113,7 @@ is_partitioned <- n_total_shards > 1L
 # are not the values it would return on the training grid. The wiring is what
 # such a run proves -- never the map. The block below says so out loud, records
 # the resolution it actually ran at, and refuses to be silent about it.
-predict_raster_dir <- NULL
-if (nzchar(Sys.getenv("soc_predict_raster_dir"))) {
-  predict_raster_dir <- Sys.getenv("soc_predict_raster_dir")
-}
+predict_raster_dir <- env_chr("soc_predict_raster_dir", NULL)
 
 config_id    <- "auto"
 final_run_id <- "latest"
@@ -218,14 +216,9 @@ if (identical(config_id, "auto")) {
   # selected_config_ids is the chosen list in its own order and is written by
   # stage 04 from 2026-09-18 onward. Runs older than that have only the grid
   # order, so the fallback stays -- named, rather than left as the default.
-  config_id <- if (!is.null(tmp_summary$selected_config_ids)) {
-    tmp_summary$selected_config_ids[1]
-  } else {
-    message("  (this final run predates selected_config_ids; falling back to ",
-            "the grid order,\n   which differs from the selection order only ",
-            "when more than one config was fitted)")
-    tmp_summary$selected_cfgs$config_id[1]
-  }
+  # selected_config_id() is the one home for this rule; 05a_test, 05b, 06, 07,
+  # _b1 and _b4 call the same function, so the map and every check agree.
+  config_id <- selected_config_id(tmp_summary, final_run_id)
   message("config_id resolved to: ", config_id)
 }
 
@@ -503,16 +496,29 @@ message(sprintf(
 
 strip_gb <- (output_block_rows + 2L * half_w_max) * bytes_per_strip_row / 1e9
 if (strip_gb > 8) {
-  message(sprintf("  WARNING: strip ~%.1f GB. Considere reduzir max_strip_ram_gb.", strip_gb))
+  message(sprintf("  WARNING: strip ~%.1f GB. Consider lowering max_strip_ram_gb.", strip_gb))
 }
 
 # ── Seed models ───────────────────────────────────────────────────────────────
 
 model_files <- file.path(model_dir, sprintf("seed%04d_best.pt", seeds))
 have <- file.exists(model_files)
-if (!any(have)) stop("No seed model files found in: ", model_dir)
+# A MISSING SEED IS AN ERROR. This used to WARN and build the map from the
+# seeds that remained, while final_run_summary.rds still listed the requested
+# ones -- so the map's ensemble was smaller than every document said, and the
+# seed count in the summary was a lie nobody could see from the raster.
 if (!all(have)) {
-  message("WARNING: missing seeds, using only ", sum(have), " available.")
+  stop("Seed checkpoint(s) missing under ", model_dir, ":\n  ",
+       paste(basename(model_files[!have]), collapse = ", "),
+       "\n  Stage 04 records the seeds it fitted; a map must use all of them or ",
+       "say so in its own name. Re-run stage 04, or set `seeds` explicitly.",
+       call. = FALSE)
+}
+if (!is.null(final_summary$seeds_fitted) &&
+    !setequal(final_summary$seeds_fitted, seeds)) {
+  stop("The seeds requested (", paste(seeds, collapse = ", "), ") are not the ",
+       "seeds stage 04 fitted (", paste(final_summary$seeds_fitted, collapse = ", "),
+       ").", call. = FALSE)
 }
 seeds       <- seeds[have]
 model_files <- model_files[have]

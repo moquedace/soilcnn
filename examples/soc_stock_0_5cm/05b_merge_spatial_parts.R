@@ -50,7 +50,7 @@ if (identical(config_id, "auto")) {
   summary_path <- file.path(final_model_base, final_run_id, "comparison",
                             "final_run_summary.rds")
   if (!file.exists(summary_path)) stop("final_run_summary.rds not found.")
-  config_id <- readRDS(summary_path)$selected_cfgs$config_id[1]
+  config_id <- selected_config_id(readRDS(summary_path), final_run_id)
   message("config_id: ", config_id)
 }
 

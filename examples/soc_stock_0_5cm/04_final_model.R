@@ -708,6 +708,19 @@ for (i in seq_len(nrow(selected_cfgs))) {
 
 if (nrow(all_seed_results) == 0) stop("No seed finished successfully.")
 
+# EVERY REQUESTED SEED, OR STOP. A seed that failed was caught by the tryCatch
+# above, printed, and dropped from all_seed_results -- and the summary then
+# listed the REQUESTED seeds while the ensemble on disk held fewer. Stage 05
+# would have built the map from the survivors and nothing downstream could
+# tell. The failure is named here, where the run is still in front of someone.
+seeds_fitted <- sort(unique(all_seed_results$seed))
+seeds_lost   <- setdiff(seeds, seeds_fitted)
+if (length(seeds_lost) > 0L) {
+  stop("Seed(s) ", paste(seeds_lost, collapse = ", "), " did not finish (see the ",
+       "error printed above). The final model must carry every seed it claims; ",
+       "fix the cause and re-run.", call. = FALSE)
+}
+
 # -- Per config: mean +/- sd between seeds -----------------------------------
 
 config_summary <- all_seed_results %>%
@@ -738,6 +751,7 @@ safe_save_rds(
   # is which model goes on the map.
   list(selected_cfgs = selected_cfgs, selected_config_ids = selected_config_ids,
        selection_rule = selection_rule_applied, seeds = seeds,
+       seeds_fitted = seeds_fitted,
        all_seed_results = all_seed_results, config_summary = config_summary,
        run_id = run_id, tuning_run_id = tuning_run_id),
   file.path(output_dir, "comparison", "final_run_summary.rds"),

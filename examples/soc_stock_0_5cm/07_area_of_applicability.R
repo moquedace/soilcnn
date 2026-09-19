@@ -61,10 +61,7 @@ config_id    <- "auto"     # or a specific config
 # The SAME rasters the prediction used. NULL = the ones the patches came from;
 # a directory = predict the DI on that grid instead (see 05's own note: it does
 # not resample, and the window is counted in pixels).
-predict_raster_dir <- NULL
-if (nzchar(Sys.getenv("soc_predict_raster_dir"))) {
-  predict_raster_dir <- Sys.getenv("soc_predict_raster_dir")
-}
+predict_raster_dir <- env_chr("soc_predict_raster_dir", NULL)
 
 # Rows of raster read at once. The DI is an exact nearest-neighbour search, so
 # the cost is n_pixels x n_training x n_channels; the chunk bounds the
@@ -95,7 +92,7 @@ final_run_dir <- file.path(final_model_base, final_run_id)
 if (identical(config_id, "auto")) {
   fs <- file.path(final_run_dir, "comparison", "final_run_summary.rds")
   if (!file.exists(fs)) stop("Cannot resolve config_id = 'auto': ", fs)
-  config_id <- readRDS(fs)$selected_cfgs$config_id[1]
+  config_id <- selected_config_id(readRDS(fs), final_run_id)
   message("config_id resolved to: ", config_id)
 }
 

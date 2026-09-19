@@ -282,8 +282,7 @@ if (nrow(cnn_best) > 0L && "rf_context" %in% board$family) {
 # still permit.
 # ══════════════════════════════════════════════════════════════════════════════
 
-message("
-", strrep("=", 78))
+message("\n", strrep("=", 78))
 message("PAIRED TESTS -- same folds, same seeds, difference per unit")
 message(strrep("=", 78))
 

@@ -271,15 +271,7 @@ source(file.path(project_root, "R", "utils.R"))
     label = "final_run_id")
   fs <- readRDS(file.path(final_model_base, final_run_id, "comparison",
                           "final_run_summary.rds"))
-  config_id <- if (!is.null(fs$selected_config_ids)) {
-    fs$selected_config_ids[1]
-  } else {
-    fs$selected_cfgs$config_id[1]      # runs older than 2026-09-18
-  }
-  if (is.null(config_id) || identical(config_id, "auto")) {
-    stop("config_id could not be resolved from ", final_run_id,
-         "'s final_run_summary.rds.", call. = FALSE)
-  }
+  config_id <- selected_config_id(fs, final_run_id)
   message("config_id resolved to: ", config_id)
 }
 

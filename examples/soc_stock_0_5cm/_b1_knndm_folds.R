@@ -212,10 +212,7 @@ if (!requireNamespace("CAST", quietly = TRUE)) {
 #    source(), so an environment variable is the only way to pass a parameter
 #    into a source()d run: Sys.setenv() survives that rm(), a workspace object
 #    does not.
-predict_raster_dir <- NULL
-if (nzchar(Sys.getenv("soc_predict_raster_dir"))) {
-  predict_raster_dir <- Sys.getenv("soc_predict_raster_dir")
-}
+predict_raster_dir <- env_chr("soc_predict_raster_dir", NULL)
 
 # UNSET IS REFUSED RATHER THAN DEFAULTED, and this is the one place where that
 # is a judgement call worth stating. Unset means "the 250 m grid the patches
@@ -504,22 +501,9 @@ if (length(final_dirs) == 0L) {
 final_run_id <- latest_run_dir(final_model_base, prefix = "final_",
                                require_file = file.path("comparison", "final_run_summary.rds"),
                                label = "final_run_id")
-.cfg_from_summary <- function(summary_path, run_label) {
-  # SELECTION order, not grid order: selected_cfgs comes from
-  # dplyr::filter(tune_grid_full, ...) and keeps the grid's row order, so with
-  # two configs its first row can be the runner-up. selected_config_ids is the
-  # chosen list in the order it was chosen (written from 2026-09-18 on).
-  fs <- readRDS(summary_path)
-  id <- if (!is.null(fs$selected_config_ids)) fs$selected_config_ids[1] else
-    fs$selected_cfgs$config_id[1]
-  if (is.null(id) || !nzchar(id)) {
-    stop("No config could be read from ", run_label, "'s final_run_summary.rds.",
-         call. = FALSE)
-  }
-  id
-}
-config_id <- .cfg_from_summary(
-  file.path(final_model_base, final_run_id, "comparison", "final_run_summary.rds"),
+config_id <- selected_config_id(
+  readRDS(file.path(final_model_base, final_run_id, "comparison",
+                    "final_run_summary.rds")),
   final_run_id)
 pred_cfg_file <- file.path(project_root, "outputs", "spatial_prediction",
                            "soc_stock_modeling", target_label, config_id,
