@@ -2968,3 +2968,41 @@ arguments over 72 files. `tests/run_all.R` is the author's to run before C1.
 - 05c reads `max_concurrent` from the same override as 05a instead of a
   literal 3 with a "keep in step by hand" comment; an unreadable worker log
   is an error, not an empty log counted as pending work.
+
+## 2026-09-19 — Overnight review, batch 3: tests, print methods, messages, documentation
+
+- **`tests/test_fold_cache.R`** (22 assertions). The sentence "scaling is
+  fitted on this fold's training rows" had no test: the end-to-end runs pass
+  with scaling fitted on every row, because the CNN does not care where its
+  z-scores came from — only the leakage argument does. Now the z-score centre
+  is asserted equal to the mean of the 24 training rows and *not* equal to the
+  mean of all 40; the dummy and percentage branches; the cached tensor's
+  arithmetic equals the table's; the store's raw tensor survives the fold; the
+  meta rows pair with the tensor rows; `store_complete = FALSE` is refused;
+  `check_patch_centres()` on a consistent store, one moved value (one
+  mismatch, in its channel), one NA; `clone_state_dict()` is independent and
+  detached; `set_optimizer_lr()` reaches every param group.
+- **Print methods** for `rf_fitted`, `mlp_fitted`, `caret_fitted`,
+  `di_reference`: typing the object dumped the backend's own print.
+- **Messages.** Eleven `stop()` sites in the six oldest modules leaked the
+  internal call; the loader/points mismatch now names both counts and the
+  helper that pairs them; `loss_fn` lists its choices; "No best_state saved"
+  names the cause and the two fixes; `fit_scaling()` names the row count and
+  the fix; `create_output_dirs()` names the paths. **A fold in which every
+  unit failed** used to reach the ranking and die inside `dplyr::arrange()`
+  over a missing `val_ccc` — minutes in, with the real cause unread in
+  `error_message`. It now stops with the first error.
+- **Stage 04's seed guard** checks per config, not pooled: with two configs a
+  seed lost by one and kept by the other survived a pooled `unique()`.
+- **Docs.** `design_decisions.md` §7's note pointed at cfg_014 (a run that no
+  longer exists); §12 and `tuning_guide.md` §7 claimed the test set is written
+  "for diagnostic reference" — it is not scored during tuning at all; §14 now
+  says per fold. `execution_plan.md` is closed and points at
+  `status_and_roadmap.md`; `test_plan.md` carries the tier status and the
+  10-band note. README: nine metrics, dependencies split by layer with
+  `torch::install_torch()` named, `tests/` and `tools/` beside `R/`, the run
+  order, and every environment override in one table.
+
+*Not done overnight, by decision:* the 24 example headers (self-locating
+root, local installer) — a change to the scripts the author runs every
+morning that nothing here can parse-check; it is item 1 of the roadmap.

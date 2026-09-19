@@ -713,13 +713,18 @@ if (nrow(all_seed_results) == 0) stop("No seed finished successfully.")
 # listed the REQUESTED seeds while the ensemble on disk held fewer. Stage 05
 # would have built the map from the survivors and nothing downstream could
 # tell. The failure is named here, where the run is still in front of someone.
-seeds_fitted <- sort(unique(all_seed_results$seed))
-seeds_lost   <- setdiff(seeds, seeds_fitted)
-if (length(seeds_lost) > 0L) {
-  stop("Seed(s) ", paste(seeds_lost, collapse = ", "), " did not finish (see the ",
-       "error printed above). The final model must carry every seed it claims; ",
-       "fix the cause and re-run.", call. = FALSE)
+# Per config, not pooled: with two configs a seed lost by one and kept by the
+# other would survive a pooled unique().
+seeds_by_cfg <- split(all_seed_results$seed, all_seed_results$config_id)
+for (cid in selected_cfgs$config_id) {
+  seeds_lost <- setdiff(seeds, seeds_by_cfg[[cid]])
+  if (length(seeds_lost) > 0L) {
+    stop("Config ", cid, ": seed(s) ", paste(seeds_lost, collapse = ", "),
+         " did not finish (see the error printed above). The final model must ",
+         "carry every seed it claims; fix the cause and re-run.", call. = FALSE)
+  }
 }
+seeds_fitted <- sort(unique(all_seed_results$seed))
 
 # -- Per config: mean +/- sd between seeds -----------------------------------
 

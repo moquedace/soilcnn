@@ -30,7 +30,7 @@ What the framework guarantees, each with the test that proves it:
 | "latest" means newest **finished** run, by time | `utils.R` | `test_run_dirs` |
 | a check ledger cannot pass by doing nothing | `checks.R` | `test_checks` |
 
-The suite is `tests/run_all.R`: 23 files, ~760 assertions, ~3.5 min. Every
+The suite is `tests/run_all.R`: 24 files, ~790 assertions, ~3.5 min. Every
 file's accumulator is named and every `.report()` refuses an empty, unnamed,
 NA-bearing or non-logical one.
 
@@ -128,7 +128,23 @@ found. Ordered by what a new user or a wrong result would hit first.)*
 
 ### Robustness and ease of use (the audit's list, applied)
 
-See section 3. Items marked *done tonight* are already committed.
+Section 3 says what was done overnight. What remains, in the order a new user
+would hit it:
+
+1. **The example headers** (below): the self-locating `project_root` and the
+   local installer. One pass, 24 files, suite immediately after.
+2. **`clamp` as a documented formal of `dsm_train()`.** It is the one
+   argument that can silently destroy predictions and it lives in `...`.
+   Additive, safe, not done overnight because it touches the signature.
+3. **A `.check_k()` helper** for the five resampling constructors: `k = 2.5`
+   or `k = "5"` currently fails somewhere below the constructor.
+4. **`dsm_train()` validation of a user-supplied grid** beyond windows: the
+   column set of `make_tune_grid()`, derived from the parameter space rather
+   than hardcoded.
+5. **Table-model `...`:** `model_spec()` could record `fit_args` so a typo
+   for `rf` is refused at the door as the CNN's now is.
+6. **Two Portuguese file names** kept by decision (`06_avaliacao_grafica.R`
+   and its output slugs); rename when the package boundary is drawn.
 
 ### Toward a package
 
@@ -175,7 +191,57 @@ See section 3. Items marked *done tonight* are already committed.
 
 ---
 
-## 3. The overnight audit
+## 3. The overnight audit (2026-09-19)
 
-*(Filled in when the six-lens audit completes: what it found, what survived
-refutation, what was fixed tonight, what waits for the author.)*
+Six lenses over the whole repository — contracts and error paths, resume and
+provenance, the checkers, tests, documentation drift, ease of use for a
+second user — 105 findings. The automated refutation pass did not complete
+(session limits), so every finding acted on was re-read at the line first,
+and the ones below are those that survived that reading. Everything is
+committed in five batches (`20d634f`, `cf8b020`, `ec27785`, `b42b7d2`,
+`53ad956`) and written up in `project_log.md` under this date.
+
+### Fixed tonight — where a wrong result could have looked right
+
+| finding | what it did | now |
+|---|---|---|
+| a locked output file was silently renamed | `safe_*` wrote `<stem>_<timestamp>` beside the target and returned a path nobody read; the authoritative file kept its old contents | stops, names the file |
+| a store whose own manifest said INCOMPLETE loaded | stage 02 wrote `store_complete = FALSE` and stopped; the loader never looked | refused |
+| a missing seed checkpoint shrank the map's ensemble | 05 warned "using 2 available" while the summary listed 3 | 05 stops; 04 stops when a seed fails and writes `seeds_fitted`, per config |
+| "which config was deployed" had three copies, two reading grid order | with two configs the runner-up could come first | `selected_config_id()`, eight sites |
+| a plan that could not be read was treated as no plan | resume proceeded past the one check that exists for it | stops |
+| 99 said "All clear" over four skipped stages | a skip left no row | each skip is a WARN row; FAIL is an error, not a `warning()` |
+| a `_b4` with no reference snapshot printed PASS | "not compared" folded into `ok_pix = TRUE` | INCOMPLETE, wiring only |
+| 05b mosaicked three tiles of a 2×2 | the hole is NA that looks like ocean | count must match the grid the filenames declare; one grid only |
+| a fold in which every unit failed died inside `arrange()` | the real cause sat unread in `error_message` | stops with the first error |
+| `dsm_train(data, resampling = "cv")`, a `...` typo, a `type_table` without `is_dummy` | failed minutes in, in an internal call | refused at the door, with the choices |
+
+### Fixed tonight — ease of use
+
+`%>%` bound in the framework (a session without `library(dplyr)` died in the
+Quickstart); `setup_torch_device()` reads the machine; the installer stops on
+a package that will not load and names `install_torch()`; raw `Sys.getenv()`
+reads go through `env_*()`; four print methods; eleven messages; 21 strings
+with literal line breaks joined; the README's dependencies, run order and
+override table; four stale documents corrected.
+
+### Tests added
+
+`test_fold_cache.R` (22) and eight assertions in `test_run_dirs.R`: scaling
+from the fold's own rows, `store_complete`, patch centres, the two torch
+helpers, the deployed-config rule in both orders, a locked target.
+
+### Verified, not fixed — waiting for the author
+
+Listed in section 2 under *Robustness and ease of use*: the headers, `clamp`
+as a formal, `.check_k()`, grid-column validation, table-model `...`.
+
+### Findings that did not survive re-reading
+
+- "`.timestamped_path()`'s shape is grepped for by other code" — nothing
+  greps for it; it is gone.
+- "`check_patch_centres` else-branch silently passes" — the `try()` around it
+  already records FAIL on error.
+- "`05a`'s resume marker can belong to another grid" — the marker's name
+  carries the grid; what it could not tell was a marker whose tiles were
+  deleted, and that is what was fixed.
