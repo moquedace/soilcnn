@@ -308,7 +308,10 @@ if (all_01_exist) {
             paste("columns:", paste(names(pmeta), collapse = ", ")))
 
 } else {
-  .say("Stage 01 incomplete -- skipping content checks.")
+  # A SKIP IS A ROW. Four skipped stages used to leave the summary reading
+  # "All clear" -- true of the zero checks that ran.
+  add_check("01", "stage 01 outputs present", "WARN",
+            "stage 01 incomplete -- its content checks did not run")
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -454,13 +457,26 @@ if (all_02_exist) {
 
   # requireNamespace, because this is the only place the checker touches terra
   # and a fast structural check should not fail to run over a missing optional.
-  if ("cell_size" %in% names(manifest) && file.exists(f_rtable) &&
-      requireNamespace("terra", quietly = TRUE)) {
+  # Every way this check can be unable to run is a WARN that says which way;
+  # it used to fall through silently, and a silent non-check reads as PASS.
+  .cs_name <- "cell_size: manifest vs the rasters now"
+  if (!"cell_size" %in% names(manifest)) {
+    add_check("02", .cs_name, "WARN", "the manifest records no cell_size")
+  } else if (!file.exists(f_rtable)) {
+    add_check("02", .cs_name, "WARN", "raster_table_used.csv is missing")
+  } else if (!requireNamespace("terra", quietly = TRUE)) {
+    add_check("02", .cs_name, "WARN", "terra is not installed")
+  } else {
     .cs_store <- suppressWarnings(as.numeric(manifest$cell_size[1]))
     .r1 <- safe_read_csv2(f_rtable)$raster_file[1]
-    if (!is.na(.cs_store) && !is.na(.r1) && file.exists(.r1)) {
+    if (is.na(.cs_store)) {
+      add_check("02", .cs_name, "WARN", "manifest cell_size is not a number")
+    } else if (is.na(.r1) || !file.exists(.r1)) {
+      add_check("02", .cs_name, "WARN",
+                paste("first raster not found:", .r1))
+    } else {
       .cs_now <- terra::res(terra::rast(.r1))[1]
-      add_check("02", "cell_size: manifest vs the rasters now",
+      add_check("02", .cs_name,
                 if (abs(.cs_now - .cs_store) < 1e-9) "PASS" else "FAIL",
                 sprintf("store %.8f | rasters %.8f", .cs_store, .cs_now))
     }
@@ -541,7 +557,10 @@ if (all_02_exist) {
             "patch_sample.rds -- written by stage 02 at no extra cost")
 
 } else {
-  .say("Stage 02 incomplete -- skipping content checks.")
+  # A SKIP IS A ROW. Four skipped stages used to leave the summary reading
+  # "All clear" -- true of the zero checks that ran.
+  add_check("02", "stage 02 outputs present", "WARN",
+            "stage 02 incomplete -- its content checks did not run")
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -766,7 +785,10 @@ if (!dir.exists(tuning_dir)) {
         nrow(top_rows)))
 
     } else {
-      .say("Stage 03 incomplete -- skipping content checks.")
+      # A SKIP IS A ROW. Four skipped stages used to leave the summary reading
+      # "All clear" -- true of the zero checks that ran.
+      add_check("03", "stage 03 outputs present", "WARN",
+                "stage 03 incomplete -- its content checks did not run")
     }
   }
 }
@@ -929,7 +951,10 @@ if (!dir.exists(final_model_base)) {
       }
 
     } else {
-      .say("Stage 04 incomplete -- skipping content checks.")
+      # A SKIP IS A ROW. Four skipped stages used to leave the summary reading
+      # "All clear" -- true of the zero checks that ran.
+      add_check("04", "stage 04 outputs present", "WARN",
+                "stage 04 incomplete -- its content checks did not run")
     }
   }
 }
@@ -1063,8 +1088,12 @@ report_file <- file.path(report_dir, paste0("pipeline_check_", format(Sys.time()
 readr::write_csv2(.results, report_file)
 .say("\nFull report saved to: ", report_file)
 
+# AN ERROR, NOT A WARNING. warning() from a source()d script prints after the
+# fact, in a colour nobody reads at the end of a thousand lines, and the
+# script exits 0 -- so a failed check never stopped anyone. stop() does.
 if (n_fail > 0) {
-  warning(n_fail, " check(s) FAILED. Review before moving on to the next stage.")
+  stop(n_fail, " check(s) FAILED -- see the table above and ", report_file,
+       ". Fix them before spending CPU on the next stage.", call. = FALSE)
 } else if (n_warn > 0) {
   .say("\nNo critical failure, but there are warnings -- review before spending CPU on the next stage.")
 } else {

@@ -8,7 +8,6 @@ project_root <- "D:/usuario_armazenamento/cassio/R/deep_learning_caret"
 # (shard_rXXXofYYY_cXXXofZZZ.log). Does not interfere with 05c.
 # ══════════════════════════════════════════════════════════════════════════════
 
-max_concurrent <- 3   # <<< keep identical to 05a_run_parallel.R
 
 log_root <- file.path(project_root, "outputs", "spatial_prediction", "_worker_logs")
 # THE RUN WITH THE NEWEST SHARD LOG, which is the one being written right now.
@@ -16,6 +15,12 @@ log_root <- file.path(project_root, "outputs", "spatial_prediction", "_worker_lo
 # it; a run in progress is the one whose log was touched last, and that is the
 # question an ETA script is asking.
 source(file.path(project_root, "R", "utils.R"))
+
+# The same override 05a and 05 read, so the ETA divides by the concurrency
+# the run actually has. This was a literal 3 with a comment asking the reader
+# to keep it in step with 05a by hand.
+max_concurrent <- env_int("soc_max_concurrent", 3L)
+
 run_dir <- file.path(log_root, latest_run_dir(
   log_root, prefix = "",
   require_pattern = "^shard_r[0-9]+of[0-9]+_c[0-9]+of[0-9]+[.]log$",
@@ -45,7 +50,11 @@ parse_shard_log <- function(f) {
   col_id  <- as.integer(sub(paste0(".*", name_pat), "\\3", bn))
   finfo   <- file.info(f)
   started <- finfo$ctime
-  lines   <- tryCatch(readLines(f, warn = FALSE), error = function(e) character(0))
+  # An unreadable log used to become an empty one, i.e. a shard "not yet
+  # started" -- the ETA then counted it as pending work.
+  lines   <- tryCatch(readLines(f, warn = FALSE), error = function(e) {
+    stop("Cannot read worker log ", f, " (", conditionMessage(e), ")", call. = FALSE)
+  })
 
   has_error <- any(grepl(error_pattern, lines))
   finished  <- any(grepl("Spatial prediction complete", lines))

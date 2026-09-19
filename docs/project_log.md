@@ -2922,3 +2922,49 @@ workstation's number. NULL now means physical cores minus one.
 
 Verification: `tools/r_lint.py` 0 findings, `tools/r_calls.py` 0 suspicious
 arguments over 72 files. `tests/run_all.R` is the author's to run before C1.
+
+## 2026-09-19 — Overnight review, batch 2: the checkers cannot pass by not looking
+
+### 99_check_pipeline.R
+
+- **A skipped stage is a row.** Four stages that had not run printed "Stage
+  0X incomplete -- skipping content checks" and then the summary said "All
+  clear" — true of the zero checks that ran. Each skip now adds a WARN row
+  named "stage 0X outputs present", so the count and the CSV carry it.
+- **The cell_size check says why it could not run.** Five conditions gated it
+  (no cell_size in the manifest, no raster table, no terra, a non-numeric
+  value, the first raster missing) and every one fell through silently. Each
+  is now a WARN with its reason.
+- **FAIL is an error.** The script ended with `warning()`, which a source()d
+  run prints after the fact and exits 0 on; nobody was ever stopped by it. Now
+  `stop()`, naming the report file.
+
+### _b4_shard_merge_check.R
+
+- **Not compared is not passed.** Without a reference snapshot the pixel
+  comparison cannot run; that used to fold into `ok_pix = TRUE` and a printed
+  PASS. The verdict now reads INCOMPLETE (wiring only) in that case.
+- The denominators were the literal 9 of the first band count; now
+  `nrow(res)`.
+
+### 05b_merge_spatial_parts.R
+
+- **The tile count must equal the grid the filenames declare.** A 2×2 run
+  that lost a worker leaves three tiles; `terra::merge()` mosaics three tiles
+  without complaint and the hole is NA that looks like ocean. Tiles from two
+  grids in one directory (a 1×1 left beside a 2×2) merge into a map that is
+  right where they overlap. Both refused by name, with the missing shard ids.
+- A wrong mosaic geometry was a `warning()` under a written file; now an
+  error that says the file must not be used.
+
+### 05a / 05a_test / 05c
+
+- 05a: a `prediction_config` marker whose tiles are gone no longer counts as
+  "done" (the shard would have been skipped and 05b would have failed on the
+  count); the eighth grid-order `selected_cfgs$config_id[1]` read →
+  `selected_config_id()`.
+- 05a_test passes `soc_predict_raster_dir` to its workers as 05a does; it
+  used to rely on inheritance, so a 20 km test could measure the 250 m grid.
+- 05c reads `max_concurrent` from the same override as 05a instead of a
+  literal 3 with a "keep in step by hand" comment; an unreadable worker log
+  is an error, not an empty log counted as pending work.

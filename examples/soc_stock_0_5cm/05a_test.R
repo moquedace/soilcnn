@@ -106,6 +106,12 @@ launch_shard <- function(idx) {
              as.character(rs), as.character(cs),
              as.character(n_row_shards), as.character(n_col_shards),
              as.character(max_concurrent)),
+    # Passed explicitly, as 05a does: the worker reads soc_predict_raster_dir
+    # to choose its grid, and a test on the 20 km grid must not silently
+    # measure the 250 m one.
+    env = if (nzchar(Sys.getenv("soc_predict_raster_dir"))) {
+      c("current", soc_predict_raster_dir = Sys.getenv("soc_predict_raster_dir"))
+    } else NULL,
     stdout  = log_file,
     stderr  = log_file,
     cleanup = TRUE

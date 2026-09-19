@@ -93,11 +93,34 @@ merge_layer <- function(suffix) {
   parts <- sort(list.files(parts_dir, pattern = pat, full.names = TRUE))
 
   if (length(parts) == 0) {
-    warning("No tile for layer: ", suffix)
-    return(NULL)
+    stop("No tile for layer '", suffix, "' under ", parts_dir, call. = FALSE)
   }
 
-  message(sprintf("\n[%s] Mosaicking %d tiles...", suffix, length(parts)))
+  # THE FILENAMES DECLARE THE GRID, AND THE COUNT MUST MATCH IT. A 2x2 run
+  # that lost a worker leaves three tiles; terra::merge() mosaics three tiles
+  # without complaint and the hole is NA that looks like ocean. Tiles from two
+  # different grids in one directory (a 1x1 left beside a 2x2) would merge
+  # into a map that is right where they overlap and arbitrary where they do
+  # not. Both are refused here, by name.
+  g <- regmatches(basename(parts),
+                  regexec("_r([0-9]+)of([0-9]+)_c([0-9]+)of([0-9]+)[.]tif$", basename(parts)))
+  grids <- unique(vapply(g, function(m) paste0(m[3], "x", m[5]), character(1)))
+  if (length(grids) != 1L) {
+    stop("[", suffix, "] tiles from more than one shard grid are present (",
+         paste(grids, collapse = ", "), ") in ", parts_dir,
+         ".\n  Move the tiles of the grid you do not want out of the way.",
+         call. = FALSE)
+  }
+  n_expected <- as.integer(g[[1]][3]) * as.integer(g[[1]][5])
+  if (length(parts) != n_expected) {
+    ids <- vapply(g, function(m) sprintf("r%s_c%s", m[2], m[4]), character(1))
+    stop("[", suffix, "] the filenames declare a ", grids, " grid (", n_expected,
+         " tiles) but ", length(parts), " tile(s) are present: ",
+         paste(ids, collapse = ", "), ".\n  A shard did not finish; see the ",
+         "worker logs, then re-run 05a (it resumes).", call. = FALSE)
+  }
+
+  message(sprintf("\n[%s] Mosaicking %d tiles (%s grid)...", suffix, length(parts), grids))
   t_start <- Sys.time()
 
   out_file <- file.path(output_raster_dir,
@@ -122,11 +145,15 @@ merge_layer <- function(suffix) {
                   as.numeric(dt), units(dt)))
 
   # Checks extent and dimensions
+  # The file is already written when this is known; an error here, not a
+  # warning, so nothing downstream (07, 99b) picks up a mosaic on the wrong
+  # grid because the script "finished".
   if (!terra::compareGeom(merged, full_template, stopOnError = FALSE)) {
-    warning("[", suffix, "] Mosaic geometry differs from the original template -- check it.")
-  } else {
-    message("  Geometry OK.")
+    stop("[", suffix, "] the mosaic's geometry differs from the template raster ",
+         "-- the workers predicted on another grid. ", basename(out_file),
+         " was written but must not be used.", call. = FALSE)
   }
+  message("  Geometry OK.")
 
   out_file
 }

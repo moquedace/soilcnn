@@ -325,18 +325,27 @@ if (file.exists(ref_stamp)) {
 source(file.path(script_dir, "05c_estimate_eta.R"), local = new.env())
 
 # ── Verdict ───────────────────────────────────────────────────────────────────
-ok_pix <- is.null(pix) ||
+# NOT COMPARED IS NOT PASSED. Without a reference snapshot the pixel check
+# cannot run, and this used to fold that into ok_pix = TRUE and print "PASS".
+# A run that proved the wiring says so in its own verdict. The denominators
+# are what was measured -- they were the literal 9 of the first band count.
+ok_pix  <- !is.null(pix) &&
   all(pix <= 1e-3 + 1e-4 * abs(ref_sum$gmax[match(layers, ref_sum$layer)]))
-verdict <- all(res$geometry) && all(res$n_valid) && all(res$stats) && ok_pix
+ok_form <- all(res$geometry) && all(res$n_valid) && all(res$stats)
+verdict <- ok_form && ok_pix
+verdict_label <- if (!ok_form) "FAIL" else if (is.null(pix)) {
+  "INCOMPLETE (wiring only -- no reference snapshot to compare against)"
+} else if (ok_pix) "PASS" else "FAIL"
+n_b <- nrow(res)
 
 message("\n", strrep("=", 78))
-message(sprintf("B4: %s | geometry %d/9 | n_valid %d/9 | stats %d/9 | pixels %s",
-                if (verdict) "PASS" else "FAIL",
-                sum(res$geometry), sum(res$n_valid), sum(res$stats),
+message(sprintf("B4: %s | geometry %d/%d | n_valid %d/%d | stats %d/%d | pixels %s",
+                verdict_label,
+                sum(res$geometry), n_b, sum(res$n_valid), n_b, sum(res$stats), n_b,
                 if (is.null(pix)) "not compared" else
                   if (ok_pix) "match the 1x1 map" else "DIFFER FROM THE 1x1 MAP"))
 message(strrep("=", 78))
-if (!verdict) {
+if (!ok_form || (!is.null(pix) && !ok_pix)) {
   message("\nA mosaic can be well formed and wrong. Read the per-band table above:")
   message("  geometry FALSE -> the workers predicted the wrong grid")
   message("  n_valid  FALSE -> a tile is missing, or a seam dropped pixels")

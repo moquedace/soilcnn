@@ -130,7 +130,7 @@ if (identical(final_run_id, "latest")) {
 final_run_dir <- file.path(final_model_base, final_run_id)
 summary_file  <- file.path(final_run_dir, "comparison", "final_run_summary.rds")
 if (!file.exists(summary_file)) stop("final_run_summary.rds not found: ", summary_file)
-config_id <- readRDS(summary_file)$selected_cfgs$config_id[1]
+config_id <- selected_config_id(readRDS(summary_file), final_run_id)
 
 output_log_dir <- file.path(project_root, "outputs", "spatial_prediction",
                             "soc_stock_modeling", target_label, config_id, "log")
@@ -168,8 +168,23 @@ shard_config_file <- function(rs, cs) {
   file.path(output_log_dir, paste0("prediction_config", suf, ".csv"))
 }
 
+# A MARKER WITHOUT ITS TILES IS NOT "DONE". The config CSV is written by 05
+# after the tiles; if the tiles were since deleted (a parts_2d/ cleared by
+# hand, a 05b that was told to remove them) the marker alone would make this
+# script skip the shard and 05b then fail on a tile count. Refused here, where
+# the fix is one sentence.
+parts_dir <- file.path(dirname(output_log_dir), "raster", "parts_2d")
 shard_already_done <- function(rs, cs) {
-  file.exists(shard_config_file(rs, cs))
+  marker <- file.exists(shard_config_file(rs, cs))
+  if (!marker) return(FALSE)
+  suf <- sprintf("_r%03dof%03d_c%03dof%03d[.]tif$", rs, n_row_shards, cs, n_col_shards)
+  tiles <- list.files(parts_dir, pattern = suf)
+  if (length(tiles) == 0L) {
+    stop("Shard [r", rs, "/c", cs, "] has its prediction_config marker but no ",
+         "tile under ", parts_dir, ".\n  Delete ", basename(shard_config_file(rs, cs)),
+         " to have the shard re-run, or restore the tiles.", call. = FALSE)
+  }
+  TRUE
 }
 
 message("Checking for shards already finished (resume)...")
