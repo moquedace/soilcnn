@@ -87,27 +87,15 @@ output_tuning_dir <- file.path(project_root, "outputs", "tuning",
 #
 # They exist so the two-design comparison can run the REAL script twice rather
 # than a copy of it edited twice.
-.env_chr <- function(name, default) {
-  v <- trimws(Sys.getenv(name))
-  if (!nzchar(v)) default else v
-}
-.env_int <- function(name, default) {
-  v <- trimws(Sys.getenv(name))
-  if (!nzchar(v)) return(default)
-  n <- suppressWarnings(as.integer(v))
-  if (is.na(n) || n < 1L) {
-    stop(name, " is set to '", v, "', which is not a positive integer.",
-         call. = FALSE)
-  }
-  n
-}
+#
+# env_chr()/env_int() live in R/utils.R -- one reader, shared with 04 and 05a.
 
-.tuning_design <- .env_chr("soc_tuning_design", "spatial")
+.tuning_design <- env_chr("soc_tuning_design", "spatial")
 if (!.tuning_design %in% c("spatial", "knndm")) {
   stop("soc_tuning_design is '", .tuning_design,
        "'; it must be \"spatial\" or \"knndm\".", call. = FALSE)
 }
-.tune_length <- .env_int("soc_tune_length", 3L)
+.tune_length <- env_int("soc_tune_length", 3L)
 
 # ── Tuning grid ───────────────────────────────────────────────────────────────
 # See R/tune_grid.R and docs/tuning_guide.md for full parameter descriptions.
@@ -441,7 +429,7 @@ run_id <- if (!is.null(resume_run_id)) {
 # Cost: 3x the grid's time. Raising it later is RESUMABLE -- the repetitions
 # already on disk are recognised and only the new ones train, so it is fine
 # to start at 1, see the grid stand up, and go to 3 without losing anything.
-n_seeds <- .env_int("soc_tuning_n_seeds", 3L)
+n_seeds <- env_int("soc_tuning_n_seeds", 3L)
 
 # dsm_train() dispatches on the model's declared input: "patches" goes to
 # run_cnn_resample(), "table" to run_table_resample(). The engine is the same

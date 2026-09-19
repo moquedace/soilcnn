@@ -1,5 +1,9 @@
 project_root <- "D:/usuario_armazenamento/cassio/R/deep_learning_caret"
 
+# env_int() and latest_run_dir() live in R/utils.R. Loaded here, first, and
+# nothing more of the framework: this is an orchestrator, not a model.
+source(file.path(project_root, "R", "utils.R"))
+
 source(
   "https://raw.githubusercontent.com/moquedace/funcs/refs/heads/main/utils/install_load_pkg.R"
 )
@@ -46,17 +50,6 @@ n_row_shards <- 250
 # it is set, the literal stands otherwise, so nothing changes for a normal run.
 #
 # soc_n_row_shards / soc_n_col_shards / soc_max_concurrent
-.env_int <- function(name, default) {
-  v <- Sys.getenv(name)
-  if (!nzchar(v)) return(default)
-  n <- suppressWarnings(as.integer(v))
-  if (is.na(n) || n < 1L) {
-    stop(name, " is set to '", v, "', which is not a positive integer.",
-         call. = FALSE)
-  }
-  message("  ", name, " = ", n, " (from the environment)")
-  n
-}
 
 # Column shards: each shard reduces strip_ncol by 1/n_col_shards -> RAM
 # per process proportional. n_col_shards=4 splits ~240 MB/row into ~60 MB.
@@ -96,9 +89,9 @@ n_col_shards <- 4
 max_concurrent <- 3
 
 
-n_row_shards   <- .env_int("soc_n_row_shards",   n_row_shards)
-n_col_shards   <- .env_int("soc_n_col_shards",   n_col_shards)
-max_concurrent <- .env_int("soc_max_concurrent", max_concurrent)
+n_row_shards   <- env_int("soc_n_row_shards",   n_row_shards)
+n_col_shards   <- env_int("soc_n_col_shards",   n_col_shards)
+max_concurrent <- env_int("soc_max_concurrent", max_concurrent)
 poll_interval_s <- 30
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
@@ -129,9 +122,6 @@ if (identical(final_run_id, "latest")) {
   # By time, and only a run that FINISHED: stage 04 creates its directory
   # before its own validations, so a failed 04 leaves a final_<timestamp> that
   # the old name-sort would have handed to every worker.
-# latest_run_dir() lives in R/utils.R; this script deliberately loads no
-# more of the framework than it uses.
-source(file.path(project_root, "R", "utils.R"))
   final_run_id <- latest_run_dir(
     final_model_base, prefix = "final_",
     require_file = file.path("comparison", "final_run_summary.rds"),

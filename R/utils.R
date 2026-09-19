@@ -591,3 +591,78 @@ latest_run_dir <- function(base, prefix, require_file = NULL,
   }
   pick
 }
+
+# ── Environment overrides: one reader, three shapes ───────────────────────────
+#
+# WHY A SCRIPT IS DRIVEN BY ENVIRONMENT VARIABLES AT ALL. Every example script
+# opens with rm(list = ls()), deliberately, so that a stale object from an
+# earlier run can never leak into a model. Sys.setenv() survives that erasure
+# and a workspace object does not, so it is the only channel into a source()d
+# run -- and it is what lets a check script run the REAL stage in a child
+# process instead of a copy of it (see _b2_two_config_check.R).
+#
+# WHY ONE HOME. Three scripts each carried their own .env_int(); one of them
+# had stopped trimming whitespace, one printed what it read and the others did
+# not, and only stage 04 knew how to read a comma-separated list. Three readers
+# of the same variable that disagree about "  8 " is a defect waiting for the
+# day someone pastes a value with a space in it.
+#
+# Every reader prints what it took from the environment, because a value set
+# in a session and forgotten is how stage 04 nearly trained the wrong configs:
+# the variables persist, the file's defaults do not announce that they were
+# overridden, and nothing on screen says which was used.
+
+.env_raw <- function(name) {
+  v <- trimws(Sys.getenv(name, unset = ""))
+  if (nzchar(v)) v else NULL
+}
+
+#' Read a string override, or the default.
+env_chr <- function(name, default) {
+  v <- .env_raw(name)
+  if (is.null(v)) return(default)
+  message("  ", name, " = \"", v, "\"  (from the environment)")
+  v
+}
+
+#' Read a positive integer override, or the default. Refuses anything else:
+#' a thread count or a seed that silently became NA is worse than not starting.
+env_int <- function(name, default, min = 1L) {
+  v <- .env_raw(name)
+  if (is.null(v)) return(default)
+  n <- suppressWarnings(as.integer(v))
+  if (is.na(n) || n < min) {
+    stop(name, " is set to '", v, "', which is not an integer >= ", min, ".",
+         call. = FALSE)
+  }
+  message("  ", name, " = ", n, "  (from the environment)")
+  n
+}
+
+#' Read a comma-separated override as a character vector, or as integers.
+#'
+#' Empty items ("a,,b", a trailing comma) are dropped; an all-empty value is
+#' refused rather than returned as character(0), which downstream code would
+#' treat as "nothing selected" and proceed with. With as_int = TRUE every item
+#' must parse, and the ones that do not are named -- a seed list with one bad
+#' entry must not become a shorter seed list.
+env_csv <- function(name, default, as_int = FALSE) {
+  v <- .env_raw(name)
+  if (is.null(v)) return(default)
+  parts <- trimws(strsplit(v, ",", fixed = TRUE)[[1]])
+  parts <- parts[nzchar(parts)]
+  if (length(parts) == 0L) {
+    stop(name, " is set to '", v, "', which parses to no values.", call. = FALSE)
+  }
+  if (as_int) {
+    n <- suppressWarnings(as.integer(parts))
+    if (anyNA(n)) {
+      stop(name, " is set to '", v, "' and these are not integers: ",
+           paste(parts[is.na(n)], collapse = ", "), call. = FALSE)
+    }
+    parts <- n
+  }
+  message("  ", name, " = ", paste(parts, collapse = ", "),
+          "  (", length(parts), ", from the environment)")
+  parts
+}

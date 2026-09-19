@@ -280,6 +280,54 @@ out <- utils::capture.output(res <- print_wide(wide))
 ok["print_wide_returns_the_table"] <- identical(res, wide)
 ok["print_wide_shows_the_last_column"] <- any(grepl("c40", out))
 
+# ── 9. env_chr / env_int / env_csv: ONE READER FOR THE OVERRIDES ─────────────
+#
+# Three scripts each carried a private copy and they had already drifted: one
+# stopped trimming whitespace. The value "  8 " must read as 8 everywhere, a
+# seed list with one bad entry must refuse rather than shrink, and an override
+# must announce itself -- a variable left set in a session is how stage 04
+# nearly trained the wrong configs.
+Sys.unsetenv(c("dlc_test_chr", "dlc_test_int", "dlc_test_csv"))
+ok["env_unset_returns_the_default"] <-
+  identical(env_chr("dlc_test_chr", "dflt"), "dflt") &&
+  identical(env_int("dlc_test_int", 7L), 7L) &&
+  identical(env_csv("dlc_test_csv", c("a", "b")), c("a", "b"))
+
+Sys.setenv(dlc_test_chr = "  spatial ", dlc_test_int = " 8 ",
+           dlc_test_csv = " cfg_003, cfg_002,, ")
+ok["env_values_are_trimmed"] <-
+  identical(suppressMessages(env_chr("dlc_test_chr", "x")), "spatial") &&
+  identical(suppressMessages(env_int("dlc_test_int", 1L)), 8L)
+ok["env_csv_drops_empty_items_and_trims"] <-
+  identical(suppressMessages(env_csv("dlc_test_csv", NULL)), c("cfg_003", "cfg_002"))
+
+# an override announces itself, so a forgotten one cannot be silent
+msg <- character(0)
+withCallingHandlers(env_int("dlc_test_int", 1L),
+  message = function(m) { msg <<- c(msg, conditionMessage(m)); invokeRestart("muffleMessage") })
+ok["env_override_is_announced"] <- any(grepl("from the environment", msg))
+
+Sys.setenv(dlc_test_int = "eight", dlc_test_csv = "7,28,x")
+ok["env_int_refuses_a_non_integer"] <- inherits(
+  try(env_int("dlc_test_int", 1L), silent = TRUE), "try-error")
+ok["env_int_refuses_below_min"] <- {
+  Sys.setenv(dlc_test_int = "0")
+  inherits(try(env_int("dlc_test_int", 1L), silent = TRUE), "try-error")
+}
+ok["env_csv_names_the_bad_item_and_refuses"] <- {
+  e <- tryCatch(env_csv("dlc_test_csv", NULL, as_int = TRUE),
+                error = function(e) conditionMessage(e))
+  is.character(e) && grepl("x", e, fixed = TRUE)
+}
+Sys.setenv(dlc_test_csv = "7, 28 ,42")
+ok["env_csv_as_int_parses"] <-
+  identical(suppressMessages(env_csv("dlc_test_csv", NULL, as_int = TRUE)),
+            c(7L, 28L, 42L))
+Sys.setenv(dlc_test_csv = " , ,")
+ok["env_csv_all_empty_is_refused"] <- inherits(
+  try(env_csv("dlc_test_csv", NULL), silent = TRUE), "try-error")
+Sys.unsetenv(c("dlc_test_chr", "dlc_test_int", "dlc_test_csv"))
+
 unlink(scratch, recursive = TRUE, force = TRUE)
 
 cat(sprintf("  latest_run_dir           : picks by time (%s), skips unfinished, names them\n",

@@ -97,32 +97,12 @@ seeds <- c(7, 28, 42L, 94, 123L, 333, 456L, 666, 789L, 2025L)
 # Naming config ids here is the same act as naming them at the top of the file,
 # so it takes the same path: selection_rule_applied becomes "manual" and the
 # frozen record says so.
-.env_chr <- function(name, default) {
-  v <- trimws(Sys.getenv(name))
-  if (!nzchar(v)) default else v
-}
-.env_csv <- function(name, default, as_int = FALSE) {
-  v <- trimws(Sys.getenv(name))
-  if (!nzchar(v)) return(default)
-  parts <- trimws(strsplit(v, ",", fixed = TRUE)[[1]])
-  parts <- parts[nzchar(parts)]
-  if (length(parts) == 0L) {
-    stop(name, " is set to '", v, "', which parses to no values.", call. = FALSE)
-  }
-  if (!as_int) return(parts)
-  n <- suppressWarnings(as.integer(parts))
-  # A seed that silently becomes NA would be a unit trained under an unknown
-  # RNG state and labelled with one, which is worse than refusing to start.
-  if (anyNA(n)) {
-    stop(name, " is set to '", v, "' and these are not integers: ",
-         paste(parts[is.na(n)], collapse = ", "), call. = FALSE)
-  }
-  n
-}
+#
+# env_chr()/env_csv() live in R/utils.R -- one reader, shared with 03 and 05a.
 
-tuning_run_id       <- .env_chr("soc_final_tuning_run_id", tuning_run_id)
-selected_config_ids <- .env_csv("soc_final_config_ids", selected_config_ids)
-seeds               <- .env_csv("soc_final_seeds", seeds, as_int = TRUE)
+tuning_run_id       <- env_chr("soc_final_tuning_run_id", tuning_run_id)
+selected_config_ids <- env_csv("soc_final_config_ids", selected_config_ids)
+seeds               <- env_csv("soc_final_seeds", seeds, as_int = TRUE)
 
 if (nzchar(Sys.getenv("soc_final_config_ids")) ||
     nzchar(Sys.getenv("soc_final_seeds")) ||
