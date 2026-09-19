@@ -100,6 +100,11 @@ printed rather than asserted.
 
 ---
 
+> **Status (2026-09-19):** tier A done; B1, B2, B4, B5 done, B3 and B6 have
+> their scripts ready and have not run; C1 has both runs finished and its
+> comparison script not yet run. The table with results is in
+> `status_and_roadmap.md` §1.
+
 ## Tier B — real risk, real cost
 
 | # | capability | why it is not in tier A | cost |
@@ -107,7 +112,7 @@ printed rather than asserted.
 | B1 | `knndm_cv()` on the real points | needs `predpoints` from the 20 km raster and CAST on 3,728 points; the projection and the cost were measured on paper, never on this data | minutes to build the plan; a full `rf` run on it after |
 | B2 | Two configs in stage 04 | exercises `paired_by_seed.csv`, a branch that has never run | 2 × 10 seeds |
 | B3 | D4 augmentation on/off | a training-time axis never varied on real data; it changes what the model sees, so only a CNN can answer | 2 × 9 units |
-| B4 | `05a` / `05b` / `05c` | the parallel path and the mosaic have not run since the refactor, and `05` now writes **9 bands instead of 7** — the merge walks that list | a 2 × 2 shard run at 20 km |
+| B4 | `05a` / `05b` / `05c` | the parallel path and the mosaic have not run since the refactor, and `05` now writes **10 bands instead of 7** (smearing added one more after this was written) — the merge walks that list | a 2 × 2 shard run at 20 km |
 | B5 | `06` and `99b` | the graphical evaluation and the visual pipeline check, never run against this API | minutes |
 | B6 | resume after an interruption | kill 03 midway, restart, confirm it picks up and that `check_plan_unchanged()` stays quiet | one interrupted run |
 

@@ -44,7 +44,10 @@ predict_loader <- function(model, data_loader, points_valid, dataset_role,
   if (is.finite(clamp[2])) pred_native <- pmin(pred_native, clamp[2])
   obs_native  <- as.numeric(points_valid$target_native)
   if (length(pred_native) != nrow(points_valid)) {
-    stop("Prediction length != metadata rows for split: ", dataset_role)
+    stop("Role '", dataset_role, "': the loader produced ", length(pred_native),
+         " prediction(s) but points_valid has ", nrow(points_valid), " row(s). ",
+         "Both must be sliced with the same fold index -- see fold_points_valid().",
+         call. = FALSE)
   }
   tibble::tibble(
     profile_id       = points_valid$profile_id,
@@ -80,7 +83,8 @@ transform_space_loss <- function(pred_t, obs_t, loss_fn_name) {
     smooth_l1 = mean(ifelse(abs(d) < 1, 0.5 * d^2, abs(d) - 0.5)),  # beta = 1.0
     mse       = mean(d^2),
     mae       = mean(abs(d)),
-    stop("Unknown loss_fn: ", loss_fn_name)
+    stop("loss_fn must be one of smooth_l1, mse, mae -- got '", loss_fn_name,
+         "'.", call. = FALSE)
   )
 }
 
@@ -213,7 +217,8 @@ train_one_cnn <- function(
     smooth_l1 = torch::nn_smooth_l1_loss(),
     mse       = torch::nn_mse_loss(),
     mae       = torch::nn_l1_loss(),
-    stop("Unknown loss_fn: ", cfg$loss_fn)
+    stop("loss_fn must be one of smooth_l1, mse, mae -- got '", cfg$loss_fn,
+         "' in config ", cfg$config_id, ".", call. = FALSE)
   )
 
   optimizer   <- torch::optim_adam(model$parameters, lr = warmup_start_lr,
@@ -346,7 +351,15 @@ train_one_cnn <- function(
   }
 
   runtime <- Sys.time() - t0
-  if (is.null(best_state)) stop("No best_state saved — training may have failed.")
+  if (is.null(best_state)) {
+    # Reached only when no epoch improved on Inf: every validation loss was
+    # NA or non-finite. The two causes seen here are NA in target_transform on
+    # this fold's validation rows and a learning rate that diverged at once.
+    stop("Unit ", model_name, ": no epoch improved the validation loss, so there ",
+         "is no model to keep -- every validation loss was NA or non-finite.",
+         "\n  Check target_transform for NA on this fold's validation rows, or ",
+         "lower base_lr (", base_lr, ").", call. = FALSE)
+  }
   model$load_state_dict(best_state)
 
   # --- Final evaluation on all splits ---
@@ -541,9 +554,9 @@ run_cnn_tuning <- function(
   if (resume && file.exists(grid_rds_path)) {
     prev_grid <- readRDS(grid_rds_path)
     if (!identical(prev_grid$config_id, tune_grid$config_id)) {
-      stop("resume=TRUE but tune_grid.rds in '", run_dir, "' has different ",
-           "config_ids than the tune_grid passed now. Use a new run_id, or ",
-           "pass the exact same tune_grid used to start this run.")
+      stop("resume = TRUE, but tune_grid.rds in ", run_dir, " lists config ids ",
+           "that differ from the grid passed now.\n  Use a new run_id, or pass ",
+           "the grid this run was started with.", call. = FALSE)
     }
   }
 
@@ -835,6 +848,16 @@ run_cnn_tuning <- function(
   # steady mean of a good one -- which is precisely the mistake repetitions
   # exist to prevent.
   n_ok <- sum(comparison$status == "success", na.rm = TRUE)
+  # A FOLD IN WHICH NOTHING TRAINED STOPS WITH THE FIRST ERROR. Failed rows
+  # carry no metric columns, so the arrange() below used to die inside dplyr
+  # with a message about val_ccc -- after minutes of cache building, and with
+  # the real cause sitting unread in error_message.
+  if (nrow(comparison) > 0L && n_ok == 0L) {
+    first_err <- comparison$error_message[!is.na(comparison$error_message)][1]
+    stop("Every unit of fold ", fold, " failed. The first error was:\n  ",
+         first_err, "\n  See status / error_message in ", comparison_path,
+         call. = FALSE)
+  }
   if (nrow(comparison) > 0) {
     # Failed configs sort last (val_ccc is NA) and get no rank -- they are
     # listed so the run is auditable, not ranked as if they had competed.

@@ -308,7 +308,11 @@ dual_branch_cnn <- torch::nn_module(
   ) {
 
     n_branches <- length(window_sizes)
-    if (!n_branches %in% c(1L, 2L)) stop("window_sizes must have length 1 or 2.")
+    if (!n_branches %in% c(1L, 2L)) {
+      stop("window_sizes must name one window (single branch) or two (dual ",
+           "branch) -- got ", n_branches, ": ", paste(window_sizes, collapse = ", "),
+           ".", call. = FALSE)
+    }
 
     embed_pool <- .check_choice(embed_pool, .valid_embed_pools, "embed_pool")
     # gate_type is ignored for a single branch, so only validate when it is

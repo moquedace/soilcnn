@@ -1,6 +1,10 @@
 # Execution plan — the one that is meant to be the last restart
 
-Status: **active**. Started 2026-09-14.
+Status: **closed 2026-09-19**. Started 2026-09-14. Every phase below was done;
+the pipeline has been closed end to end, tier A and most of tier B of
+`test_plan.md` have run, and the current position and the next steps are in
+`status_and_roadmap.md`. Kept as the record of why the rebuild was done the
+way it was.
 
 This plan exists because the pipeline has been restarted from stage 01 five
 times. Its first job is not to add features — it is to make the next discovery
@@ -194,11 +198,11 @@ script.
 
 ---
 
-## Open questions
+## Open questions (answered)
 
-- `_scratch_1km_test/` (7 scripts, 124 KB): delete like the other stale
-  scaffolding, or keep? It is tracked, so deleting is reversible.
-- Commit cadence: one commit per verified step, or in batches?
+- `_scratch_1km_test/` — deleted.
+- Commit cadence — batches, one decision per commit, and never `git add -A`
+  while a background job writes files.
 
 ## Rules that hold for the rest of the project
 

@@ -150,8 +150,9 @@ create_output_dirs <- function(dirs) {
     exists = file.exists(dirs)
   )
   if (any(!check$exists)) {
-    print(check)
-    stop("Some output directories could not be created.")
+    stop("Could not create: ", paste(check$full[!check$exists], collapse = ", "),
+         "\n  Check permissions and, on Windows, the 260-character path limit.",
+         call. = FALSE)
   }
   invisible(check)
 }

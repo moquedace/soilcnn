@@ -109,7 +109,12 @@ qc_band_values <- function(values, rule) {
 #' @return A tibble: predictor, scaling_method, center, scale — in channel
 #'   order, ready for scale_patches().
 fit_scaling <- function(points, type_table, rows, pct_scale = 100) {
-  if (length(rows) < 2L) stop("fit_scaling needs at least 2 rows to estimate.")
+  if (length(rows) < 2L) {
+    stop("This fold has ", length(rows), " training row(s); a mean and sd ",
+         "cannot be estimated from fewer than 2.\n  Use fewer folds, a smaller ",
+         "test_frac, or a grouping that leaves more rows in training.",
+         call. = FALSE)
+  }
 
   out <- tibble::tibble(
     predictor      = type_table$predictor,
@@ -153,7 +158,7 @@ scale_patches <- function(x, scaling, inplace = FALSE) {
   n_ch <- x$shape[[2]]
   if (nrow(scaling) != n_ch) {
     stop("scaling has ", nrow(scaling), " rows but the tensor has ", n_ch,
-         " channels -- channel order must match exactly.")
+         " channels -- channel order must match exactly.", call. = FALSE)
   }
   shp    <- c(1L, n_ch, 1L, 1L)
   centre <- torch::torch_tensor(as.numeric(scaling$center),
@@ -195,7 +200,7 @@ scale_patches_array <- function(x, scaling) {
   n_ch <- dim(x)[2]
   if (nrow(scaling) != n_ch) {
     stop("scaling has ", nrow(scaling), " rows but the array has ", n_ch,
-         " channels -- channel order must match exactly.")
+         " channels -- channel order must match exactly.", call. = FALSE)
   }
   for (i in seq_len(n_ch)) {
     x[, i, , ] <- (x[, i, , ] - scaling$center[i]) / scaling$scale[i]

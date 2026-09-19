@@ -32,10 +32,12 @@
 #' @return An (n_centres x window_size^2) integer matrix of linear indices.
 patch_cell_index <- function(centre_row, centre_col, n_cols, window_size) {
   if (window_size %% 2L != 1L) {
-    stop("window_size must be odd, got ", window_size)
+    stop("window_size must be odd (a patch has one centre pixel), got ",
+         window_size, ".", call. = FALSE)
   }
   if (length(centre_row) != length(centre_col)) {
-    stop("centre_row and centre_col must have the same length.")
+    stop("centre_row and centre_col must have the same length -- got ",
+         length(centre_row), " and ", length(centre_col), ".", call. = FALSE)
   }
 
   half_w  <- (window_size - 1L) %/% 2L

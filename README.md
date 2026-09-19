@@ -211,7 +211,15 @@ For the reasoning behind every architectural and training choice see [`docs/desi
 | [`R/smearing.R`](R/smearing.R) | `smearing_factor()` · `smear()` — the back-transform of a log-trained median, and the one surface that may be summed |
 | [`R/test_optimism.R`](R/test_optimism.R) | `freeze_selection()` · `score_test_grid()` — the test set, scored only after the choice is locked |
 | [`R/api.R`](R/api.R) | **The front end**: `dsm_load()` · `spatial_cv()` · `dsm_train()` |
-| [`R/load_all.R`](R/load_all.R) | One `source()` for every module, in dependency order |
+| [`R/load_all.R`](R/load_all.R) | One `source()` for every module, in dependency order — and it stops on a missing module rather than loading part of the framework |
+
+Beside `R/`:
+
+| Where | What |
+|------|---------|
+| [`tests/run_all.R`](tests/run_all.R) | 24 files, ~780 assertions, ~3.5 min. Every accumulator is named and `.report()` refuses an empty, unnamed, NA-bearing or non-logical one. `test_sources_parse.R` runs first and is the authority on syntax. |
+| [`tools/`](tools/) | Three Python checks that need no R: `r_lint.py` (a top-level `else`, the native pipe — the two mistakes that have cost a round trip here; has a `--selftest`), `r_calls.py` (every project function a script calls exists, `do.call` targets included; named arguments match formals), `r_skeleton.py` (an edit touched only comments and strings). Run them after any edit made without an R session. |
+| [`utils/install_load_pkg.R`](utils/install_load_pkg.R) | Installs what is missing, then **stops** if a package will not load |
 
 ---
 
@@ -542,6 +550,34 @@ The [`examples/soc_stock_0_5cm/`](examples/soc_stock_0_5cm/) directory contains 
 | [`99_check_pipeline.R`](examples/soc_stock_0_5cm/99_check_pipeline.R) | Numeric consistency across every artefact the pipeline wrote, against a saved snapshot |
 | [`99b_check_pipeline_visual.R`](examples/soc_stock_0_5cm/99b_check_pipeline_visual.R) | The same, but showing the actual thing on screen: where the profiles are, whether tuning improved anything, what the patches look like |
 | [`_capability_sweep.R`](examples/soc_stock_0_5cm/_capability_sweep.R) | Exercises the framework paths a second user would reach for first — reports *ran*, *asserted* and *measured* separately, because a path that ran without being asserted is the interesting row |
+| `_b1` … `_b6`, `_c1` | The tier B and C capability checks of [`docs/test_plan.md`](docs/test_plan.md): kNNDM on the real points, two configs in stage 04, augmentation on/off, sharded prediction and merge, resume after an interruption, the same grid under two validation designs |
+
+### Running it
+
+Every script is run with `source("<full path>")` from an R console, in this
+order, with `tests/run_all.R` before anything expensive:
+
+```
+01 → 02 → 99 → 03 → 03b → 99 → 04 → 05 (or 05a_test → 05a → 05b) → 07 → 06 → 99 / 99b
+```
+
+Each script clears the workspace, so a parameter cannot be passed as a
+variable; it is passed as an **environment variable**, read through
+`env_chr()` / `env_int()` / `env_csv()`, which refuse a value that does not
+parse instead of turning it into `NA`:
+
+| Variable | Read by | Meaning |
+|---|---|---|
+| `soc_tuning_design` | 03 | `spatial` (block folds, default) or `knndm` — needs `_b1`'s `predpoints.csv` |
+| `soc_tune_length`, `soc_tuning_n_seeds`, `soc_tuning_run_id` | 03 | grid size, seeds per unit, run directory name |
+| `soc_final_tuning_run_id`, `soc_final_config_ids`, `soc_final_seeds` | 04 | which tuning run to refit from, which config(s), which seeds |
+| `soc_row_shard_id`, `soc_col_shard_id`, `soc_n_row_shards`, `soc_n_col_shards`, `soc_max_concurrent` | 05, 05a, 05c | the tile grid and the concurrency |
+| `soc_predict_raster_dir` | 05, 05a, 05a_test, 07, `_b1` | predict over another raster directory (the 20 km wiring grid) |
+| `soc_b6_phase` | `_b6` | `prepare` or `verify` |
+
+`Sys.setenv(soc_tune_length = "8")` before the `source()`; `Sys.unsetenv()`
+after, or the next run inherits it. Every override announces itself with
+"(from the environment)" when it is read.
 
 ---
 

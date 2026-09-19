@@ -264,7 +264,7 @@ Pure L1 loss. Equally robust to outliers, but the gradient is constant (not smoo
 
 **Early stopping monitor:** validation SmoothL1 loss (or the configured `loss_fn`).  
 **Patience:** number of epochs without improvement before stopping.  
-**Model selection across configs:** ranked by **validation CCC** (descending), then validation MAE (ascending). Test metrics are written to the comparison CSV for diagnostic reference only — they are never used to choose between configurations. The test set is opened once, after the winning architecture is locked in.
+**Model selection across configs:** ranked by **validation CCC** (descending), then validation MAE (ascending), or by `one_se()` — the simplest config within one standard error of the best — which is stage 04's default. The test set is **not scored during tuning** (`evaluate_test = FALSE`); its columns hold `NA`. It is opened once, in stage 04, on the config chosen without it. Every config is fitted on every fold with several seeds, and the gap between two configs is read against the seed noise floor before it is called a difference.
 
 The separation between early stopping metric (loss) and selection metric (CCC/MAE) is deliberate:  
 - Loss guides training stability (smooth, differentiable, robust to outliers).  

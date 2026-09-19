@@ -321,13 +321,11 @@ be insufficient to train it reliably. The three gate types remain in the search 
 this conclusion is dataset-specific and the situation may change with more data or targeted
 spatial splits.
 
-> **Historical note:** cfg_004/cfg_012 were selected under the initial 20 km-resolution
-> prototype (window sizes 3/5/7). After moving to the 250 m production run (window sizes
-> 3/9/15, re-tuned end to end), the selected final model is **cfg_014** (dual-branch,
-> windows 9×9 + 15×15, `no_gate_concat`, `embedding_dim=256`, val CCC 0.657) — the same
-> `no_gate_concat` conclusion held up at 250 m. The discussion above is kept for the
-> qualitative conclusion (gate vs. concat), not as a pointer to a specific config id, which
-> is reassigned on every new tuning run.
+> **Historical note:** the config ids in this section (cfg_004, cfg_012, and a later
+> cfg_014 with val CCC 0.657 under a 20 km prototype) belonged to tuning runs that no
+> longer exist; ids are reassigned on every run and none of them is the deployed model.
+> The discussion is kept for the qualitative conclusion (gate vs. concat). The current
+> run, its selected config and its numbers are in `reference_performance.md`.
 
 ---
 
@@ -490,9 +488,13 @@ This is analogous to multiple comparisons: selecting the maximum CCC from 30 tes
 evaluations without correction inflates the apparent performance.
 
 ### Practical implication
-Test CCC is written to the comparison CSV for diagnostic reference but explicitly labelled as
-not used for selection. The final reported test CCC (from script 04, multi-seed) is a genuine
-out-of-sample estimate because it was not used at any decision point.
+The test set is **not scored during tuning at all** (`evaluate_test = FALSE`, the default):
+the test columns of the comparison table exist and hold `NA`. An earlier version wrote them
+"for diagnostic reference"; there is no such thing — a test score beside the selection metric
+is selection on the test set performed by whoever reads the table. Stage 04 scores the test
+set once, on the config chosen without it, and `score_test_grid()` can measure the optimism
+afterwards. Ranking is by validation CCC then MAE, or by `one_se()` — the simplest config
+within one standard error of the best — which is the default in stage 04.
 
 ---
 
@@ -532,7 +534,8 @@ and penalises failure modes that matter for SOC stock mapping (bias, scale, and 
 
 ### What it is
 Before the patches reach the CNN, each predictor channel is scaled using statistics computed
-**from the training split only**:
+**from the training rows of the fold being fitted** — once per fold in tuning
+(`build_fold_cache()`), and once more in stage 04 from the refit rows:
 
 | Predictor type | Transform |
 |----------------|-----------|
