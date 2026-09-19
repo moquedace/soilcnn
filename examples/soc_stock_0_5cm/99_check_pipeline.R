@@ -557,15 +557,19 @@ tuning_dir <- file.path(project_root, "outputs", "tuning", "soc_stock_modeling",
 if (!dir.exists(tuning_dir)) {
   .say("Stage 03 not started -- directory not found: ", tuning_dir)
 } else {
-  tuning_runs <- list.dirs(tuning_dir, recursive = FALSE, full.names = FALSE)
-  if (length(tuning_runs) == 0) {
-    .say("Stage 03 incomplete -- no run found in: ", tuning_dir)
+  # Newest FINISHED run by time, or NULL -- and NULL is reported, not
+  # swallowed. The old name-sort here picked an unfinished run the day one was
+  # named rather than timestamped, and every "stage 03" check below then read
+  # a directory with no comparison tables in it.
+  tuning_run_id <- latest_run_dir(
+    tuning_dir, prefix = "soc_",
+    require_file = file.path("comparison", "comparison_ranked.csv"),
+    label = "stage 03 run", on_none = "null")
+  if (is.null(tuning_run_id)) {
+    .say("Stage 03 incomplete -- no FINISHED run in: ", tuning_dir)
   } else {
-    # Most recent by name order (run_id is timestamped) -- the same criterion
-    # stages 04/05/06 use to resolve "latest".
-    tuning_run_id <- sort(tuning_runs, decreasing = TRUE)[1]
     run_dir <- file.path(tuning_dir, tuning_run_id)
-    .say("Most recent run: ", tuning_run_id)
+    .say("Most recent finished run: ", tuning_run_id)
 
     f_grid_csv <- file.path(run_dir, "tune_grid.csv")
     f_grid_rds <- file.path(run_dir, "tune_grid.rds")
@@ -781,14 +785,15 @@ final_model_base <- file.path(project_root, "outputs", "final_model",
 if (!dir.exists(final_model_base)) {
   .say("Stage 04 not started -- directory not found: ", final_model_base)
 } else {
-  final_runs <- list.dirs(final_model_base, recursive = FALSE, full.names = FALSE)
-  final_runs <- final_runs[grepl("^final_", final_runs)]
-  if (length(final_runs) == 0) {
-    .say("Stage 04 incomplete -- no run found in: ", final_model_base)
+  final_run_id <- latest_run_dir(
+    final_model_base, prefix = "final_",
+    require_file = file.path("comparison", "final_run_summary.rds"),
+    label = "stage 04 run", on_none = "null")
+  if (is.null(final_run_id)) {
+    .say("Stage 04 incomplete -- no FINISHED run in: ", final_model_base)
   } else {
-    final_run_id <- sort(final_runs, decreasing = TRUE)[1]
     run_dir <- file.path(final_model_base, final_run_id)
-    .say("Most recent run: ", final_run_id)
+    .say("Most recent finished run: ", final_run_id)
 
     f_summary_rds <- file.path(run_dir, "comparison", "final_run_summary.rds")
     f_all_seeds   <- file.path(run_dir, "comparison", "all_seed_results_test.csv")

@@ -349,7 +349,12 @@ if (length(run_dirs) == 0L) {
        "has to be a run to compare with. Run 03_run_tuning.R first.",
        call. = FALSE)
 }
-cnn_run_id  <- sort(run_dirs, decreasing = TRUE)[1]
+# A FINISHED run, by time. B1 compares kNNDM against "the block folds already
+# in use", and the folds in use are the ones a completed CNN run was scored
+# on -- an unfinished run has a plan and nothing that plan produced.
+cnn_run_id  <- latest_run_dir(tuning_base, prefix = "soc_",
+                              require_file = file.path("comparison", "comparison_ranked.csv"),
+                              label = "cnn_run_id")
 cnn_run_dir <- file.path(tuning_base, cnn_run_id)
 message("\nBlock folds read from tuning run: ", cnn_run_id)
 
@@ -496,9 +501,26 @@ if (length(final_dirs) == 0L) {
        "and it is what proves the predpoints below come from the grid the map ",
        "was drawn on. Run 04 and 05 first.", call. = FALSE)
 }
-final_run_id <- sort(final_dirs, decreasing = TRUE)[1]
-config_id <- readRDS(file.path(final_model_base, final_run_id, "comparison",
-                               "final_run_summary.rds"))$selected_cfgs$config_id[1]
+final_run_id <- latest_run_dir(final_model_base, prefix = "final_",
+                               require_file = file.path("comparison", "final_run_summary.rds"),
+                               label = "final_run_id")
+.cfg_from_summary <- function(summary_path, run_label) {
+  # SELECTION order, not grid order: selected_cfgs comes from
+  # dplyr::filter(tune_grid_full, ...) and keeps the grid's row order, so with
+  # two configs its first row can be the runner-up. selected_config_ids is the
+  # chosen list in the order it was chosen (written from 2026-09-18 on).
+  fs <- readRDS(summary_path)
+  id <- if (!is.null(fs$selected_config_ids)) fs$selected_config_ids[1] else
+    fs$selected_cfgs$config_id[1]
+  if (is.null(id) || !nzchar(id)) {
+    stop("No config could be read from ", run_label, "'s final_run_summary.rds.",
+         call. = FALSE)
+  }
+  id
+}
+config_id <- .cfg_from_summary(
+  file.path(final_model_base, final_run_id, "comparison", "final_run_summary.rds"),
+  final_run_id)
 pred_cfg_file <- file.path(project_root, "outputs", "spatial_prediction",
                            "soc_stock_modeling", target_label, config_id,
                            "log", "prediction_config.csv")

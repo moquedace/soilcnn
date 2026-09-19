@@ -11,18 +11,15 @@ project_root <- "D:/usuario_armazenamento/cassio/R/deep_learning_caret"
 max_concurrent <- 3   # <<< keep identical to 05a_run_parallel.R
 
 log_root <- file.path(project_root, "outputs", "spatial_prediction", "_worker_logs")
-run_dirs <- list.dirs(log_root, recursive = FALSE, full.names = FALSE)
-if (length(run_dirs) == 0) stop("No run found in: ", log_root)
-
-# Finds the most recent run that has 2D logs (ignores 05a/TEST2D runs)
-run_dir <- NULL
-for (rd in sort(run_dirs, decreasing = TRUE)) {
-  candidate <- file.path(log_root, rd)
-  files_2d  <- list.files(candidate,
-    pattern = "^shard_r[0-9]+of[0-9]+_c[0-9]+of[0-9]+\\.log$")
-  if (length(files_2d) > 0) { run_dir <- candidate; break }
-}
-if (is.null(run_dir)) stop("No 2D run found in: ", log_root)
+# THE RUN WITH THE NEWEST SHARD LOG, which is the one being written right now.
+# The old loop took the newest directory by NAME and then looked for logs in
+# it; a run in progress is the one whose log was touched last, and that is the
+# question an ETA script is asking.
+source(file.path(project_root, "R", "utils.R"))
+run_dir <- file.path(log_root, latest_run_dir(
+  log_root, prefix = "",
+  require_pattern = "^shard_r[0-9]+of[0-9]+_c[0-9]+of[0-9]+[.]log$",
+  label = "2D run"))
 
 now <- Sys.time()
 message("2D run: ", basename(run_dir), "  |  now: ", format(now))

@@ -47,10 +47,31 @@ stopifnot(file.exists(rscript_bin), file.exists(probe_20km),
 # Resolved exactly as 05a and 05b resolve them, so all three agree on the run.
 final_model_base <- file.path(project_root, "outputs", "final_model",
                               "soc_stock_modeling", target_label)
-run_dirs     <- list.dirs(final_model_base, recursive = FALSE, full.names = FALSE)
-final_run_id <- sort(run_dirs[grepl("^final_", run_dirs)], decreasing = TRUE)[1]
-config_id    <- readRDS(file.path(final_model_base, final_run_id, "comparison",
-                                  "final_run_summary.rds"))$selected_cfgs$config_id[1]
+# By time, finished only, and the config in SELECTION order -- the same
+# three corrections 05 received, so this check and the stage it checks agree.
+# latest_run_dir() lives in R/utils.R; this script deliberately loads no
+# more of the framework than it uses.
+source(file.path(project_root, "R", "utils.R"))
+final_run_id <- latest_run_dir(final_model_base, prefix = "final_",
+                               require_file = file.path("comparison", "final_run_summary.rds"),
+                               label = "final_run_id")
+.cfg_from_summary <- function(summary_path, run_label) {
+  # SELECTION order, not grid order: selected_cfgs comes from
+  # dplyr::filter(tune_grid_full, ...) and keeps the grid's row order, so with
+  # two configs its first row can be the runner-up. selected_config_ids is the
+  # chosen list in the order it was chosen (written from 2026-09-18 on).
+  fs <- readRDS(summary_path)
+  id <- if (!is.null(fs$selected_config_ids)) fs$selected_config_ids[1] else
+    fs$selected_cfgs$config_id[1]
+  if (is.null(id) || !nzchar(id)) {
+    stop("No config could be read from ", run_label, "'s final_run_summary.rds.",
+         call. = FALSE)
+  }
+  id
+}
+config_id <- .cfg_from_summary(
+  file.path(final_model_base, final_run_id, "comparison", "final_run_summary.rds"),
+  final_run_id)
 
 out_dir    <- file.path(project_root, "outputs", "spatial_prediction",
                         "soc_stock_modeling", target_label, config_id)

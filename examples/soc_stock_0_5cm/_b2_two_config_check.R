@@ -106,12 +106,11 @@ final_base  <- file.path(project_root, "outputs", "final_model",
                          "soc_stock_modeling", target_label)
 
 if (identical(b2_source_run, "latest")) {
-  run_dirs <- list.dirs(tuning_base, recursive = FALSE, full.names = FALSE)
-  run_dirs <- run_dirs[grepl("^soc_", run_dirs)]
-  if (length(run_dirs) == 0L) {
-    stop("No tuning run under ", tuning_base, call. = FALSE)
-  }
-  b2_source_run <- sort(run_dirs, decreasing = TRUE)[1]
+  # A FINISHED run, by time. The copy this script makes has to be of a run
+  # whose comparison tables exist, or stage 04 has nothing to select from.
+  b2_source_run <- latest_run_dir(tuning_base, prefix = "soc_",
+                                  require_file = file.path("comparison", "comparison_ranked.csv"),
+                                  label = "b2 source run")
 }
 source_dir <- file.path(tuning_base, b2_source_run)
 

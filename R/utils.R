@@ -502,42 +502,84 @@ check_plan_unchanged <- function(plan, run_dir, resume = TRUE) {
 #' final_<timestamp> behind that "latest" would then deploy -- which is what
 #' B2's review found from the other direction.
 #'
-#' @param base         directory holding the run directories.
-#' @param prefix       run ids must start with this (e.g. "soc_", "final_").
-#' @param require_file path INSIDE a run that only exists when it finished, e.g.
-#'   "comparison/comparison_by_config.csv". A run without it is not a candidate.
-#'   NULL accepts any directory, which is almost never what you want.
-#' @param label        what to call these runs in messages.
-#' @return The run id (basename), or stop() when nothing qualifies.
-latest_run_dir <- function(base, prefix, require_file = NULL, label = "run") {
+#' @param base            directory holding the run directories.
+#' @param prefix          run ids must start with this ("soc_", "final_"). ""
+#'   accepts every directory.
+#' @param require_file    path INSIDE a run that only exists when it finished,
+#'   e.g. "comparison/comparison_ranked.csv". A run without it is not a
+#'   candidate, and its mtime is what "newest" is measured on. NULL accepts any
+#'   directory, which is almost never what you want.
+#' @param require_pattern alternative to require_file for runs whose completion
+#'   is a FAMILY of files rather than one (05c's shard logs): a regex that at
+#'   least one file directly inside the run must match. "Newest" is then the
+#'   newest matching file, so a run still being written wins over an old one.
+#' @param label           what to call these runs in messages.
+#' @param on_none         what to do when no run qualifies. "stop" (default) for
+#'   a stage that cannot proceed without one; "null" for a CHECK that must
+#'   report "incomplete" and carry on -- 99_check_pipeline.R does that, and a
+#'   stop() there would turn a diagnosis into a crash. Returning NULL is loud
+#'   only if the caller tests for it; every caller that passes "null" here
+#'   prints a line saying so.
+#' @return The run id (basename), or stop() / NULL when nothing qualifies.
+latest_run_dir <- function(base, prefix, require_file = NULL,
+                           require_pattern = NULL, label = "run",
+                           on_none = c("stop", "null")) {
+  on_none <- match.arg(on_none)
+  none <- function(...) {
+    if (identical(on_none, "stop")) stop(..., call. = FALSE)
+    message(label, ": ", paste0(..., collapse = ""))
+    NULL
+  }
+  if (!is.null(require_file) && !is.null(require_pattern)) {
+    stop("latest_run_dir(): pass require_file OR require_pattern, not both.",
+         call. = FALSE)
+  }
+
   if (!dir.exists(base)) {
-    stop("No ", label, " directory at all: ", base, call. = FALSE)
+    return(none("No ", label, " directory at all: ", base))
   }
   ids <- list.dirs(base, recursive = FALSE, full.names = FALSE)
   ids <- ids[startsWith(ids, prefix)]
   if (length(ids) == 0L) {
-    stop("No ", label, " under ", base, " starting with \"", prefix, "\".",
-         call. = FALSE)
+    return(none("No ", label, " under ", base,
+                if (nzchar(prefix)) paste0(" starting with \"", prefix, "\"") else "",
+                "."))
   }
 
-  finished <- if (is.null(require_file)) {
-    ids
+  # THE TIME OF THE THING THAT SAYS "FINISHED", not of the directory: a
+  # directory's mtime moves when anything inside is touched, including a
+  # checkpoint written by a run that later died.
+  when <- rep(as.POSIXct(NA), length(ids))
+  if (!is.null(require_file)) {
+    f <- file.path(base, ids, require_file)
+    ok <- file.exists(f)
+    when[ok] <- file.info(f[ok])$mtime
+  } else if (!is.null(require_pattern)) {
+    for (i in seq_along(ids)) {
+      m <- list.files(file.path(base, ids[i]), pattern = require_pattern,
+                      full.names = TRUE)
+      if (length(m) > 0L) when[i] <- max(file.info(m)$mtime)
+    }
   } else {
-    ids[file.exists(file.path(base, ids, require_file))]
+    when <- file.info(file.path(base, ids))$mtime
   }
+
+  finished <- ids[!is.na(when)]
   if (length(finished) == 0L) {
-    stop("No FINISHED ", label, " under ", base, ".\n  ", length(ids),
-         " director(ies) are there, but none carries ", require_file,
-         ",\n  which is what says the run completed. The newest by time is '",
-         ids[which.max(file.info(file.path(base, ids))$mtime)],
-         "'.\n  Finish it, or name the run explicitly instead of \"latest\".",
-         call. = FALSE)
+    what <- if (!is.null(require_file)) require_file else
+      if (!is.null(require_pattern)) paste0("a file matching ", require_pattern) else
+      "anything"
+    newest_any <- ids[which.max(file.info(file.path(base, ids))$mtime)]
+    return(none("No FINISHED ", label, " under ", base, ".\n  ", length(ids),
+                " director(ies) are there, but none carries ", what,
+                ",\n  which is what says the run completed. The newest by time is '",
+                newest_any, "'.\n  Finish it, or name the run explicitly ",
+                "instead of \"latest\"."))
   }
 
   # MTIME, not the name. A resumed run legitimately becomes the newest again,
   # which is the behaviour wanted; a name cannot express that.
-  when <- file.info(file.path(base, finished,
-                              if (is.null(require_file)) "." else require_file))$mtime
+  when <- when[!is.na(when)]
   pick <- finished[which.max(when)]
 
   skipped <- setdiff(ids, finished)

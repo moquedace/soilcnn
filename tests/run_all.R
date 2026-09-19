@@ -53,7 +53,8 @@ test_files <- c(
   "test_conformal.R",        # the interval covers what it promises
   "test_smearing.R",         # the mean surface beside the median surface
   "test_architecture.R",     # embed_pool wiring
-  "test_augmentation.R"      # D4 symmetries
+  "test_augmentation.R",     # D4 symmetries
+  "test_run_dirs.R"          # "latest" by time, the pt-br csv round trip, resume identity
 )
 
 # Slow: these train real torch models (~3 min). They are the only ones that

@@ -256,16 +256,31 @@ config_id  <- "auto"
 if (identical(config_id, "auto")) {
   final_model_base <- file.path(project_root, "outputs", "final_model",
                                 "soc_stock_modeling", target_label)
-  run_dirs <- list.dirs(final_model_base, recursive = FALSE, full.names = FALSE)
-  run_dirs <- run_dirs[grepl("^final_", run_dirs)]
-  if (length(run_dirs) > 0) {
-    final_run_id <- sort(run_dirs, decreasing = TRUE)[1]
-    summary_path <- file.path(final_model_base, final_run_id, "comparison",
-                              "final_run_summary.rds")
-    if (file.exists(summary_path)) {
-      config_id <- readRDS(summary_path)$selected_cfgs$config_id[1]
-    }
+  # THIS CARRIED THE DEFECT B2 FOUND, IN FULL: newest final_ by NAME, and when
+  # its summary was missing, config_id stayed "auto" and travelled on to a
+  # model directory that does not exist. Now: newest FINISHED run by time, the
+  # config in SELECTION order (selected_cfgs is the grid's order -- with two
+  # configs, [1] can be the runner-up), and a refusal rather than a silent
+  # "auto" if nothing resolves.
+# latest_run_dir() lives in R/utils.R; this script deliberately loads no
+# more of the framework than it uses.
+source(file.path(project_root, "R", "utils.R"))
+  final_run_id <- latest_run_dir(
+    final_model_base, prefix = "final_",
+    require_file = file.path("comparison", "final_run_summary.rds"),
+    label = "final_run_id")
+  fs <- readRDS(file.path(final_model_base, final_run_id, "comparison",
+                          "final_run_summary.rds"))
+  config_id <- if (!is.null(fs$selected_config_ids)) {
+    fs$selected_config_ids[1]
+  } else {
+    fs$selected_cfgs$config_id[1]      # runs older than 2026-09-18
   }
+  if (is.null(config_id) || identical(config_id, "auto")) {
+    stop("config_id could not be resolved from ", final_run_id,
+         "'s final_run_summary.rds.", call. = FALSE)
+  }
+  message("config_id resolved to: ", config_id)
 }
 
 test_tiles <- list.files(parts_dir,

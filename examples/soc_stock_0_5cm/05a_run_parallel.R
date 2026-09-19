@@ -126,10 +126,16 @@ final_model_base <- file.path(project_root, "outputs", "final_model",
                               "soc_stock_modeling", target_label)
 
 if (identical(final_run_id, "latest")) {
-  run_dirs <- list.dirs(final_model_base, recursive = FALSE, full.names = FALSE)
-  run_dirs <- run_dirs[grepl("^final_", run_dirs)]
-  if (length(run_dirs) == 0) stop("No final_* found in: ", final_model_base)
-  final_run_id <- sort(run_dirs, decreasing = TRUE)[1]
+  # By time, and only a run that FINISHED: stage 04 creates its directory
+  # before its own validations, so a failed 04 leaves a final_<timestamp> that
+  # the old name-sort would have handed to every worker.
+# latest_run_dir() lives in R/utils.R; this script deliberately loads no
+# more of the framework than it uses.
+source(file.path(project_root, "R", "utils.R"))
+  final_run_id <- latest_run_dir(
+    final_model_base, prefix = "final_",
+    require_file = file.path("comparison", "final_run_summary.rds"),
+    label = "final_run_id")
 }
 final_run_dir <- file.path(final_model_base, final_run_id)
 summary_file  <- file.path(final_run_dir, "comparison", "final_run_summary.rds")

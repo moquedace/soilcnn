@@ -82,15 +82,13 @@ final_model_base <- base("outputs", "final_model")
 tuning_base      <- base("outputs", "tuning")
 
 if (identical(final_run_id, "latest")) {
-  runs <- list.dirs(final_model_base, recursive = FALSE, full.names = FALSE)
-  runs <- runs[grepl("^final_", runs)]
-  if (length(runs) == 0L) {
-    stop("No final model run under: ", final_model_base,
-         "\nThe AOA threshold is derived from the CROSS-VALIDATED training ",
-         "data, so it needs the fold plan a run actually used.")
-  }
-  final_run_id <- sort(runs, decreasing = TRUE)[1]
-  message("final_run_id resolved to: ", final_run_id)
+  # By time, and only a FINISHED run. The AOA threshold is derived from the
+  # cross-validated training data, so it needs a run that actually completed
+  # -- an unfinished final_ directory has the fold plan and none of the rest.
+  final_run_id <- latest_run_dir(
+    final_model_base, prefix = "final_",
+    require_file = file.path("comparison", "final_run_summary.rds"),
+    label = "final_run_id")
 }
 final_run_dir <- file.path(final_model_base, final_run_id)
 
@@ -159,14 +157,12 @@ points <- readr::read_csv2(file.path(data_dir, "full_modeling_dataset_raw.csv"),
 # used, which is the plan whose error the AOA is meant to delimit.
 plan_file <- file.path(final_run_dir, "fold_plan.rds")
 if (!file.exists(plan_file)) {
-  tr <- list.dirs(tuning_base, recursive = FALSE, full.names = TRUE)
-  tr <- tr[file.exists(file.path(tr, "fold_plan.rds"))]
-  if (length(tr) == 0L) {
-    stop("No fold_plan.rds under the final model or any tuning run. The AOA ",
-         "threshold is defined by the cross-validation, and without the folds ",
-         "there is nothing to derive it from.")
-  }
-  plan_file <- file.path(sort(tr, decreasing = TRUE)[1], "fold_plan.rds")
+  # The newest tuning run that HAS a plan, by the plan's own time.
+  plan_file <- file.path(
+    tuning_base,
+    latest_run_dir(tuning_base, prefix = "soc_", require_file = "fold_plan.rds",
+                   label = "fold plan source"),
+    "fold_plan.rds")
 }
 plan <- readRDS(plan_file)
 message("Fold plan: ", plan_file)

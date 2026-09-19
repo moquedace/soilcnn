@@ -57,10 +57,18 @@ dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
 # criterion used in 99_check_pipeline.R and in 03/04/05 themselves): sorts the
 # subfolder names and takes the first in decreasing order.
 .latest_run <- function(base_dir, prefix) {
-  runs <- list.dirs(base_dir, recursive = FALSE, full.names = FALSE)
-  runs <- runs[grepl(paste0("^", prefix), runs)]
-  if (length(runs) == 0) return(NULL)
-  sort(runs, decreasing = TRUE)[1]
+  # By time and only if finished; NULL rather than a crash, because this is a
+  # check. Which file says "finished" depends on the family.
+  marker <- if (identical(prefix, "final_")) {
+    file.path("comparison", "final_run_summary.rds")
+  } else {
+    file.path("comparison", "comparison_ranked.csv")
+  }
+# latest_run_dir() lives in R/utils.R; this script deliberately loads no
+# more of the framework than it uses.
+source(file.path(project_root, "R", "utils.R"))
+  latest_run_dir(base_dir, prefix = prefix, require_file = marker,
+                 label = paste0(prefix, "run"), on_none = "null")
 }
 
 # Lin's CCC, computed exactly as in R/metrics.R (DescTools::CCC) -- just to
@@ -90,14 +98,12 @@ message("\n-- Part 1: map of the profiles by split --\n")
 # stale file that once described a different one.
 tuning_base <- file.path(project_root, "outputs", "tuning",
                          "soc_stock_modeling", target_label)
-plan_dirs <- list.dirs(tuning_base, recursive = FALSE, full.names = TRUE)
-plan_dirs <- plan_dirs[file.exists(file.path(plan_dirs, "fold_plan.rds"))]
-if (length(plan_dirs) == 0L) {
-  stop("No tuning run with a fold_plan.rds under ", tuning_base,
-       "\n  Run 03_run_tuning.R first -- the split is a plan now, not a file.",
-       call. = FALSE)
-}
-plan_dir  <- sort(plan_dirs, decreasing = TRUE)[1]
+# The newest tuning run that has a plan, by the plan's own time -- not the
+# last one alphabetically, which is what a NAMED run (soc_0_5cm_design_*)
+# turned into the day it appeared.
+plan_dir <- file.path(tuning_base, latest_run_dir(
+  tuning_base, prefix = "soc_", require_file = "fold_plan.rds",
+  label = "fold plan source"))
 fold_plan <- readRDS(file.path(plan_dir, "fold_plan.rds"))
 message("Fold plan: ", basename(plan_dir))
 print(fold_plan)

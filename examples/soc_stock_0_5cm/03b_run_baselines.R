@@ -88,15 +88,15 @@ tuning_base  <- file.path(project_root, "outputs", "tuning",
 cnn_run_id <- "latest"
 
 if (identical(cnn_run_id, "latest")) {
-  runs <- list.dirs(tuning_base, recursive = FALSE, full.names = FALSE)
-  runs <- runs[file.exists(file.path(tuning_base, runs, "fold_plan.rds"))]
-  if (length(runs) == 0L) {
-    stop("No tuning run with a fold_plan.rds under: ", tuning_base,
-         "\nRun 03_run_tuning.R first -- the baselines are measured on ITS ",
-         "folds, not on folds invented here.")
-  }
-  cnn_run_id <- sort(runs, decreasing = TRUE)[1]
-  message("cnn_run_id resolved to: ", cnn_run_id)
+  # A FINISHED run, by time. This used to accept any directory holding a
+  # fold_plan.rds and take the last one alphabetically -- which, the day a run
+  # was named rather than timestamped, was an unfinished run whose folds were
+  # real but whose CNN numbers the baselines exist to be compared against did
+  # not exist. The comparison table is what says the CNN side is there.
+  cnn_run_id <- latest_run_dir(
+    tuning_base, prefix = "soc_",
+    require_file = file.path("comparison", "comparison_ranked.csv"),
+    label = "cnn_run_id")
 }
 
 cnn_run_dir <- file.path(tuning_base, cnn_run_id)

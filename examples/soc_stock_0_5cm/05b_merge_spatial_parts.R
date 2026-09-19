@@ -38,11 +38,12 @@ final_model_base <- file.path(project_root, "outputs", "final_model",
                               "soc_stock_modeling", target_label)
 
 if (identical(final_run_id, "latest")) {
-  run_dirs <- list.dirs(final_model_base, recursive = FALSE, full.names = FALSE)
-  run_dirs <- run_dirs[grepl("^final_", run_dirs)]
-  if (length(run_dirs) == 0) stop("No final_* found in: ", final_model_base)
-  final_run_id <- sort(run_dirs, decreasing = TRUE)[1]
-  message("final_run_id: ", final_run_id)
+  # By time, and only a FINISHED run -- see 05a_run_parallel.R for why the
+  # alphabetical version handed out half-built directories.
+  final_run_id <- latest_run_dir(
+    final_model_base, prefix = "final_",
+    require_file = file.path("comparison", "final_run_summary.rds"),
+    label = "final_run_id")
 }
 
 if (identical(config_id, "auto")) {
