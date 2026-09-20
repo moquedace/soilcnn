@@ -3006,3 +3006,54 @@ arguments over 72 files. `tests/run_all.R` is the author's to run before C1.
 *Not done overnight, by decision:* the 24 example headers (self-locating
 root, local installer) — a change to the scripts the author runs every
 morning that nothing here can parse-check; it is item 1 of the roadmap.
+
+## 2026-09-20 — A suíte encontrou o teste, não o framework
+
+`tests/run_all.R`: **23/24**, 2.8 min. A única falha foi uma asserção do
+`test_fold_cache.R` escrito ontem — o framework passou inteiro.
+
+### O que falhou, e por quê
+
+`meta_rows_pair_with_the_tensor_rows` comparava com `identical()`:
+
+```r
+identical(fpv$validation$profile_id, 25:40)
+```
+
+O meta do store volta de `read_csv2()`, que adivinha `double` para uma coluna
+de números inteiros. Então o lado esquerdo é `c(25, 26, ...)` e o direito é
+`25:40` — mesmos valores, tipos de armazenamento diferentes, `identical()`
+FALSE. O que a asserção quer saber é se as **linhas** pareiam, e o tipo não
+tem nada a ver com isso.
+
+O detalhe que vale guardar: `align_points_to_meta()` já carrega um comentário
+sobre exatamente esta armadilha, e explica que ids se comparam por valor
+quando ambos os lados são números e como texto caso contrário — nunca com
+`as.character()` sobre números, porque `as.character(1e5)` é "1e+05" enquanto
+`as.character(100000L)` é "100000". O teste novo caiu na armadilha que o
+código já documentava. Corrigido por valor, e ganhou uma asserção irmã: um
+índice embaralhado tem de reordenar as linhas do meta junto.
+
+### O que a falha destapou: 12 strings que a varredura de ontem não pegou
+
+A limpeza de ontem procurava o padrão em que a linha de continuação **começa**
+com aspas. `align_points_to_meta()` tem a outra forma: a quebra cai no meio da
+frase e a continuação é texto comum. Uma varredura correta — caractere a
+caractere, com estado atravessando linhas — achou mais 12 em `dataset.R`,
+`occlusion.R`, `resample.R` e três scripts de exemplo.
+
+Nenhuma delas muda o texto impresso: todas produzem exatamente o que o escape
+produziria. São cicatriz de heredoc, custo de legibilidade e de `grep`.
+Juntadas, e o `tools/r_skeleton.py` prova mecanicamente que os seis arquivos
+têm **esqueleto de código idêntico** antes e depois — só conteúdo de string
+mudou.
+
+### A regra permanente
+
+`tools/r_lint.py` ganhou a terceira checagem, `check_multiline_string`. Foi
+escolhida pelo mesmo critério das outras duas: é um erro que já aconteceu
+aqui — 33 ocorrências em dois dias, todas minhas, todas pelo mesmo mecanismo
+(o Bash desta sessão transforma a sequência de escape em quebra real). A
+fixture do selftest já tinha uma string de duas linhas, posta lá para enganar
+o contador de delimitadores; agora ela é também o caso positivo desta regra.
+Selftest PASS, repositório limpo, e a regra dispara nos arquivos de ontem.

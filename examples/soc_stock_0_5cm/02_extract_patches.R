@@ -495,8 +495,7 @@ patch_sample <- list(
 )
 safe_save_rds(patch_sample, file.path(output_patch_dir, "patch_sample.rds"),
               compress = TRUE)
-message("
-Sample of ", length(sample_idx), " patches written for visual ",
+message("\nSample of ", length(sample_idx), " patches written for visual ",
         "inspection (", round(file.size(file.path(output_patch_dir,
         "patch_sample.rds")) / 1e6, 1), " MB)")
 

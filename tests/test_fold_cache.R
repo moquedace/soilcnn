@@ -129,10 +129,23 @@ raw_after <- as.array(store$windows$w03)
 ok["the_store_keeps_its_raw_tensor"] <-
   isTRUE(all.equal(raw_after, arr, tolerance = 1e-6, check.attributes = FALSE))
 
-# fold_points_valid() rows pair with the cached tensors, row for row
+# fold_points_valid() rows pair with the cached tensors, row for row.
+#
+# Compared as VALUES, not with identical(). The store's meta comes back from
+# read_csv2(), which guesses `double` for a column of whole numbers, so
+# identical(fpv$validation$profile_id, 25:40) is FALSE on 25 vs 25L -- a
+# storage type, not a mismatch of rows. align_points_to_meta() carries the
+# same lesson in its own comment, and this assertion walked into it anyway.
 fpv <- fold_points_valid(store, index)
 ok["meta_rows_pair_with_the_tensor_rows"] <-
-  identical(fpv$validation$profile_id, 25:40) && identical(fpv$train$profile_id, 1:24)
+  isTRUE(all.equal(as.numeric(fpv$validation$profile_id), 25:40)) &&
+  isTRUE(all.equal(as.numeric(fpv$train$profile_id), 1:24))
+# ...and the pairing is by POSITION, so a shuffled index must follow
+shuffled <- list(train = 1:24, validation = c(40L, 25:39))
+ok["a_reordered_index_reorders_the_meta_rows_with_it"] <-
+  isTRUE(all.equal(
+    as.numeric(fold_points_valid(store, shuffled)$validation$profile_id),
+    c(40, 25:39)))
 
 # ── 3. what the cache refuses ────────────────────────────────────────────────
 pts_const <- points; pts_const$pred_1[1:24] <- 7

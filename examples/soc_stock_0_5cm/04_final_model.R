@@ -383,8 +383,7 @@ tuning_plan <- readRDS(file.path(tuning_dir, "fold_plan.rds"))
 refit       <- refit_split(tuning_plan, store$meta, validation_frac = 0.15)
 index       <- refit$folds[[1]]
 
-message("
--- Final-fit split (from the tuning plan) --")
+message("\n-- Final-fit split (from the tuning plan) --")
 print(refit)
 
 fold         <- build_fold_cache(store, points, type_table, index, windows_needed)

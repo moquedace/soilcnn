@@ -5,7 +5,7 @@ it, and parse() reports just the FIRST error per file, so one bad line hides
 every other one behind it. This finds them all at once, and adds the project
 rules that are not syntax errors at all.
 
-Two checks, each chosen because it has actually happened here. A delimiter
+Three checks, each chosen because it has actually happened here. A delimiter
 balance check was written and then DELETED: three versions of it still
 miscounted against files that parse perfectly, and parse() does that job
 correctly the moment the suite runs. A lint that cries wolf on working code
@@ -18,6 +18,14 @@ gets ignored on the day it is right, and there is no credit for breadth here.
 
   native pipe         this project uses %>% always and |> never. Not a syntax
                       error; a house rule, and one that reads as correct code.
+
+  multi-line string   a literal whose quote opens on one line and closes on
+                      another. Legal R, and it prints exactly what the escape
+                      prints -- which is why 33 of them accumulated unnoticed.
+                      They are heredoc scars: the Bash used to write these
+                      files collapses a backslash-n into a real newline, so a
+                      message written that way lands with its break baked in.
+                      Unreadable, and it defeats a grep for the message text.
 
 Comments and string contents are blanked first, via tools/r_skeleton.py, so a
 brace inside a message() and a '#' inside a string cannot mislead it.
@@ -109,7 +117,40 @@ def check_native_pipe(raw, code):
     return out
 
 
-CHECKS = (check_else, check_native_pipe)
+def check_multiline_string(raw, code):
+    """Flag each line on which a string literal opens and does not close.
+
+    Scans `raw` rather than `code`: _blank() has already dissolved exactly the
+    thing being looked for. State carries across lines, so this walks the file
+    once and reports the line where each offender OPENS -- that is where the
+    fix goes.
+    """
+    out = []
+    in_str = None
+    for i, ln in enumerate(raw):
+        opened_before = in_str is not None
+        j, n = 0, len(ln)
+        while j < n:
+            c = ln[j]
+            if in_str:
+                if c == chr(92):          # backslash: skip what it escapes
+                    j += 2
+                    continue
+                if c == in_str:
+                    in_str = None
+            else:
+                if c == '#':              # a comment ends the code on this line
+                    break
+                if c in '"' + chr(39):
+                    in_str = c
+            j += 1
+        if in_str is not None and not opened_before:
+            out.append((i + 1, 'string literal spans a line break -- write '
+                               '\\n instead', ln.strip()))
+    return out
+
+
+CHECKS = (check_else, check_native_pipe, check_multiline_string)
 
 
 def lint(path):
@@ -148,7 +189,7 @@ s <- "a string with # and { and an else
       spanning two lines"
 z <- a |> head()
 '''
-SELFTEST_EXPECT = [(2, 'else'), (13, 'pipe')]
+SELFTEST_EXPECT = [(2, 'else'), (11, 'multiline'), (13, 'pipe')]
 
 
 def selftest():
@@ -156,14 +197,19 @@ def selftest():
     path = os.path.join(tempfile.mkdtemp(), 'lint_fixture.R')
     with open(path, 'w', encoding='utf-8', newline='\n') as fh:
         fh.write(SELFTEST)
-    got = [(ln, 'else' if 'else' in why else 'pipe') for ln, why, _ in lint(path)]
+    def kind(why):
+        if 'else' in why:
+            return 'else'
+        return 'multiline' if 'spans' in why else 'pipe'
+    got = [(ln, kind(why)) for ln, why, _ in lint(path)]
     ok = got == SELFTEST_EXPECT
     print('selftest: %s' % ('PASS' if ok else 'FAIL'))
     if not ok:
         print('  expected %s' % SELFTEST_EXPECT)
         print('  got      %s' % got)
         print('  line 2 is top level and must be flagged; lines 5 and 9 sit')
-        print('  inside ( and { and must NOT be; line 13 is the native pipe.')
+        print('  inside ( and { and must NOT be; line 11 opens a string that')
+        print('  closes on line 12; line 13 is the native pipe.')
     return 0 if ok else 1
 
 

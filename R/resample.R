@@ -488,14 +488,12 @@ print_block_choice <- function(chosen) {
   # argument and the column being created, and relying on dplyr to resolve that
   # the way it happens to today is a bug waiting for a dplyr release.
   pick <- as.numeric(chosen)
-  cat("
--- Block size, measured on these points --\n")
+  cat("\n-- Block size, measured on these points --\n")
   print_wide(dplyr::mutate(
     tab,
     largest_share = sprintf("%.1f%%", 100 * largest_share),
     chosen        = ifelse(block_size == pick, "  <--", "")), n = Inf)
-  cat(sprintf("
-  chosen: %g  (largest block <= %.0f%% of the points)\n",
+  cat(sprintf("\n  chosen: %g  (largest block <= %.0f%% of the points)\n",
               as.numeric(chosen), 100 * ms))
   invisible(chosen)
 }
@@ -544,8 +542,7 @@ spatial_folds <- function(meta, k = 5L, test_frac = 0, block_size = NULL,
     warning(sprintf(
       paste0("The largest block holds %.0f%% of the points, more than the ",
              "%.0f%% one fold gets at k = %d. A block cannot be split, so ",
-             "that block alone decides a fold.
-  block_size = %g gives %d ",
+             "that block alone decides a fold.\n  block_size = %g gives %d ",
              "block(s); suggest_block_size(meta, k = %d) measures what this ",
              "point set can afford."),
       100 * .share, 100 / k, k, block_size, length(unique(blk)), k),

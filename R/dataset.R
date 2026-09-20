@@ -377,8 +377,7 @@ align_points_to_meta <- function(points, meta) {
     stop("The aligned point table does not line up with the patch store: ",
          length(bad), " row(s) differ, first at position ", bad[1],
          " (points has '", out$sample_id[bad[1]], "', the store expects '",
-         meta$sample_id[bad[1]], "').
-  sample_id must identify the same ",
+         meta$sample_id[bad[1]], "').\n  sample_id must identify the same ",
          "observation in both, and it is what every fold index refers to.",
          call. = FALSE)
   }

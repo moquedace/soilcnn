@@ -175,8 +175,7 @@ spatial_occlusion <- function(model, cache, cfg, points_valid,
   if (!is.data.frame(points_valid) && is.list(points_valid) &&
       all(c("train", "validation") %in% names(points_valid))) {
     stop("`points_valid` is the whole fold_points_valid() list, not one role. ",
-         "Pass
-  fold_points_valid(store, index)[[\"", role, "\"]]",
+         "Pass\n  fold_points_valid(store, index)[[\"", role, "\"]]",
          call. = FALSE)
   }
   check_point_contract(points_valid, what = "points_valid")

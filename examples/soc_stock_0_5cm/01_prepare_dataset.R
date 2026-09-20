@@ -516,8 +516,7 @@ channel_risk <- predictor_type_table %>%
 
 flagged <- dplyr::filter(channel_risk, risk != "")
 
-message("
-── Channel risk ─────────────────────────────")
+message("\n── Channel risk ─────────────────────────────")
 if (nrow(flagged) == 0L) {
   message("  No channel flagged.")
 } else {
@@ -526,8 +525,7 @@ if (nrow(flagged) == 0L) {
   print_wide(dplyr::arrange(flagged, risk, dplyr::desc(pct_na)), n = Inf)
   n_const <- sum(flagged$risk == "constant")
   if (n_const > 0L) {
-    message("
-  WARNING: ", n_const, " constant channel(s) SURVIVED the drop ",
+    message("\n  WARNING: ", n_const, " constant channel(s) SURVIVED the drop ",
             "list: zero information here,")
     message("  but non-zero somewhere on the map. Their weights never get a ",
             "gradient, so they stay at")
@@ -545,8 +543,7 @@ if (nrow(flagged) == 0L) {
     #
     # The rule: a channel is a drop candidate when it is constant at FULL size.
     if (identical(run_profile, "dev")) {
-      message("
-  THIS IS A DEV RUN -- do NOT act on this list yet. A rare class is constant ",
+      message("\n  THIS IS A DEV RUN -- do NOT act on this list yet. A rare class is constant ",
               "at ", format(nrow(dataset_model_split), big.mark = ","),
               " points")
       message("  because the subsample missed it, not because it is constant ",
@@ -560,8 +557,7 @@ if (nrow(flagged) == 0L) {
               "or keep them deliberately.")
     }
   } else {
-    message("
-  No constant channel survived the drop list.")
+    message("\n  No constant channel survived the drop list.")
   }
 }
 
@@ -580,8 +576,7 @@ qc_table <- make_qc_table(
 )
 safe_write_csv2(qc_table, file.path(output_metadata_dir, "qc_table.csv"))
 
-message("
-QC rules: ", sum(!is.na(qc_table$na_below)), " channel(s) with an NA floor, ",
+message("\nQC rules: ", sum(!is.na(qc_table$na_below)), " channel(s) with an NA floor, ",
         sum(!is.na(qc_table$clamp_lower)), " clamped into [0, 100].")
 
 # Metadata
