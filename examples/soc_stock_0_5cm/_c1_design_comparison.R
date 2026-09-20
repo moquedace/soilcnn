@@ -476,26 +476,45 @@ safe_write_csv2(
     winner_changed = !identical(win_blk, win_knn_as_blk)),
   file.path(report_dir, "c1_summary.csv"))
 
-message("\n-- Per config --")
+message("\n\n-- Per config --")
 print_wide(cmp, n = Inf)
 
 # ── 6. Verdict ────────────────────────────────────────────────────────────────
 
-checks <- dplyr::bind_rows(.c1_checks)
+# Sorted by id: c1_09 is MEASURED before c1_08 (separability gates how the
+# ranking may be read), and a ledger printed out of order reads like a bug.
+checks <- dplyr::arrange(dplyr::bind_rows(.c1_checks), .data$id)
 safe_write_csv2(checks, file.path(report_dir, "c1_checks.csv"))
 
 missing_checks <- setdiff(required_checks, checks$id)
 failed_checks  <- checks$id[!checks$ok]
 
-message("\n-- Checks --")
+message("\n\n-- Checks --")
 print_wide(checks, n = Inf)
 
 verdict <- length(missing_checks) == 0L && length(failed_checks) == 0L
+
+# THE BANNER SAYS WHAT THE REPORT CONCLUDED. It used to print rho against the
+# ceiling and "winner CHANGED" whatever the separability said -- so the one
+# line a reader quotes carried the claim the body had just refused. When the
+# grid is unseparated there is no ranking and no winner to report, and the
+# finding is the level.
+unseparated <- sep_blk$sep == 0L || sep_knn$sep == 0L
+headline <- if (unseparated) {
+  short <- c(need_blk, need_knn)[c(sep_blk$sep == 0L, sep_knn$sep == 0L)]
+  short <- ifelse(is.na(short), "?", as.character(short))
+  sprintf("level %+.3f | NO RANKING: %d/%d and %d/%d pair(s) separated -- needs %s seeds",
+          stats::median(cmp$delta), sep_blk$sep, sep_blk$total,
+          sep_knn$sep, sep_knn$total, paste(short, collapse = "/"))
+} else {
+  sprintf("level %+.3f | rho %+.3f (ceiling %+.3f) | winner %s",
+          stats::median(cmp$delta), rho, ceiling_rho,
+          if (identical(win_blk, win_knn_as_blk)) "unchanged" else "CHANGED")
+}
 message("\n", strrep("=", 78))
-message(sprintf("C1: %s | %d of %d checks | rho %+.3f (ceiling %+.3f) | winner %s",
+message(sprintf("C1: %s | %d of %d checks | %s",
                 if (verdict) "PASS" else "FAIL",
-                sum(checks$ok), length(required_checks), rho, ceiling_rho,
-                if (identical(win_blk, win_knn_as_blk)) "unchanged" else "CHANGED"))
+                sum(checks$ok), length(required_checks), headline))
 message(strrep("=", 78))
 
 if (length(missing_checks) > 0L) {
