@@ -115,7 +115,8 @@ required_checks <- c(
   "c1_05",  # the designs really are different (a guard against running one twice)
   "c1_06",  # every config has repetitions under both designs
   "c1_07",  # the noise floor is estimable under both, or the ranking is unreadable
-  "c1_08"   # the ranking's own reliability is measurable, or rho means nothing
+  "c1_08",  # the ranking's own reliability is measurable, or rho means nothing
+  "c1_09"   # at least one design separates a pair of configs, or there is no order
 )
 
 # ── 1. Read, and refuse anything that is not comparable ──────────────────────
@@ -239,6 +240,36 @@ check_that("c1_07", "the noise floor is estimable under both",
            is.finite(nf_blk$median_sd) && is.finite(nf_knn$median_sd),
            sprintf("block %.4f | kNNDM %.4f", nf_blk$median_sd, nf_knn$median_sd))
 
+# ── 2b. SEPARABILITY: does either design tell ANY two configs apart? ─────────
+#
+# This is the question the ranking silently assumes has been answered. Two
+# configs are separated when the gap between their means exceeds 2 SE of that
+# gap -- the SEs being over (fold x seed) units, which is what by_config
+# reports. It is a count, not a threshold somebody chose: 0 of 28 pairs means
+# the design produced no order at all, and a rho computed on that order is
+# reading noise whatever its value.
+separable_pairs <- function(m, se) {
+  n <- length(m)
+  tot <- 0L; sep <- 0L
+  for (i in seq_len(n - 1L)) {
+    for (j in (i + 1L):n) {
+      tot <- tot + 1L
+      if (is.finite(m[i]) && is.finite(m[j]) && is.finite(se[i]) && is.finite(se[j])) {
+        if (abs(m[i] - m[j]) > 2 * sqrt(se[i]^2 + se[j]^2)) sep <- sep + 1L
+      }
+    }
+  }
+  list(sep = sep, total = tot)
+}
+
+sep_blk <- separable_pairs(cmp[[paste0("blk_", mean_col)]], cmp[[paste0("blk_", se_col)]])
+sep_knn <- separable_pairs(cmp[[paste0("knn_", mean_col)]], cmp[[paste0("knn_", se_col)]])
+
+check_that("c1_09", "at least one design separates a pair of configs",
+           sep_blk$sep > 0L || sep_knn$sep > 0L,
+           sprintf("block %d/%d | kNNDM %d/%d pair(s) apart at 2 SE",
+                   sep_blk$sep, sep_blk$total, sep_knn$sep, sep_knn$total))
+
 message("\n-- The level: how far the number moves --")
 message(sprintf("  block  %s: %.4f (best) .. %.4f (worst)", c1_metric,
                 max(cmp[[paste0("blk_", mean_col)]]),
@@ -307,6 +338,18 @@ rank_reliability <- function(units, label) {
   list(r1 = r1, rk = rk, pairs = length(rr))
 }
 
+# How many seeds a ranking would need to reproduce itself. Spearman-Brown run
+# backwards: from the k-seed reliability measured above to the single-seed r1,
+# then forward to the smallest k reaching `target`. This is the number that
+# decides the next science run -- more seeds, or more configs.
+seeds_for <- function(rk, k, target = 0.8) {
+  if (!is.finite(rk) || rk <= 0 || rk >= 1) return(NA_integer_)
+  r1 <- rk / (k - (k - 1) * rk)
+  if (!is.finite(r1) || r1 <= 0) return(NA_integer_)
+  need <- target * (1 - r1) / (r1 * (1 - target))
+  as.integer(ceiling(need))
+}
+
 rel_blk <- rank_reliability(blk$units, "block")
 rel_knn <- rank_reliability(knn$units, "kNNDM")
 ceiling_rho <- suppressWarnings(min(rel_blk$rk, rel_knn$rk, na.rm = TRUE))
@@ -328,12 +371,38 @@ message(sprintf("    block  : %+.3f single seed -> %+.3f at %d seeds",
 message(sprintf("    kNNDM  : %+.3f single seed -> %+.3f at %d seeds",
                 rel_knn$r1, rel_knn$rk, length(unique(knn$units$seed))))
 
-if (is.finite(ceiling_rho)) {
-  if (ceiling_rho < 0.3) {
-    message("\n  NEITHER DESIGN CAN ORDER THESE CONFIGS. The ranking barely ",
-            "reproduces when only\n  the seed changes, so the between-design ",
-            "rho is not evidence about the designs --\n  it is evidence that ",
-            "the configs are not separated. Read the LEVEL, not the order.")
+n_blk_seeds <- length(unique(blk$units$seed))
+n_knn_seeds <- length(unique(knn$units$seed))
+need_blk <- seeds_for(rel_blk$rk, n_blk_seeds)
+need_knn <- seeds_for(rel_knn$rk, n_knn_seeds)
+
+message("\n-- Separability: does either design tell two configs apart? --")
+message(sprintf("  block  : %d of %d pair(s) separated at 2 SE", sep_blk$sep, sep_blk$total))
+message(sprintf("  kNNDM  : %d of %d pair(s) separated at 2 SE", sep_knn$sep, sep_knn$total))
+message(sprintf("  seeds for a ranking that reproduces at rho 0.80: block %s | kNNDM %s",
+                ifelse(is.na(need_blk), "not estimable", as.character(need_blk)),
+                ifelse(is.na(need_knn), "not estimable", as.character(need_knn))))
+message(sprintf("  (this run used %d and %d)", n_blk_seeds, n_knn_seeds))
+
+# THE GATE IS COUNTED, NOT CHOSEN. This was `ceiling_rho < 0.3` -- a threshold
+# with nothing behind it, which a ceiling of 0.545 walked straight past while
+# 0 of 28 kNNDM pairs were actually separated. The script then reported that
+# the designs disagree, off a rho whose 5% critical value at n = 8 is 0.738.
+if (sep_blk$sep == 0L && sep_knn$sep == 0L) {
+  message("\n  NEITHER DESIGN SEPARATES ANY PAIR OF CONFIGS. There is no order ",
+          "here to compare;\n  the between-design rho is reading seed noise. ",
+          "Read the LEVEL, not the order --\n  and add seeds (see the line ",
+          "above) before asking this grid to choose anything.")
+} else if (sep_knn$sep == 0L || sep_blk$sep == 0L) {
+  message("\n  ONLY ONE DESIGN PRODUCES AN ORDER (block ", sep_blk$sep, ", kNNDM ",
+          sep_knn$sep, " separated pair(s)).\n  A rho between an order and a ",
+          "coin toss is not a statement about the designs.\n  The LEVEL below ",
+          "is the finding; the ranking needs more seeds first.")
+} else if (is.finite(ceiling_rho)) {
+  if (abs(rho) < 2 / sqrt(nrow(cmp) - 1)) {
+    message("\n  The between-design rho is within 2 SE of zero (SE ~ ",
+            sprintf("%.3f", 1 / sqrt(nrow(cmp) - 1)), " at ", nrow(cmp),
+            " configs).\n  It does not distinguish agreement from disagreement.")
   } else if (rho >= ceiling_rho - 0.05) {
     message("\n  The between-design rho is AT the ceiling: the designs agree ",
             "as closely as one\n  design agrees with itself. The choice ",
@@ -341,8 +410,8 @@ if (is.finite(ceiling_rho)) {
   } else {
     message("\n  The between-design rho is BELOW the ceiling by ",
             sprintf("%.3f", ceiling_rho - rho),
-            ". The designs disagree by more\n  than seed noise explains, ",
-            "which is a real difference in what they select for.")
+            ", and both designs do separate\n  configs. The designs select ",
+            "for different things by more than seed noise explains.")
   }
 }
 
@@ -369,10 +438,21 @@ message("  one_se under kNNDM  : ", win_knn,
 if (identical(win_blk, win_knn_as_blk)) {
   message("  THE SAME ARCHITECTURE. The design decides what you report, not ",
           "what you deploy.")
+} else if (sep_blk$sep == 0L || sep_knn$sep == 0L) {
+  # A CHANGED WINNER IS NOT A FINDING WHEN NOTHING IS SEPARATED. one_se() takes
+  # the simplest config within one SE of the best; where no pair clears 2 SE,
+  # "within one SE of the best" is most of the grid, and which config comes
+  # out is a draw. The run of 2026-09-19 changed winner with 0 of 28 kNNDM
+  # pairs apart, and the sentence below used to call that a reason to revisit
+  # every past selection.
+  message("  The winner differs, BUT one of the designs separated no pair of ",
+          "configs at 2 SE.\n  With the grid unseparated, one_se() is choosing ",
+          "among ties: this is not evidence\n  that the designs prefer ",
+          "different architectures. Add seeds, then ask again.")
 } else {
-  message("  A DIFFERENT ARCHITECTURE. The block design has been selecting for ",
-          "a job the map\n  does not do, and every selection made under it is ",
-          "worth revisiting.")
+  message("  A DIFFERENT ARCHITECTURE, and both designs do separate configs. ",
+          "The block design\n  has been selecting for a job the map does not ",
+          "do, and every selection made\n  under it is worth revisiting.")
 }
 
 # ── 5. Report ─────────────────────────────────────────────────────────────────
@@ -388,6 +468,9 @@ safe_write_csv2(
     rho_ceiling_block = rel_blk$rk, rho_ceiling_knndm = rel_knn$rk,
     rho_ceiling = ceiling_rho,
     max_rank_move = max(abs(cmp$rank_blk - cmp$rank_knn)),
+    sep_pairs_block = sep_blk$sep, sep_pairs_knndm = sep_knn$sep,
+    n_pairs = sep_blk$total,
+    seeds_for_rho80_block = need_blk, seeds_for_rho80_knndm = need_knn,
     noise_floor_block = nf_blk$median_sd, noise_floor_knndm = nf_knn$median_sd,
     winner_block = win_blk, winner_knndm_in_block_ids = win_knn_as_blk,
     winner_changed = !identical(win_blk, win_knn_as_blk)),

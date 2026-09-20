@@ -3057,3 +3057,71 @@ aqui — 33 ocorrências em dois dias, todas minhas, todas pelo mesmo mecanismo
 fixture do selftest já tinha uma string de duas linhas, posta lá para enganar
 o contador de delimitadores; agora ela é também o caso positivo desta regra.
 Selftest PASS, repositório limpo, e a regra dispara nos arquivos de ontem.
+
+## 2026-09-20 — C1: o preço do design é 0,19 CCC, e a grade não escolhe nada
+
+Os dois runs (`soc_0_5cm_design_spatial`, `soc_0_5cm_design_knndm`, 8 configs ×
+3 folds × 3 seeds cada) terminaram e o `_c1_design_comparison.R` rodou em
+2026-09-19 05:53. Os oito checks de comparabilidade passaram: mesmos configs
+casados por hiperparâmetro, mesmos seeds, mesmo test set congelado, e os
+designs de fato diferentes.
+
+### O que ele mediu, e que é sólido
+
+O nível cai **0,19 CCC** na mediana. Todos os 8 configs caem, de −0,117 a
+−0,228; o melhor sob blocos é 0,480 e o melhor sob kNNDM é 0,322. Isso
+confirma, por um caminho independente, o que o B1 mostrou em distância: as
+folds em bloco validam um trabalho muito mais fácil do que o mapa faz.
+
+O SE por config **triplica** sob kNNDM — 0,042 contra 0,013 — o que também faz
+sentido, já que cada fold kNNDM é uma região diferente do globo.
+
+### O que ele reportou e que os dados não sustentam
+
+O script imprimiu "os designs discordam por mais do que o ruído de seed
+explica" e `winner_changed = TRUE` (cfg_003 → cfg_002), a partir de um rho de
+Spearman de −0,43 contra um teto de 0,545.
+
+Com 8 configs esse rho tem SE ≈ 1/√7 = 0,378 e p bicaudal ≈ 0,29; o valor
+crítico a 5% é 0,738. Mas o argumento decisivo é mais simples: **0 de 28 pares
+de configs estão separados por 2 SE sob kNNDM**, e 3 de 28 sob blocos. Um
+design que não separa nenhum par não produziu ordem alguma, e um rho calculado
+sobre essa ordem está lendo ruído — qualquer que seja o valor.
+
+O portão que deveria ter pegado isso era `ceiling_rho < 0.3`. É um limiar sem
+derivação nenhuma por trás, e um teto de 0,545 passou direto por ele.
+
+### O que mudou no script
+
+- **`c1_09`**, novo check obrigatório: pelo menos um design separa um par de
+  configs. Contagem, não limiar.
+- O portão do veredicto passou a ser a contagem de pares separados. Quando
+  nenhum design separa nada, a mensagem manda ler o **nível**, não a ordem;
+  quando só um separa, diz que um rho entre uma ordem e um sorteio não é uma
+  afirmação sobre os designs.
+- O ramo do vencedor ganhou a mesma qualificação: com a grade não separada,
+  `one_se()` escolhe entre empates, e trocar de vencedor não é motivo para
+  revisitar seleção nenhuma. A mensagem anterior dizia exatamente isso.
+- Quando os dois designs separam, o rho ainda é comparado ao teto — mas antes
+  passa por `|rho| < 2/√(n−1)`, porque um rho dentro de 2 SE de zero não
+  distingue concordância de discordância.
+- **`seeds_for()`**: Spearman-Brown ao contrário, do teto medido para o número
+  de seeds que um ranking precisaria para se reproduzir a rho 0,80. Sai no
+  console e no `c1_summary.csv`.
+
+### O número que decide a corrida científica
+
+| design | rho com 3 seeds | seeds para rho 0,80 |
+|---|---|---|
+| blocos | 0,678 | **6** |
+| kNNDM | 0,545 | **11** |
+
+**Mais seeds, não mais configs.** Subir `tune_length` de 8 para 24 a 3 seeds
+não compra nada enquanto o ranking não se reproduz contra si mesmo. O custo
+vai como configs × folds × seeds: 8 × 3 × 11 = 264 unidades sob kNNDM, contra
+as 72 que acabaram de rodar.
+
+*Alternativa considerada e descartada:* manter o portão em rho e apenas
+afrouxar o limiar (0,5 em vez de 0,3). Rejeitada pelo mesmo motivo que fez o
+0,3 falhar — o número continuaria escolhido a dedo, enquanto "a grade separa
+alguma coisa?" é medível direto.

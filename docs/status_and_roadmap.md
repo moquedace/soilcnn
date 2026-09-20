@@ -66,6 +66,9 @@ a banner. The 250 m map has not been produced.
 | selection optimism | +0.0000 (cfg_003 ranks first on validation and on test) | `score_test_grid()` |
 | the two-config branch works and the frozen record survives it | B2: 13/13, original `selection.rds` byte-identical | `_b2_two_config_check.R` |
 | on the test set, cfg_002 beats the deployed cfg_003 | paired ΔCCC −0.029, t = −2.80 (df 2), all three seeds agree — **and this number may not be acted on**; it was computed after the freeze | B2 output |
+| the validation design costs 0.19 CCC of the reported number | the same 8 configs score 0.480 (best, block folds) and 0.322 (best, kNNDM); all 8 drop, by −0.117 to −0.228 | C1 output |
+| under kNNDM the per-config uncertainty triples | mean SE 0.042 against 0.013; **0 of 28 config pairs separated at 2 SE** (blocks: 3 of 28) | C1 output |
+| neither design can order this grid | ranking reliability 0.678 (block) and 0.545 (kNNDM) over 3 seeds — a ranking that does not reproduce against itself. Spearman-Brown: **6 seeds** (block), **11** (kNNDM) for rho 0.80 | C1 output |
 
 ### Capability tests (docs/test_plan.md)
 
@@ -78,7 +81,7 @@ a banner. The 250 m map has not been produced.
 | B4 2×2 shards + merge | done, mosaic equals the 1×1 map to 1e-4 t/ha |
 | B5 06 and 99b | done — 06 is what exposed the −24% bias |
 | B6 resume after a real interruption | script ready (`_b6_resume_check.R`), not run |
-| C1 the same grid under two validation designs | both runs **finished** (8 configs × 3 folds × 3 seeds each); `_c1_design_comparison.R` not yet run |
+| C1 the same grid under two validation designs | **done**, 9/9 — the level moves 0.19 CCC, and neither design separates the configs |
 
 ### Tooling that replaces what nobody here can run
 
@@ -97,8 +100,11 @@ runs every script himself. Three Python tools stand in:
 
 1. **Which job is the map doing?** Interpolation near profiles (block folds, 16
    km) or extrapolation across a globe with 3,728 points (kNNDM, 837 km)?
-   C1 measures how much the answer changes; it cannot say which question is
-   the right one. That is the author's call and it decides the science run.
+   C1 has measured the price: **0.19 CCC**, on every config — and it is a
+   price on the number you report, not on the model you deploy, because
+   neither design separates the configs (0 of 28 pairs under kNNDM, 3 of 28
+   under blocks). So the choice is about what the map claims. That remains
+   the author's call; what C1 settled is the shape of the next run.
 2. **The heteroscedastic smearing factor.** A global scalar over-corrects low
    predictions and under-corrects high ones, and high predictions carry 60% of
    the stock. Fixing it needs a calibration set produced by the *deployed*
@@ -118,11 +124,14 @@ found. Ordered by what a new user or a wrong result would hit first.)*
 
 ### Next, in this order
 
-1. **Run C1** (seconds) on the two finished design runs. Then decide question
-   1 above. Everything about the science run depends on it.
+1. ~~Run C1~~ — **done**, see section 1. What it leaves open is question 1:
+   which job the map claims to do. That is a decision, not a measurement.
 2. **B3 and B6** (~1 h and one deliberate interruption). They close tier B.
-3. **The science run** at the design C1 argues for — or both, if the ranking
-   ceiling C1 reports says the extra configs would buy nothing.
+3. **The science run**, whose shape C1 settled: **more seeds, not more
+   configs.** 8 configs at 6 seeds (block) or 11 (kNNDM) — not 24 configs at
+   3, which would buy nothing a grid of 8 already fails to resolve. Cost goes
+   as configs × folds × seeds: 8 × 3 × 11 = 264 units under kNNDM, against
+   the 72 just run. Decide the design first.
 4. **The 250 m map**, once a final model exists that was selected for the job
    the map does.
 
