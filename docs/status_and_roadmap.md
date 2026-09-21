@@ -93,7 +93,7 @@ runs every script himself. Three Python tools stand in:
 |---|---|
 | `tools/r_skeleton.py` | an edit touched only comments and string contents (code skeleton byte-identical) — used to clear two translation sweeps over 14 files |
 | `tools/r_calls.py` | every project function a script calls exists, including `do.call` targets; named arguments match formals |
-| `tools/r_lint.py` | the two R mistakes that have actually cost a round trip here: a top-level `else`, and the native pipe. Has a `--selftest`, because it once reported "0 findings" while broken |
+| `tools/r_lint.py` | the three R mistakes that have actually cost a round trip here: a top-level `else`, the native pipe, and a string literal spanning a line break (33 of those in two days, all from heredocs). Has a `--selftest`, because it once reported "0 findings" while broken |
 
 `tests/test_sources_parse.R` remains the authority on syntax; it runs first.
 
