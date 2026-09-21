@@ -62,7 +62,8 @@ a banner. The 250 m map has not been produced.
 | Duan's independence assumption is violated here | S runs **1.79 → 1.15** across prediction quintiles; the two obvious repairs were measured and both make the held-out bias *worse* (−5.8%, −3.9%) | `smearing.R` header |
 | the smearing target is bracketed, not pinned | deployed-ensemble S is 1.259 on the refit fold and 1.389 on the test set | `reference_performance.md` |
 | the block folds validate a far easier job than the map does | validation-to-train median **15.7 km** vs prediction-to-train **824 km** (52×); kNNDM folds land at 837 km; W1 128 km vs 1,048 km | `_b1_knndm_folds.R` output |
-| training is deterministic across processes | seed 7 of cfg_003: CCC 0.480181867591615 in three separate runs | B2 output vs 04 output |
+| training is deterministic across processes | seed 7 of cfg_003: CCC 0.480181867591615 in three separate runs — exactly, between interactive sessions; a unit trained in an `Rscript` subprocess differs at 1.2e-4 CCC (0.15% of the seed spread), cause not measured | B2, 04, B6 output |
+| a run whose process is KILLED mid-unit resumes into the same numbers | finished units untouched (mtime drift 0 s, comparison rows byte-identical), no orphan checkpoint, worst outcome column at 0.2% of the control's own seed spread | `_b6_resume_check.R` |
 | selection optimism | +0.0000 (cfg_003 ranks first on validation and on test) | `score_test_grid()` |
 | the two-config branch works and the frozen record survives it | B2: 13/13, original `selection.rds` byte-identical | `_b2_two_config_check.R` |
 | on the test set, cfg_002 beats the deployed cfg_003 | paired ΔCCC −0.029, t = −2.80 (df 2), all three seeds agree — **and this number may not be acted on**; it was computed after the freeze | B2 output |
@@ -80,7 +81,7 @@ a banner. The 250 m map has not been produced.
 | B3 D4 augmentation on/off | script ready (`_b3_augmentation.R`), not run |
 | B4 2×2 shards + merge | done, mosaic equals the 1×1 map to 1e-4 t/ha |
 | B5 06 and 99b | done — 06 is what exposed the −24% bias |
-| B6 resume after a real interruption | script ready (`_b6_resume_check.R`), not run |
+| B6 resume after a real interruption | **done**, 15/15 — process killed mid-unit; the resumed run matches the control to 0.2% of the seed spread |
 | C1 the same grid under two validation designs | **done**, 9/9 — the level moves 0.19 CCC, and neither design separates the configs |
 
 ### Tooling that replaces what nobody here can run
@@ -126,7 +127,7 @@ found. Ordered by what a new user or a wrong result would hit first.)*
 
 1. ~~Run C1~~ — **done**, see section 1. What it leaves open is question 1:
    which job the map claims to do. That is a decision, not a measurement.
-2. **B3 and B6** (~1 h and one deliberate interruption). They close tier B.
+2. **B3** (~1 h) — the last open item of tier B. B6 is done.
 3. **The science run**, whose shape C1 settled: **more seeds, not more
    configs.** 8 configs at 6 seeds (block) or 11 (kNNDM) — not 24 configs at
    3, which would buy nothing a grid of 8 already fails to resolve. Cost goes

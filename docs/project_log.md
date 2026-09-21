@@ -3125,3 +3125,79 @@ as 72 que acabaram de rodar.
 afrouxar o limiar (0,5 em vez de 0,3). Rejeitada pelo mesmo motivo que fez o
 0,3 falhar — o número continuaria escolhido a dedo, enquanto "a grade separa
 alguma coisa?" é medível direto.
+
+## 2026-09-21 — B6: PASS 15/15, com a interrupção executada e não pedida
+
+A primeira tentativa (ontem) falhou pelo motivo certo: o run que devia ser
+interrompido rodou inteiro porque ninguém apertou Esc dentro da janela de 55 s,
+e o script **detectou isso e se recusou a seguir** em vez de reportar um resume
+que não houve. Custou 6 min de CPU e não produziu nada.
+
+A correção: a fase `worker` roda este mesmo arquivo num subprocesso, e o pai o
+mata. O momento não é cronometrado — o pai lê o diretório do run e mata no
+instante em que o número-alvo de unidades está no disco:
+
+```
+  0.0 min | 0 de 12    0.9 min | 2 de 12    1.6 min | 4 de 12 -> kill
+```
+
+Matar o processo é uma interrupção **mais dura** que o Esc, não mais branda: o
+Esc desenrola a pilha do R e o torch pode transformá-lo num erro comum que o
+runner registra como unidade falha; um processo morto não registra nada, que é
+o que uma queda de energia faz.
+
+### O que o B6 mediu
+
+15 checks, todos PASS. Os que carregam mais peso:
+
+- **B6-2 / B6-3**: os 4 checkpoints reaproveitados não foram tocados (mtime e
+  tamanho, drift 0 s) e suas 4 linhas de comparison são byte-idênticas.
+- **B6-5**: **0 checkpoints órfãos**, apesar de o processo ter morrido no meio
+  de uma unidade. Nada de `.pt` truncado com nome que alguém leria.
+- **B6-10**: 29 colunas de identidade idênticas ao run de controle.
+- **B6-11**: os resultados ficam dentro do spread de seed do próprio controle,
+  com folga de três ordens de grandeza — pior coluna `val_bias_pct` a
+  **0,00224** do spread.
+- **B6-13/14**: um plano de folds alterado é recusado tanto por
+  `check_plan_unchanged()` quanto por `dsm_train()` antes de treinar qualquer
+  coisa, e o `fold_plan.rds` em cache fica intacto.
+- **B6-15**: `cfg_001` relabelado com outros hiperparâmetros tem suas 2
+  unidades em cache descartadas e refeitas. O id é rótulo; a configuração é a
+  identidade.
+
+### Uma observação que não é um defeito, e uma hipótese que não foi medida
+
+A tabela de B6-11 separa as unidades reaproveitadas das retreinadas, e as duas
+se comportam de modo diferente contra o controle:
+
+| | diferença do controle |
+|---|---|
+| retreinadas (processo R interativo) | **0, exato** |
+| reaproveitadas (worker via `Rscript`) | 1,2e-4 em `val_ccc` |
+
+O projeto já tinha registrado determinismo entre processos (seed 7, CCC
+0,480181867591615 em três runs). Isso continua valendo entre sessões
+interativas — as 8 unidades retreinadas bateram exatamente. O que apareceu
+agora é que a unidade treinada num **subprocesso lançado por `Rscript`** difere
+na quinta casa.
+
+Hipótese, **não medida**: ambos pedem `setup_torch_device(n_threads = 30)`, mas
+o worker herda `OMP_NUM_THREADS=30` do pai *antes de o R arrancar*, enquanto o
+processo interativo chama `Sys.setenv()` depois que o `load_all.R` já carregou
+o torch. O OpenMP costuma ler essa variável na primeira região paralela, de
+modo que os dois podem estar rodando com pools de tamanho diferente, e a ordem
+de redução em ponto flutuante muda com isso.
+
+Se for isso, tem uma consequência prática que vale medir um dia: o
+`setup_torch_device()` chamado depois do torch carregar pode não estar
+entregando o número de threads que diz entregar. Não afeta nenhum resultado
+deste projeto — 1,2e-4 contra um ruído de seed de 0,081 é 0,15% — mas afeta a
+leitura de "training is deterministic across processes", que agora é: entre
+sessões interativas, sim, exatamente; contra um subprocesso, dentro de 1e-4.
+
+*Alternativa considerada e descartada:* manter só o caminho manual e pedir de
+novo o Esc. Rejeitada porque cada tentativa custa o control run mais o run
+interrompido, e a taxa de acerto depende de o usuário estar olhando para a
+tela no minuto certo. O caminho manual continua disponível em
+`soc_b6_interrupt = "manual"`, porque o Esc exercita um modo de falha
+genuinamente diferente — o erro que o runner registra e do qual continua.

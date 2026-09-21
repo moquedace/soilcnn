@@ -100,10 +100,16 @@ printed rather than asserted.
 
 ---
 
-> **Status (2026-09-19):** tier A done; B1, B2, B4, B5 done, B3 and B6 have
-> their scripts ready and have not run; C1 has both runs finished and its
-> comparison script not yet run. The table with results is in
+> **Status (2026-09-21):** tier A done; B1, B2, B4, B5, B6 done; **B3 is the
+> only open item of tier B**. C1 done, 9/9. The table with results is in
 > `status_and_roadmap.md` §1.
+>
+> B6 no longer asks the user to press Esc: phase 1 launches the run in a
+> subprocess and kills it once the target unit count is on disk. Killing the
+> process is a harder interruption than Esc — nothing gets the chance to
+> record the failure — and it does not depend on anyone watching the screen.
+> `soc_b6_interrupt = "manual"` still reaches the Esc path, which exercises a
+> different failure mode.
 
 ## Tier B — real risk, real cost
 
