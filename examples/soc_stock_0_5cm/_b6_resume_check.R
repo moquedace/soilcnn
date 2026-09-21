@@ -111,7 +111,13 @@ b6_script <- file.path(
 # An explicit phase costs one line of typing and makes every wrong order
 # produce a message that names the mistake.
 b6_phase <- tolower(trimws(Sys.getenv("soc_b6_phase", "")))
-if (!b6_phase %in% c("prepare", "verify")) {
+
+# "worker" is not for a human to type. Phase 1 launches this same file in a
+# subprocess under that phase, and kills it partway: that IS the interruption.
+# It is a phase rather than a separate script so that the interrupted run is
+# built by exactly the code that builds the control run -- a second file would
+# be a second chance for them to drift apart.
+if (!b6_phase %in% c("prepare", "verify", "worker")) {
   stop(
     "B6 is a TWO-PHASE check and the phase has to be chosen explicitly.\n",
     "soc_b6_phase is ", if (nzchar(b6_phase)) paste0("'", b6_phase, "'")
@@ -123,8 +129,11 @@ if (!b6_phase %in% c("prepare", "verify")) {
     "                     phase 1 starts, and it will refuse if you have not):\n",
     "    Sys.setenv(soc_b6_phase = \"verify\")\n",
     "    source(\"", b6_script, "\")\n\n",
-    "A genuine interruption cannot be scripted from inside the thing being\n",
-    "interrupted, which is why this is not one command.", call. = FALSE)
+    "A genuine interruption cannot be scripted from INSIDE the thing being\n",
+    "interrupted, which is why this is not one command. Phase 1 does script it\n",
+    "from outside, by killing a subprocess -- but the two phases stay separate,\n",
+    "because phase 2 has to reconstruct the experiment in a fresh session.",
+    call. = FALSE)
 }
 
 project_root <- "D:/usuario_armazenamento/cassio/R/deep_learning_caret"
@@ -537,6 +546,22 @@ b6_train <- function(run_id, resampling = plan) {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
+# THE WORKER -- phase 1 launches this file under this phase, and kills it
+#
+# Nothing else runs here: no control run, no banner, no ledger. It exists so
+# that the interrupted run is produced by the same b6_train() that produced the
+# control run, in a process the parent is free to kill at a moment of its
+# choosing. A second script would be a second chance for the two to drift.
+# ══════════════════════════════════════════════════════════════════════════════
+
+if (identical(b6_phase, "worker")) {
+  message("B6 worker: training into ", b6_resume_run_id,
+          " -- the parent kills this process partway, on purpose.")
+  invisible(b6_train(b6_resume_run_id))
+  message("B6 worker: reached the end WITHOUT being killed.")
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
 # PHASE 1 -- prepare
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -708,28 +733,126 @@ if (identical(b6_phase, "prepare")) {
   suggest_units <- max(1L, as.integer(floor(n_expected / 3)))
   suggest_min   <- per_unit_min * suggest_units
 
-  message("\n", strrep("=", 78))
-  message("PHASE 1, STEP 2 OF 2 -- THIS IS THE RUN YOU INTERRUPT.")
-  message(strrep("-", 78))
-  message(sprintf("  Let it run about %.1f minute(s) -- until roughly %d of the %d",
-                  suggest_min, suggest_units, n_expected))
-  message("  unit headers have gone by -- and then INTERRUPT IT:")
-  message("")
-  message("      RStudio : press Esc")
-  message("      Rterm   : press Ctrl-C")
-  message("")
-  message("  Press it again if the run does not stop within a few seconds:")
-  message("  torch can surface an interrupt as an error, which the runner ")
-  message("  records as a failed unit and carries on. Either way is fine -- ")
-  message("  phase 2 handles a failed unit and a missing one the same way.")
-  message("")
-  message("  Do NOT delete anything. Then run, here or in a fresh R session:")
-  message("")
-  message("      Sys.setenv(soc_b6_phase = \"verify\")")
-  message("      source(\"", b6_script, "\")")
-  message(strrep("=", 78))
+  # WHICH KIND OF INTERRUPTION. Automatic by default: this file is launched in
+  # a subprocess and killed once `suggest_units` units are on disk. "manual"
+  # keeps the original path, where the user presses Esc -- a different failure
+  # mode worth being able to reach, because Esc unwinds the stack and torch can
+  # surface it as an ordinary error that the runner records as a failed unit,
+  # while a killed process cannot record anything. Phase 2 accepts both.
+  b6_interrupt <- tolower(env_chr("soc_b6_interrupt", "auto"))
+  if (!b6_interrupt %in% c("auto", "manual")) {
+    stop("soc_b6_interrupt must be \"auto\" or \"manual\", got '", b6_interrupt,
+         "'.", call. = FALSE)
+  }
+  if (identical(b6_interrupt, "auto") && !requireNamespace("processx", quietly = TRUE)) {
+    message("\nprocessx is not installed, so the interruption cannot be ",
+            "scripted. Falling back\nto the manual path.")
+    b6_interrupt <- "manual"
+  }
 
-  invisible(b6_train(b6_resume_run_id))
+  if (identical(b6_interrupt, "manual")) {
+    message("\n", strrep("=", 78))
+    message("PHASE 1, STEP 2 OF 2 -- THIS IS THE RUN YOU INTERRUPT.")
+    message(strrep("-", 78))
+    message(sprintf("  Let it run about %.1f minute(s) -- until roughly %d of the %d",
+                    suggest_min, suggest_units, n_expected))
+    message("  unit headers have gone by -- and then INTERRUPT IT:")
+    message("")
+    message("      RStudio : press Esc")
+    message("      Rterm   : press Ctrl-C")
+    message("")
+    message("  Press it again if the run does not stop within a few seconds:")
+    message("  torch can surface an interrupt as an error, which the runner ")
+    message("  records as a failed unit and carries on. Either way is fine -- ")
+    message("  phase 2 handles a failed unit and a missing one the same way.")
+    message("")
+    message("  Do NOT delete anything. Then run, here or in a fresh R session:")
+    message("")
+    message("      Sys.setenv(soc_b6_phase = \"verify\")")
+    message("      source(\"", b6_script, "\")")
+    message(strrep("=", 78))
+
+    invisible(b6_train(b6_resume_run_id))
+
+  } else {
+    # ── The interruption, performed from outside ───────────────────────────
+    #
+    # THE MOMENT IS WATCHED, NOT TIMED. Sleeping for `suggest_min` minutes and
+    # then killing would be a bet on the subprocess loading packages, the store
+    # and the fold cache at the speed this machine did it last time. The run
+    # directory says what actually happened, so the watcher polls it and kills
+    # the instant the target is reached -- mid-unit, which is the point.
+    rscript <- file.path(R.home("bin"), "Rscript.exe")
+    if (!file.exists(rscript)) rscript <- file.path(R.home("bin"), "Rscript")
+    if (!file.exists(rscript)) {
+      stop("Rscript not found under ", R.home("bin"),
+           "; re-run with Sys.setenv(soc_b6_interrupt = \"manual\").",
+           call. = FALSE)
+    }
+    # Beside the run, not inside it: an unlink() of the run to start over must
+    # not take the log that explains why starting over was needed.
+    worker_log <- file.path(dirname(resume_run_dir), "b6_worker.log")
+    dir.create(dirname(worker_log), recursive = TRUE, showWarnings = FALSE)
+
+    message("\n", strrep("=", 78))
+    message("PHASE 1, STEP 2 OF 2 -- THE RUN THAT GETS INTERRUPTED.")
+    message(strrep("-", 78))
+    message(sprintf("  Launched in a subprocess. It will be KILLED as soon as %d of the",
+                    suggest_units))
+    message(sprintf("  %d units are on disk -- around %.1f minute(s), but measured, not timed.",
+                    n_expected, suggest_min))
+    message("  Nothing to press. Killing the process is a harder interruption than")
+    message("  Esc: it is what a power cut does.")
+    message("")
+    message("  Worker log: ", worker_log)
+    message(strrep("=", 78))
+
+    p <- processx::process$new(
+      rscript, args = b6_script,
+      env = c("current", soc_b6_phase = "worker"),
+      stdout = worker_log, stderr = worker_log, cleanup = TRUE)
+    message("  worker PID ", p$get_pid(), " -- watching ", basename(resume_run_dir))
+
+    t0_watch  <- Sys.time()
+    # Generous: the worker has to load packages, the store and the first fold
+    # cache before any unit finishes. Ten times the control's own per-unit cost
+    # for the units wanted, floored at 5 minutes.
+    watch_cap <- max(5, 10 * suggest_min)
+    n_seen    <- -1L
+    killed    <- FALSE
+    repeat {
+      if (!p$is_alive()) break
+      n_now <- length(b6_done_units(resume_run_dir))
+      if (n_now != n_seen) {
+        message(sprintf("    %5.1f min | %d of %d unit(s) finished",
+                        as.numeric(difftime(Sys.time(), t0_watch, units = "mins")),
+                        n_now, n_expected))
+        n_seen <- n_now
+      }
+      if (n_now >= suggest_units) {
+        message("  target reached -- killing the worker MID-UNIT now.")
+        p$kill()
+        killed <- TRUE
+        break
+      }
+      if (as.numeric(difftime(Sys.time(), t0_watch, units = "mins")) > watch_cap) {
+        p$kill()
+        stop("The worker ran ", round(watch_cap, 1), " minute(s) without ",
+             "finishing ", suggest_units, " unit(s), and was killed.\n  Read ",
+             worker_log, " -- it failed before training, or this machine is ",
+             "far slower than the control run suggested.", call. = FALSE)
+      }
+      Sys.sleep(2)
+    }
+    if (!killed) {
+      message("\n  The worker exited on its own (status ", p$get_exit_status(),
+              ") before the target was reached.")
+      message("  Its log is at ", worker_log)
+    }
+    # The kill is asynchronous; give the OS a moment before counting files.
+    p$wait(timeout = 10000)
+    Sys.sleep(1)
+  }
 
   # ── Reaching this line means the call RETURNED rather than being killed ─────
   #
@@ -744,14 +867,26 @@ if (identical(b6_phase, "prepare")) {
   # performed.
   n_done_now <- length(b6_done_units(resume_run_dir))
   message("\n", strrep("=", 78))
-  if (n_done_now >= n_expected) {
+  if (n_done_now == 0L) {
+    message("THE RUN WAS INTERRUPTED BEFORE ITS FIRST UNIT FINISHED.")
+    message(strrep("=", 78))
+    message("Phase 2 needs at least one finished unit to have anything to reuse,")
+    message("and it will refuse. Delete this run and do phase 1 again:")
+    message("")
+    message("  unlink(\"", resume_run_dir, "\", recursive = TRUE)")
+    message("  Sys.setenv(soc_b6_phase = \"prepare\")")
+    message("  source(\"", b6_script, "\")")
+    message("")
+    message("The control run is untouched and does NOT need to be redone.")
+  } else if (n_done_now >= n_expected) {
     message("THIS RUN FINISHED WITHOUT BEING INTERRUPTED.")
     message(strrep("=", 78))
     message("There is nothing left for phase 2 to resume, and it will refuse.")
-    message("Delete the run to be interrupted and do phase 1 again, pressing Esc")
-    message(sprintf("earlier -- around %.1f minute(s) in:", suggest_min))
+    message("Delete the run to be interrupted and do phase 1 again -- and this")
+    message("time let it interrupt itself, which is the default:")
     message("")
     message("  unlink(\"", resume_run_dir, "\", recursive = TRUE)")
+    message("  Sys.unsetenv(\"soc_b6_interrupt\")")
     message("  Sys.setenv(soc_b6_phase = \"prepare\")")
     message("  source(\"", b6_script, "\")")
     message("")
@@ -760,9 +895,8 @@ if (identical(b6_phase, "prepare")) {
     message(sprintf("THE RUN STOPPED EARLY: %d of %d units finished.",
                     n_done_now, n_expected))
     message(strrep("=", 78))
-    message("The call returned instead of being killed, which is what an ")
-    message("interrupt caught as an error looks like. Nothing is wrong, and ")
-    message("this is exactly the half-finished run phase 2 needs. Go on:")
+    message("That is exactly the half-finished run phase 2 needs: some units on ")
+    message("disk, some never started. Go on:")
     message("")
     message("      Sys.setenv(soc_b6_phase = \"verify\")")
     message("      source(\"", b6_script, "\")")
