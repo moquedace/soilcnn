@@ -3389,3 +3389,32 @@ ruído permanente — são as chaves renomeadas de português para inglês
 snapshot de referência precisa ser regravado uma vez, agora que os nomes
 estabilizaram. É uma decisão do autor porque o snapshot é a linha de base
 contra a qual tudo se compara.
+
+### O snapshot: ninguém deveria precisar apagar um arquivo para consertar a linha de base
+
+Ao explicar como limpar uma linha de base velha, apareceram dois defeitos no
+mecanismo — e a explicação em si estava errada.
+
+**O que eu disse errado:** que o snapshot de referência precisava ser regravado
+à mão. Não precisa. O `write_run_snapshot()` grava um novo a cada execução, e o
+de hoje (`snapshot_20260921_224657.csv`) já saiu com as chaves em inglês. A
+próxima rodada compara contra ele e as 12 "mudanças" desaparecem sozinhas.
+
+**Defeito 1: o snapshot anterior era escolhido por NOME.**
+`sort(files, decreasing = TRUE)` — o mesmo erro que o `latest_run_dir()`
+carregava até 2026-09-18, e aqui ele é alcançável e não teórico: o
+`write_run_snapshot()` aceita um `label`, então um snapshot gravado como
+`snapshot_baseline.csv` ordena acima de qualquer `20260921_224657` e vira a
+referência permanente. Agora é por tempo.
+
+**Defeito 2, o sério: um run com FAIL virava a linha de base.** O
+`write_run_snapshot()` rodava incondicionalmente, antes do resumo e antes do
+`stop()`. Então um run quebrado gravava a referência contra a qual o run
+seguinte se compara — e o seguinte reportava "nada mudou", porque estava
+comparando um estado ruim com o mesmo estado ruim. O momento em que um número
+deslocado mais importa era exatamente o momento em que o mecanismo ficava cego
+para ele.
+
+Com isso corrigido, a linha de base nunca precisa ser apagada: ela avança
+apenas em runs que passaram, e um run que falhou deixa a última referência boa
+de pé. O script diz isso quando acontece.

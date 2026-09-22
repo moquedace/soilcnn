@@ -243,8 +243,16 @@ write_run_snapshot <- function(values, dir, label = NULL) {
 #'   every key with old value, new value and a status: `=`, `changed`, `new`,
 #'   `gone`.
 compare_run_snapshot <- function(values, dir, exclude = character(0)) {
-  prev_files <- sort(list.files(dir, pattern = "^snapshot_.*\\.csv$",
-                                full.names = TRUE), decreasing = TRUE)
+  # BY TIME, NOT BY NAME. This was sort(..., decreasing = TRUE) -- the same
+  # mistake latest_run_dir() carried until it picked an unfinished run, and
+  # here it is reachable rather than theoretical: write_run_snapshot() takes a
+  # `label`, so one snapshot written as "baseline" sorts above every
+  # "20260921_224657" and becomes the previous run for ever after.
+  prev_files <- list.files(dir, pattern = "^snapshot_.*\\.csv$",
+                           full.names = TRUE)
+  if (length(prev_files) > 1L) {
+    prev_files <- prev_files[order(file.info(prev_files)$mtime, decreasing = TRUE)]
+  }
   now <- tibble::tibble(
     key = names(values),
     new = unname(vapply(values, function(z) as.character(z[1]), character(1)))

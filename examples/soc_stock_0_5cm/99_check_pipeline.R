@@ -1096,7 +1096,23 @@ snap_dir <- file.path(project_root, "outputs", "qc", "snapshots")
 cmp <- compare_run_snapshot(snap_vals, snap_dir,
                             exclude = c("99_n_pass", "99_n_warn", "99_n_fail"))
 print_snapshot_diff(cmp)
-write_run_snapshot(snap_vals, snap_dir)
+
+# A FAILED RUN DOES NOT BECOME THE BASELINE.
+#
+# This wrote unconditionally, so a run with a FAIL became the reference the
+# NEXT run compares against -- and that next run then reported "nothing
+# changed", because it was comparing a broken state with the same broken
+# state. The moment a moved number matters most was the moment the mechanism
+# went blind to it.
+#
+# It also means the baseline never needs deleting by hand: it advances on runs
+# that passed, and a run that failed leaves the last good one standing.
+if (sum(.results$status == "FAIL") == 0L) {
+  write_run_snapshot(snap_vals, snap_dir)
+} else {
+  .say("\n  Snapshot NOT updated: this run has FAIL(s), so the last good ",
+       "reference stands.\n  Fix them and run 99 again to move the baseline.")
+}
 
 if (cmp$has_previous) {
   n_changed <- sum(cmp$diff$status != "=")
