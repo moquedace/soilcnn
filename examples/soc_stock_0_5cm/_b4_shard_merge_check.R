@@ -30,7 +30,32 @@ suppressPackageStartupMessages({
 })
 options(width = 200)
 
-project_root    <- "D:/usuario_armazenamento/cassio/R/deep_learning_caret"
+# WHERE THIS PROJECT IS, FOUND RATHER THAN REMEMBERED.
+#
+# This was a hardcoded "D:/usuario_armazenamento/...", which meant the script
+# ran on exactly one machine and had to be edited on every other. The same
+# snippet is in every tests/*.R and in R/load_all.R: it asks Rscript (--file),
+# then source() (the ofile of an enclosing frame), then the working directory,
+# and climbs until it finds the directory that holds R/load_all.R.
+project_root <- (function() {
+  cand <- character(0)
+  a <- commandArgs(trailingOnly = FALSE)
+  f <- sub("^--file=", "", a[grep("^--file=", a)])
+  if (length(f)) cand <- c(cand, dirname(normalizePath(f[1], mustWork = FALSE)))
+  for (i in seq_len(sys.nframe())) {
+    of <- sys.frame(i)$ofile
+    if (!is.null(of) && is.character(of)) {
+      cand <- c(cand, dirname(normalizePath(of, mustWork = FALSE)))
+    }
+  }
+  cand <- c(cand, getwd())
+  for (d in cand) for (up in c(".", "..", "../..", "../../..")) {
+    r <- normalizePath(file.path(d, up), winslash = "/", mustWork = FALSE)
+    if (file.exists(file.path(r, "R", "load_all.R"))) return(r)
+  }
+  stop("Project root not found. source() this script by its full path, or ",
+       "setwd() into the project first.", call. = FALSE)
+})()
 script_dir      <- file.path(project_root, "examples", "soc_stock_0_5cm")
 rscript_bin     <- file.path(R.home("bin"), "Rscript.exe")
 target_label    <- "soc_stock_0_5cm"

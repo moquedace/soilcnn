@@ -1,12 +1,35 @@
-project_root <- "D:/usuario_armazenamento/cassio/R/deep_learning_caret"
+# WHERE THIS PROJECT IS, FOUND RATHER THAN REMEMBERED.
+#
+# This was a hardcoded "D:/usuario_armazenamento/...", which meant the script
+# ran on exactly one machine and had to be edited on every other. The same
+# snippet is in every tests/*.R and in R/load_all.R: it asks Rscript (--file),
+# then source() (the ofile of an enclosing frame), then the working directory,
+# and climbs until it finds the directory that holds R/load_all.R.
+project_root <- (function() {
+  cand <- character(0)
+  a <- commandArgs(trailingOnly = FALSE)
+  f <- sub("^--file=", "", a[grep("^--file=", a)])
+  if (length(f)) cand <- c(cand, dirname(normalizePath(f[1], mustWork = FALSE)))
+  for (i in seq_len(sys.nframe())) {
+    of <- sys.frame(i)$ofile
+    if (!is.null(of) && is.character(of)) {
+      cand <- c(cand, dirname(normalizePath(of, mustWork = FALSE)))
+    }
+  }
+  cand <- c(cand, getwd())
+  for (d in cand) for (up in c(".", "..", "../..", "../../..")) {
+    r <- normalizePath(file.path(d, up), winslash = "/", mustWork = FALSE)
+    if (file.exists(file.path(r, "R", "load_all.R"))) return(r)
+  }
+  stop("Project root not found. source() this script by its full path, or ",
+       "setwd() into the project first.", call. = FALSE)
+})()
 
 # env_int() and latest_run_dir() live in R/utils.R. Loaded here, first, and
 # nothing more of the framework: this is an orchestrator, not a model.
 source(file.path(project_root, "R", "utils.R"))
 
-source(
-  "https://raw.githubusercontent.com/moquedace/funcs/refs/heads/main/utils/install_load_pkg.R"
-)
+source(file.path(project_root, "utils", "install_load_pkg.R"))
 
 pkg <- c("processx")
 install_load_pkg(pkg)

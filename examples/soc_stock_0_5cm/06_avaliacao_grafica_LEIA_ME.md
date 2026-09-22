@@ -15,7 +15,6 @@ Para escolher outro destino ou outra execução final:
 
 ```r
 gerar_graficos_cnn(
-  project_root = "D:/usuario_armazenamento/cassio/R/deep_learning_caret",
   output_dir = "D:/usuario_armazenamento/cassio/R/deep_learning_caret/outputs/avaliacao_grafica",
   final_run_id = "final_20260823_001856",
   config_id = "cfg_014"

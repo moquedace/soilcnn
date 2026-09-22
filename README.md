@@ -554,6 +554,13 @@ The [`examples/soc_stock_0_5cm/`](examples/soc_stock_0_5cm/) directory contains 
 
 ### Running it
 
+Nothing needs editing first. Every script finds the project for itself — it
+asks `Rscript --file`, then the `source()` frame, then the working directory,
+and climbs to the directory holding `R/load_all.R` — so a clone anywhere runs
+as it is, with no network access needed to start. The one thing a new user
+must set is `predictor_raster_dir` in `01_prepare_dataset.R` and
+`02_extract_patches.R`, which is where *their* rasters are.
+
 Every script is run with `source("<full path>")` from an R console, in this
 order, with `tests/run_all.R` before anything expensive:
 

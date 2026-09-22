@@ -95,9 +95,37 @@ gc()
 
 options(width = 200)
 
-b6_script <- file.path(
-  "D:/usuario_armazenamento/cassio/R/deep_learning_caret",
-  "examples", "soc_stock_0_5cm", "_b6_resume_check.R")
+# WHERE THIS PROJECT IS, FOUND RATHER THAN REMEMBERED.
+#
+# This was a hardcoded "D:/usuario_armazenamento/...", which meant the script
+# ran on exactly one machine and had to be edited on every other. The same
+# snippet is in every tests/*.R and in R/load_all.R: it asks Rscript (--file),
+# then source() (the ofile of an enclosing frame), then the working directory,
+# and climbs until it finds the directory that holds R/load_all.R.
+project_root <- (function() {
+  cand <- character(0)
+  a <- commandArgs(trailingOnly = FALSE)
+  f <- sub("^--file=", "", a[grep("^--file=", a)])
+  if (length(f)) cand <- c(cand, dirname(normalizePath(f[1], mustWork = FALSE)))
+  for (i in seq_len(sys.nframe())) {
+    of <- sys.frame(i)$ofile
+    if (!is.null(of) && is.character(of)) {
+      cand <- c(cand, dirname(normalizePath(of, mustWork = FALSE)))
+    }
+  }
+  cand <- c(cand, getwd())
+  for (d in cand) for (up in c(".", "..", "../..", "../../..")) {
+    r <- normalizePath(file.path(d, up), winslash = "/", mustWork = FALSE)
+    if (file.exists(file.path(r, "R", "load_all.R"))) return(r)
+  }
+  stop("Project root not found. source() this script by its full path, or ",
+       "setwd() into the project first.", call. = FALSE)
+})()
+
+# The path this script prints in its own instructions, so the two phases
+# can never be told to source a different file from the one running.
+b6_script <- file.path(project_root, "examples", "soc_stock_0_5cm",
+                       "_b6_resume_check.R")
 
 # ── Which phase ───────────────────────────────────────────────────────────────
 #
@@ -136,7 +164,6 @@ if (!b6_phase %in% c("prepare", "verify", "worker")) {
     call. = FALSE)
 }
 
-project_root <- "D:/usuario_armazenamento/cassio/R/deep_learning_caret"
 setwd(project_root)
 source(file.path(project_root, "R", "load_all.R"))
 

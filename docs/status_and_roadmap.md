@@ -162,38 +162,22 @@ would hit it:
 `R/load_all.R` says it: "when this becomes a package this file disappears and
 `library()` takes its place." What stands between here and that:
 
-- **The example headers.** 24 scripts hardcode
-  `project_root <- "D:/usuario_armazenamento/..."`, in at least four header
-  variants (some define it twice, two not at all, some without `rm(list =
-  ls())`). Fifteen of them fetch `install_load_pkg()` from a GitHub URL — a
-  network dependency on every run — while `utils/install_load_pkg.R` in the
-  repository is the same file. The fix is one self-locating snippet at the top
-  of each script, the one `tests/*.R` and `R/load_all.R` already use:
+- ~~**The example headers.**~~ **Done, 2026-09-21.** 26 files carried
+  `project_root <- "D:/usuario_armazenamento/..."` and 15 of them fetched
+  `install_load_pkg()` from a GitHub URL on every run — so the project ran on
+  one machine, and needed the network to start. All 26 now use the
+  self-locating snippet that `tests/*.R` and `R/load_all.R` already used, and
+  the installer comes from `utils/install_load_pkg.R` on disk. The ordering
+  problem this involved: the URL used to be sourced *before* any
+  `project_root` existed, and the `rm(list = ls())` that followed would have
+  erased one — so the snippet takes the URL's place and the wipe became
+  `rm(list = setdiff(ls(), "project_root"))`.
 
-  ```r
-  project_root <- (function() {
-    cand <- character(0)
-    a <- commandArgs(trailingOnly = FALSE)
-    f <- sub("^--file=", "", a[grep("^--file=", a)])
-    if (length(f)) cand <- c(cand, dirname(normalizePath(f[1], mustWork = FALSE)))
-    for (i in seq_len(sys.nframe())) {
-      of <- sys.frame(i)$ofile
-      if (!is.null(of) && is.character(of)) cand <- c(cand, dirname(normalizePath(of, mustWork = FALSE)))
-    }
-    cand <- c(cand, getwd())
-    for (d in cand) for (up in c(".", "..", "../..")) {
-      r <- normalizePath(file.path(d, up), winslash = "/", mustWork = FALSE)
-      if (file.exists(file.path(r, "R", "load_all.R"))) return(r)
-    }
-    stop("Project root not found; source() this script by its full path.", call. = FALSE)
-  })()
-  source(file.path(project_root, "utils", "install_load_pkg.R"))
-  ```
+  What is still absolute, deliberately: `predictor_raster_dir` in 01, 02 and
+  `_b4`. That is where the **user's data** lives, not where the code lives,
+  and no amount of self-location can find it. It is a setting and it belongs
+  in sight at the top of the script that needs it.
 
-  followed by `rm(list = setdiff(ls(), "project_root"))` where a script clears
-  its workspace. This was **not** done overnight: it is a 24-file change to the
-  scripts the author runs every morning, and nothing here can parse-check it.
-  It should be done in one pass, with `tests/run_all.R` run immediately after.
 - `DESCRIPTION`, `NAMESPACE` (roxygen), moving `examples/` to `inst/` or a
   vignette, and `setup_torch_device(n_threads = 30)` becoming a default that
   reads the machine.

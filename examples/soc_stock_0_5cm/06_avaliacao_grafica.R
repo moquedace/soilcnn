@@ -3,8 +3,40 @@
 # Console: Rscript gerar_graficos.R "PROJECT_DIR" "OUTPUT_DIR"
 # Does not train models and does not modify the source results.
 
+# WHERE THIS PROJECT IS, FOUND RATHER THAN REMEMBERED.
+#
+# Resolved HERE, while this file is being source()d, and not in the default
+# argument below: a default is evaluated when the function is CALLED, and by
+# then the source() frame -- the only thing that knows where this file is --
+# has gone.
+#
+# This was a hardcoded "D:/usuario_armazenamento/...", which meant the script
+# ran on exactly one machine and had to be edited on every other. The same
+# snippet is in every tests/*.R and in R/load_all.R: it asks Rscript (--file),
+# then source() (the ofile of an enclosing frame), then the working directory,
+# and climbs until it finds the directory that holds R/load_all.R.
+.dlc_root <- (function() {
+  cand <- character(0)
+  a <- commandArgs(trailingOnly = FALSE)
+  f <- sub("^--file=", "", a[grep("^--file=", a)])
+  if (length(f)) cand <- c(cand, dirname(normalizePath(f[1], mustWork = FALSE)))
+  for (i in seq_len(sys.nframe())) {
+    of <- sys.frame(i)$ofile
+    if (!is.null(of) && is.character(of)) {
+      cand <- c(cand, dirname(normalizePath(of, mustWork = FALSE)))
+    }
+  }
+  cand <- c(cand, getwd())
+  for (d in cand) for (up in c(".", "..", "../..", "../../..")) {
+    r <- normalizePath(file.path(d, up), winslash = "/", mustWork = FALSE)
+    if (file.exists(file.path(r, "R", "load_all.R"))) return(r)
+  }
+  stop("Project root not found. source() this script by its full path, or ",
+       "setwd() into the project first.", call. = FALSE)
+})()
+
 gerar_graficos_cnn <- function(
-  project_root = "D:/usuario_armazenamento/cassio/R/deep_learning_caret",
+  project_root = .dlc_root,
   output_dir = file.path(project_root, "outputs", "avaliacao_grafica"),
   final_run_id = "latest",
   config_id = "auto"

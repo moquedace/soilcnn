@@ -87,9 +87,33 @@
 # run it is already there.
 # ══════════════════════════════════════════════════════════════════════════════
 
-source(
-  "https://raw.githubusercontent.com/moquedace/funcs/refs/heads/main/utils/install_load_pkg.R"
-)
+# WHERE THIS PROJECT IS, FOUND RATHER THAN REMEMBERED.
+#
+# This was a hardcoded "D:/usuario_armazenamento/...", which meant the script
+# ran on exactly one machine and had to be edited on every other. The same
+# snippet is in every tests/*.R and in R/load_all.R: it asks Rscript (--file),
+# then source() (the ofile of an enclosing frame), then the working directory,
+# and climbs until it finds the directory that holds R/load_all.R.
+project_root <- (function() {
+  cand <- character(0)
+  a <- commandArgs(trailingOnly = FALSE)
+  f <- sub("^--file=", "", a[grep("^--file=", a)])
+  if (length(f)) cand <- c(cand, dirname(normalizePath(f[1], mustWork = FALSE)))
+  for (i in seq_len(sys.nframe())) {
+    of <- sys.frame(i)$ofile
+    if (!is.null(of) && is.character(of)) {
+      cand <- c(cand, dirname(normalizePath(of, mustWork = FALSE)))
+    }
+  }
+  cand <- c(cand, getwd())
+  for (d in cand) for (up in c(".", "..", "../..", "../../..")) {
+    r <- normalizePath(file.path(d, up), winslash = "/", mustWork = FALSE)
+    if (file.exists(file.path(r, "R", "load_all.R"))) return(r)
+  }
+  stop("Project root not found. source() this script by its full path, or ",
+       "setwd() into the project first.", call. = FALSE)
+})()
+source(file.path(project_root, "utils", "install_load_pkg.R"))
 
 # torch is here for ONE reason and it is not training. R/load_all.R sources
 # R/cnn_architecture.R, which calls torch::nn_module() at the top level, so the
@@ -114,12 +138,11 @@ pkg <- c(
 
 install_load_pkg(pkg)
 
-rm(list = ls())
+rm(list = setdiff(ls(), "project_root"))  # keep the root found above
 gc()
 
 options(width = 200)
 
-project_root <- "D:/usuario_armazenamento/cassio/R/deep_learning_caret"
 setwd(project_root)
 
 # One source() instead of ten, in an order that is not guessable. See

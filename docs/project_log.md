@@ -3281,3 +3281,76 @@ com `|diferença| máxima = 1,7e-6` em val_ccc. `R/train_cnn.R` e `R/metrics.R`
 mudaram depois daquele run, e mesmo assim nada se moveu. Isso confirma pelo
 terceiro caminho independente o que o B6 mediu: entre sessões interativas o
 treino é determinístico.
+
+## 2026-09-21 — Os 26 cabeçalhos: o projeto para de morar numa máquina só
+
+Item 1 do roadmap, o último que separava isto de virar pacote. Antes:
+
+- **26 arquivos** com `project_root <- "D:/usuario_armazenamento/cassio/R/deep_learning_caret"`
+  escrito na mão. Ninguém além do autor conseguia rodar o projeto sem editar
+  26 arquivos.
+- **15 deles** buscavam `install_load_pkg()` de uma URL do GitHub *a cada
+  execução* — uma dependência de rede para **começar**, num script que depois
+  trabalha inteiramente em disco local. A cópia em `utils/install_load_pkg.R`
+  é a mesma função.
+
+Agora todos usam o snippet auto-localizável que `tests/*.R` e `R/load_all.R`
+já usavam — provado em 26 arquivos antes desta passada — e o instalador vem
+do disco. Zero buscas de rede no repositório.
+
+### O que fazia disto mais que um find-and-replace
+
+A ORDEM. A URL era sourceada **antes** de qualquer `project_root` existir, e o
+`rm(list = ls())` que vinha depois apagaria um. Então o snippet toma o lugar
+da URL, e a limpeza virou `rm(list = setdiff(ls(), "project_root"))` — a mesma
+forma que o `_b1` já usava pelo seu próprio motivo, e que mantém a estrutura
+de cada script reconhecível para quem a conhece.
+
+Quatro casos não seguiam o molde:
+
+- **`05a_run_parallel.R`** já sourceava `R/utils.R` na linha 5, antes de onde
+  a URL estava. O snippet teve de ir para o topo absoluto.
+- **`_b6_resume_check.R`** monta `b6_script` — o caminho que ele imprime nas
+  próprias instruções — quarenta linhas antes de definir o root.
+- **`06_avaliacao_grafica.R`** tem o root como **argumento default** de uma
+  função. Um default é avaliado quando a função é *chamada*, e nesse momento o
+  frame do `source()` — a única coisa que sabe onde o arquivo está — já se foi.
+  Resolvido uma vez, em `.dlc_root`, durante o `source()`.
+- **`_b4`** alinhava a atribuição com espaços extras.
+
+### Dois bugs que eu introduzi, e o que os pegou
+
+Escrevi `tools/check_headers.py` antes de confiar no resultado, porque as três
+maneiras de errar aqui só apareceriam ao rodar o script: usar `project_root`
+antes de defini-lo, um `rm()` entre a definição e o uso, e chamar
+`install_load_pkg()` antes de sourcear o arquivo que a define. Tudo isso se
+responde lendo números de linha.
+
+Ele achou os dois:
+
+1. **`05a`**: o snippet caiu depois de um uso que já existia na linha 5.
+2. **`_b1`**: o `replace` trocou a primeira ocorrência da string
+   `rm(list = ls())` no arquivo — que estava **dentro de um comentário**, na
+   linha 79 — e deixou o código real, na 141, intacto. O comentário ficou
+   corrompido e o `rm` continuou apagando o root.
+
+O segundo é o erro clássico de editar código com busca textual, e é o mesmo
+que o `r_skeleton.py` existe para pegar em outro contexto. A correção usa
+âncora de início de linha (`^rm\\(list = ls\\(\\)\\)$`), que um comentário não
+pode casar. Verifiquei os outros 12 arquivos com o mesmo padrão: só o `_b1`
+tinha um comentário citando o `rm`.
+
+`tools/check_headers.py` ficou no repositório, com as outras três ferramentas.
+
+### O que continua absoluto, de propósito
+
+`predictor_raster_dir` em 01, 02 e `_b4`. Isso é onde os dados **do usuário**
+estão, não onde o código está, e nenhuma auto-localização pode descobrir. É
+uma configuração e o lugar dela é visível no topo do script que precisa dela.
+
+*Alternativa considerada e descartada:* um arquivo `examples/_root.R` único,
+sourceado pelos demais, para não repetir 20 linhas em 26 arquivos. Rejeitada
+por ser circular — para sourcear esse arquivo é preciso saber onde ele está,
+que é exatamente o problema. A duplicação é o preço de não ter um pacote
+ainda, e desaparece no dia em que `library(deep_learning_caret)` substituir
+tudo isso.
