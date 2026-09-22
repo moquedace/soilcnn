@@ -1,4 +1,4 @@
-# Status and roadmap — 2026-09-19
+# Status and roadmap — 2026-09-22
 
 Written for whoever picks this project up next, including its author after a
 week away. It says what exists, what has been measured, what is open, and in
@@ -134,16 +134,21 @@ found. Ordered by what a new user or a wrong result would hit first.)*
    3, which would buy nothing a grid of 8 already fails to resolve. Cost goes
    as configs × folds × seeds: 8 × 3 × 11 = 264 units under kNNDM, against
    the 72 just run. Decide the design first.
-4. **The 250 m map**, once a final model exists that was selected for the job
-   the map does.
+4. **The 250 m map — not blocked by (3), and this is C1's doing.** The price
+   of the design falls on the number you *report*, not on the model you
+   *deploy*: no pair of configs is separable under either design, so the
+   deployed `cfg_003` is as good as anything the grid would pick. The map can
+   be produced now, and the design decision changes its caption, not its
+   pixels. Start with `05a_test.R`, which measures RAM and throughput on a
+   few real shards — including a dense tropical one — and reports the safe
+   `max_concurrent` and the ETA before any of it is committed.
 
 ### Robustness and ease of use (the audit's list, applied)
 
 Section 3 says what was done overnight. What remains, in the order a new user
 would hit it:
 
-1. **The example headers** (below): the self-locating `project_root` and the
-   local installer. One pass, 24 files, suite immediately after.
+1. ~~The example headers~~ — **done 2026-09-21**, 26 files. See below.
 2. **`clamp` as a documented formal of `dsm_train()`.** It is the one
    argument that can silently destroy predictions and it lives in `...`.
    Additive, safe, not done overnight because it touches the signature.
