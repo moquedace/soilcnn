@@ -70,6 +70,7 @@ a banner. The 250 m map has not been produced.
 | the validation design costs 0.19 CCC of the reported number | the same 8 configs score 0.480 (best, block folds) and 0.322 (best, kNNDM); all 8 drop, by −0.117 to −0.228 | C1 output |
 | under kNNDM the per-config uncertainty triples | mean SE 0.042 against 0.013; **0 of 28 config pairs separated at 2 SE** (blocks: 3 of 28) | C1 output |
 | neither design can order this grid | ranking reliability 0.678 (block) and 0.545 (kNNDM) over 3 seeds — a ranking that does not reproduce against itself. Spearman-Brown: **6 seeds** (block), **11** (kNNDM) for rho 0.80 | C1 output |
+| D4 augmentation helps, by about as much as the whole architecture search | paired +0.0300 CCC (95% CI [+0.0014, +0.0587], 9 pairs) — against a 0.042 spread between the best and worst of 8 configs, and a 0.0533 seed spread. The document that claimed this had cited a between-rounds comparison that supported nothing | `_b3_augmentation.R` |
 
 ### Capability tests (docs/test_plan.md)
 
@@ -78,7 +79,7 @@ a banner. The 250 m map has not been produced.
 | A (8 cheap paths a second user would hit first) | done, `_capability_sweep.R` |
 | B1 kNNDM on the real points | done, 13/13 — produced the 52× finding |
 | B2 two configs in stage 04 | done, 13/13 |
-| B3 D4 augmentation on/off | script ready (`_b3_augmentation.R`), not run |
+| B3 D4 augmentation on/off | **done** — paired +0.0300 CCC, 95% CI [+0.0014, +0.0587], smaller than the 0.0533 seed spread |
 | B4 2×2 shards + merge | done, mosaic equals the 1×1 map to 1e-4 t/ha |
 | B5 06 and 99b | done — 06 is what exposed the −24% bias |
 | B6 resume after a real interruption | **done**, 15/15 — process killed mid-unit; the resumed run matches the control to 0.2% of the seed spread |
@@ -127,7 +128,7 @@ found. Ordered by what a new user or a wrong result would hit first.)*
 
 1. ~~Run C1~~ — **done**, see section 1. What it leaves open is question 1:
    which job the map claims to do. That is a decision, not a measurement.
-2. **B3** (~1 h) — the last open item of tier B. B6 is done.
+2. ~~B3~~ — **done**. **Tier B is closed**, and so is tier C.
 3. **The science run**, whose shape C1 settled: **more seeds, not more
    configs.** 8 configs at 6 seeds (block) or 11 (kNNDM) — not 24 configs at
    3, which would buy nothing a grid of 8 already fails to resolve. Cost goes

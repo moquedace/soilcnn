@@ -353,10 +353,41 @@ fixes the centre cell of an odd-sized patch, so the centre-point label is preser
 - **Regularisation**: the network never sees the same patch in the same orientation twice,
   reducing memorisation of training samples.
 
-### Alternative considered
-No augmentation (the version before round 2). Round-1 to round-2 improvement in CCC
-(0.569 → 0.585–0.605) and large RMSE reduction confirm that D4 augmentation meaningfully
-helped generalisation.
+### Alternative considered, and what it actually measures
+
+No augmentation. This section used to cite the round-1 to round-2 improvement in
+CCC (0.569 → 0.585–0.605) as confirmation that D4 augmentation "meaningfully helped
+generalisation". **That number supports no claim about augmentation.** Round 2 also
+changed the windows (3/5/7 → 3/9/15), the resolution (20 km → 250 m), the grid and the
+training schedule; augmentation was one of at least five things that moved.
+
+It has now been measured properly (`_b3_augmentation.R`, 2026-09-21): two arms
+differing in `augment` and in nothing else — same config (cfg_003, the deployed one),
+same fold plan, same three seeds, paired on (fold, seed), 9 pairs per arm.
+
+| | val_ccc |
+|---|---|
+| augment = TRUE | 0.4726 |
+| augment = FALSE | 0.4426 |
+| paired difference | **+0.0300**, 95% CI [+0.0014, +0.0587], t(8) = 2.42, p = 0.042 |
+| seed noise floor (harsher arm) | 0.0533 |
+
+So the direction the section always claimed is the direction measured, and `val_mae`
+agrees on which arm is ahead (though it does not separate on its own). Two cautions
+belong with the number:
+
+- **The interval nearly touches zero.** The effect could be 0.001, which is nothing,
+  or 0.059, which is most of the spread this project's whole 8-config architecture
+  search covers (0.042). The size is not well determined by 9 pairs.
+- **A single training run is dominated by seed luck**: 0.0300 against a seed spread of
+  0.0533. The paired test asks a different question — whether the *mean* moves — and
+  the deployed model is a multi-seed ensemble, not a single run. Which of the two
+  readings governs a decision is a judgement the script deliberately does not make.
+
+Augmentation stays on: it is nearly free in CPU (early stopping landed at comparable
+epochs in both arms), the measured direction is positive, and the prior it encodes is
+physically sound. What changed is that this is now a measurement with an interval
+rather than a belief with a citation that did not support it.
 
 ### DSM connection
 Unlike natural images (where "cat upside down" is unusual), environmental raster patches are

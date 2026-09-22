@@ -3201,3 +3201,83 @@ interrompido, e a taxa de acerto depende de o usuário estar olhando para a
 tela no minuto certo. O caminho manual continua disponível em
 `soc_b6_interrupt = "manual"`, porque o Esc exercita um modo de falha
 genuinamente diferente — o erro que o runner registra e do qual continua.
+
+## 2026-09-21 — B3: a augmentação foi medida, e o tier B fechou
+
+Dois braços, `augment = TRUE` e `augment = FALSE`, diferindo nisso e em mais
+nada: mesmo config (cfg_003, o implantado, lido da seleção congelada), mesmo
+plano de folds (lido do run 03 e passado aos dois), mesmos três seeds, pareados
+em (fold, seed), 9 pares por braço. 18 unidades, ~35 min.
+
+| | val_ccc |
+|---|---|
+| augment = TRUE | 0,4726 |
+| augment = FALSE | 0,4426 |
+| diferença pareada | **+0,0300** (SE 0,0124), IC 95% [+0,0014, +0,0587] |
+| | t(8) = 2,42, p = 0,042 |
+| ruído de seed (braço mais duro) | 0,0533 |
+
+`val_mae` concorda na direção (−0,044 a favor do ON) mas não separa sozinho:
+IC [−0,154, +0,066].
+
+### O que isso substitui
+
+`design_decisions.md` §8 afirmava que a augmentação "ajudou de forma
+significativa", citando a melhora de CCC entre a rodada 1 e a rodada 2
+(0,569 → 0,585–0,605). Aquela rodada também mudou janelas (3/5/7 → 3/9/15),
+resolução (20 km → 250 m), a grade e o schedule de treino. A augmentação era
+uma de pelo menos cinco coisas que se moveram, então o número não sustentava
+afirmação nenhuma sobre ela. Agora sustenta — e a direção é a mesma que o
+documento sempre alegou, o que é sorte e não método.
+
+### As duas leituras do mesmo número, e por que o script não escolhe
+
+O veredicto impresso foi `effect_smaller_than_the_seed_noise`: +0,0300 é menor
+que os 0,0533 que este modelo move entre seeds, e pela regra permanente do
+projeto isso não é evidência acionável.
+
+Essa regra nasceu para comparar CONFIGS dentro de uma grade, onde se escolhe o
+máximo de muitos e o ruído vira viés de seleção. Aqui o desenho é outro: dois
+braços planejados, pareados, com o pareamento removendo fold e seed — e o SE de
+0,0124 do teste pareado **já contabiliza** o ruído. As duas comparações
+respondem perguntas diferentes:
+
+- *"Um treino único com augmentação bate um treino único sem?"* — 0,0300 contra
+  0,0533: o ruído domina. Não.
+- *"A média de um ensemble sobe?"* — é o que o teste pareado mede, e o modelo
+  implantado é um ensemble de seeds, não um treino único.
+
+**Não mexi no veredicto.** Afrouxar o critério depois de ver o resultado é
+exatamente o erro que este projeto documenta em vários lugares, e o fato de a
+mudança favorecer a conclusão que o autor já esperava a torna mais suspeita,
+não menos. A observação fica registrada aqui; a régua fica onde estava.
+
+### O tamanho, em contexto
+
++0,030 é pequeno em termos absolutos, mas vale comparar com o que o projeto já
+mediu:
+
+| o que se mexe | quanto vale em CCC |
+|---|---|
+| o design de validação (C1) | **0,19** |
+| a augmentação D4 (B3) | **0,030** |
+| toda a busca de arquitetura (C1, melhor − pior de 8 configs, blocos) | **0,042** |
+| o ruído de seed | 0,053 |
+
+Ou seja: ligar a augmentação vale quase tanto quanto **toda a amplitude da
+grade de 8 arquiteturas**. E as duas coisas juntas continuam seis vezes menores
+que a escolha de como validar.
+
+A augmentação fica ligada. Custa praticamente nada em CPU (o early stopping
+parou em épocas comparáveis nos dois braços), a direção medida é positiva, e o
+prior que ela codifica é fisicamente correto. O que mudou é que isso agora é
+uma medição com intervalo, e não uma crença com uma citação que não a
+sustentava.
+
+### Um subproduto: determinismo confirmado na quinta casa
+
+O braço ON reproduziu as mesmas 9 unidades do run `soc_0_5cm_20260916_232318`
+com `|diferença| máxima = 1,7e-6` em val_ccc. `R/train_cnn.R` e `R/metrics.R`
+mudaram depois daquele run, e mesmo assim nada se moveu. Isso confirma pelo
+terceiro caminho independente o que o B6 mediu: entre sessões interativas o
+treino é determinístico.
