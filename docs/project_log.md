@@ -3354,3 +3354,38 @@ por ser circular — para sourcear esse arquivo é preciso saber onde ele está,
 que é exatamente o problema. A duplicação é o preço de não ter um pacote
 ainda, e desaparece no dia em que `library(deep_learning_caret)` substituir
 tudo isso.
+
+### O primeiro uso real do `stop()` no 99 achou um check mal calibrado
+
+A conversão dos cabeçalhos foi verificada rodando o `99_check_pipeline.R` num
+console limpo: ele achou o projeto sozinho, carregou os pacotes do instalador
+local e chegou ao resumo — 69 PASS, 3 WARN, 1 FAIL. E o FAIL foi um falso
+positivo:
+
+```
+[FAIL] 04 | stage 04's tuning_run_id == stage 03's most recent run
+           used_by_04=soc_0_5cm_20260916_232318 | mais_recente_03=soc_0_5cm_design_spatial
+```
+
+Nada está errado. O `soc_0_5cm_design_spatial` é um dos dois runs do C1, e C1,
+B3 e B6 **todos** escrevem runs de tuning — nenhum deles candidato a
+substituir o modelo de produção. Sob o `warning()` antigo ninguém reparava;
+com o `stop()` que pus ontem, isso trava o pipeline por um não-problema.
+
+A pergunta que o check fazia não é respondível por um script: só a pessoa sabe
+se o run mais novo foi um experimento ou um stage 04 esquecido. Então ela
+virou **WARN**, com a mensagem nomeando as duas leituras.
+
+No lugar dela, como FAIL, entrou a pergunta que **é** respondível e que o check
+antigo estava tentando alcançar sem conseguir: a config que o stage 04
+implantou está no grid do run que ele diz ter usado? Isso pega um
+`tuning_run_id` apontando para o run errado, um grid redesenhado sob outra
+seed, e um `config_id` que hoje significa outra coisa — três falhas reais que
+"é o mais recente?" nunca veria.
+
+*Observação para depois:* o WARN do snapshot ("12 de 21 valores mudaram") é
+ruído permanente — são as chaves renomeadas de português para inglês
+(`01_n_linhas` → `01_n_rows`), que aparecem como 6 `gone` e 6 `new`. O
+snapshot de referência precisa ser regravado uma vez, agora que os nomes
+estabilizaram. É uma decisão do autor porque o snapshot é a linha de base
+contra a qual tudo se compara.

@@ -854,18 +854,43 @@ if (!dir.exists(final_model_base)) {
       seeds_expected    <- summary_rds$seeds
       n_seeds_expected  <- length(seeds_expected)
 
-      # Stage 04 records which tuning run it used. This confirms that the
-      # directory still exists (not deleted or renamed since) and, when stage
-      # 03 also ran in this same check, that it is exactly the most recent run
-      # resolved above -- which is what stops a stale tuning_run_id left in the
-      # script from silently pinning the work to an old run.
+      # COHERENT WITH THE RUN IT CAME FROM -- which is answerable. Whether a
+      # NEWER run should have been used is not: C1, B3 and B6 all write tuning
+      # runs, and none of them is a candidate to replace the production model,
+      # so "is there something newer?" has two readings and only the person
+      # knows which. It is a WARN naming both. What is unambiguous is that the
+      # run still exists and that the config stage 04 deployed is in its grid.
       linked_tuning_dir <- file.path(tuning_dir, summary_rds$tuning_run_id)
       add_check("04", "the tuning_run_id stage 04 refers to still exists",
                 if (dir.exists(linked_tuning_dir)) "PASS" else "FAIL",
                 summary_rds$tuning_run_id)
+
+      # The deployed config has to be a row of THAT run's grid. This is what
+      # catches a tuning_run_id pointing at the wrong run, a grid redrawn under
+      # a different seed, or a config id that means something else now -- the
+      # failures the "most recent" check was reaching for and could not see.
+      linked_grid <- file.path(linked_tuning_dir, "tune_grid.rds")
+      if (dir.exists(linked_tuning_dir) && file.exists(linked_grid)) {
+        .grid_ids <- readRDS(linked_grid)$config_id
+        .dep_ids  <- if (!is.null(summary_rds$selected_config_ids)) {
+          summary_rds$selected_config_ids
+        } else selected_cfgs$config_id
+        .gone <- setdiff(.dep_ids, .grid_ids)
+        add_check("04", "the deployed config(s) are in that run's grid",
+                  if (length(.gone) == 0L) "PASS" else "FAIL",
+                  sprintf("deployed %s | grid holds %d config(s)%s",
+                          paste(.dep_ids, collapse = ", "), length(.grid_ids),
+                          if (length(.gone)) paste0(" | MISSING: ",
+                                                    paste(.gone, collapse = ", ")) else ""))
+      }
+
       if (exists("tuning_run_id") && all_03_exist) {
-        check_equal("04", "stage 04's tuning_run_id == stage 03's most recent run",
-                    summary_rds$tuning_run_id, tuning_run_id, "used_by_04", "mais_recente_03")
+        .same_run <- identical(summary_rds$tuning_run_id, tuning_run_id)
+        add_check("04", "stage 04 was built from the newest tuning run",
+                  if (.same_run) "PASS" else "WARN",
+                  if (.same_run) summary_rds$tuning_run_id else
+                    sprintf("04 used %s, newest is %s -- expected if the newer one was an experiment (C1/B3/B6); a forgotten stage 04 if it was not",
+                            summary_rds$tuning_run_id, tuning_run_id))
       }
 
       # When selected_config_ids was left NULL (the default, recommended in
