@@ -3418,3 +3418,61 @@ para ele.
 Com isso corrigido, a linha de base nunca precisa ser apagada: ela avança
 apenas em runs que passaram, e um run que falhou deixa a última referência boa
 de pé. O script diz isso quando acontece.
+
+## 2026-09-26 — Decisão: os seeds estabilizam a mediana; a incerteza vem do conformal
+
+Registrada antes de qualquer código, porque é a escolha que um revisor vai
+questionar primeiro.
+
+**Continua-se treinando N seeds no modelo final.** O papel deles é o que a
+teoria sustenta: a mediana de um ensemble é uma estimativa pontual de variância
+menor que a de qualquer membro. O SD e o MAD entre seeds continuam gravados,
+como diagnóstico do otimizador, e nunca como intervalo.
+
+**O mapa de incerteza vem de predição conformal**, que é a matemática com
+garantia: cobertura ≥ 1 − α em amostra finita, sem supor normalidade nem que o
+modelo seja bom, exigindo só que os pontos de calibração sejam permutáveis com
+os de predição.
+
+### Por que o intervalo atual não basta
+
+O `05` já grava um intervalo conformal (`pi90_lower`/`pi90_upper`), e ele tem
+três limitações:
+
+1. **Largura constante.** Todo pixel recebe o mesmo ± q em t/ha. Honesto na
+   média, mudo sobre *onde* o modelo sabe menos.
+2. **Calibrado no trabalho errado.** Os resíduos vêm da CV em blocos, a ~16 km
+   do treino; o mapa prediz a ~824 km (B1). Sem permutabilidade não há
+   garantia, e o erro provável é o otimista: intervalos estreitos demais longe
+   dos dados.
+3. **Em unidades nativas, sobre um modelo treinado em log1p** e com resíduos
+   heterocedásticos — o fator de smearing vai de 1,79 a 1,15 entre os quintis
+   da predição. Um ± q constante em t/ha é largo demais nos valores baixos e
+   estreito demais nos altos, que carregam 60% do estoque.
+
+### As três opções, da mais barata à mais cara
+
+**(a) Conformal no espaço log.** Escore |log1p(y) − log1p(ŷ)|, intervalo
+expm1(log1p(ŷ) ± q). A largura cresce com o nível predito, no mesmo espaço em
+que o modelo foi treinado. Sem retreino. A garantia vale para qualquer escore
+permutável — trocar o escore não a enfraquece.
+
+**(b) (a) normalizado pelo DI.** O escore é dividido por uma escala que é função
+do índice de dissimilaridade (`R/aoa.R`, Meyer & Pebesma 2021), calculado do
+mesmo jeito num ponto de calibração e em cada pixel. A largura cresce onde o
+modelo extrapola. Sem retreino. É o conformal normalizado de Papadopoulos
+(2008) e Lei et al. (2018), com o escore de dificuldade que este projeto já tem.
+O spread dos seeds **não** serve como escala aqui: os resíduos de calibração
+vêm de modelos de CV, cujo spread tem outra escala que o do ensemble final.
+
+**(c) CQR** (Romano, Patterson & Candès 2019). A rede passa a prever quantis
+com perda pinball, e o conformal corrige a cobertura deles. Adaptativo à
+heterocedasticidade do alvo e com garantia — o estado da arte. Exige mudar a
+cabeça da rede e retreinar o tuning e o modelo final.
+
+**Em todas, a fonte dos resíduos de calibração é um argumento**, não uma
+constante do código: é ela que decide para qual trabalho o intervalo é
+honesto. Resíduos de blocos dão um intervalo válido para interpolação perto
+dos perfis; resíduos de kNNDM, para o trabalho que o mapa faz. Esta é a
+segunda consequência da pergunta científica 1 — a primeira foi o número
+reportado; esta é a largura do intervalo no mapa.

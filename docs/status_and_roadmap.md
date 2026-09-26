@@ -137,11 +137,38 @@ found. Ordered by what a new user or a wrong result would hit first.)*
 4. **The 250 m map — not blocked by (3), and this is C1's doing.** The price
    of the design falls on the number you *report*, not on the model you
    *deploy*: no pair of configs is separable under either design, so the
-   deployed `cfg_003` is as good as anything the grid would pick. The map can
-   be produced now, and the design decision changes its caption, not its
-   pixels. Start with `05a_test.R`, which measures RAM and throughput on a
+   deployed `cfg_003` is as good as anything the grid would pick. The MEDIAN
+   map can be produced now, and the design decision changes its caption, not
+   its pixels. **The interval bands are different** (see 5): their width comes
+   from the residuals they are calibrated on, so the design decision reaches
+   those pixels. Start with `05a_test.R`, which measures RAM and throughput on a
    few real shards — including a dense tropical one — and reports the safe
    `max_concurrent` and the ETA before any of it is committed.
+
+5. **Uncertainty: decided 2026-09-26.** Seeds stay, for a stable ensemble
+   median and as an optimiser diagnostic; the map's uncertainty comes from
+   conformal prediction, the method with a finite-sample coverage guarantee.
+   The interval `05` writes today is constant-width, in native units, and
+   calibrated on block-CV residuals (~16 km) for a map that predicts at
+   ~824 km. Three upgrades, cheapest first, all in `project_log.md`:
+   (a) conformal on the log1p residual — width grows with the predicted level;
+   (b) (a) normalised by the dissimilarity index — width grows where the model
+   extrapolates; (c) CQR — a quantile head plus conformal, which needs
+   retraining. In every one of them the source of the calibration residuals
+   is an argument, because it decides which job the interval is honest for.
+
+### The functions that make this a package
+
+What a user needs to go from a table of points and a folder of aligned rasters
+to maps, and what exists today:
+
+| step | package function | today |
+|---|---|---|
+| points + raster folder → patch store, at the windows the user declares | `dsm_prepare()` | only `examples/.../01` and `02`, written for the SOC data |
+| folds, buffer, tuning, selection | `dsm_load()`, `*_cv()`, `dsm_train()`, `one_se()` | **done** |
+| a tuning grid drawn from the windows in the store | inside `dsm_train()` | the window space is fixed at 3/9/15 |
+| refit the chosen config under N seeds | `dsm_final()` | only `examples/.../04` |
+| median, mean and interval maps, with the calibration source as an argument | `dsm_predict()` | only `examples/.../05` |
 
 ### Robustness and ease of use (the audit's list, applied)
 
