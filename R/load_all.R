@@ -47,6 +47,7 @@
   "metrics.R",          # ccc() and the rest
   "dataset.R",          # the patch store, the fold cache, the table view
   "resample.R",         # fold plans, buffers, noise floor, one_se
+  "prepare.R",          # points + raster folder -> patch store, and the recipe
   "knndm.R",            # folds matched to where the map will be predicted
   "diagnostics.R",      # checks about THIS run on real data
   "aoa.R",              # dissimilarity index / area of applicability

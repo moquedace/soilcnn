@@ -157,11 +157,52 @@ create_output_dirs <- function(dirs) {
   invisible(check)
 }
 
+# ── How many cores: one answer, used by every function ────────────────────────
+#
+# ONE RULE, IN ONE PLACE. Before this, setup_torch_device() counted PHYSICAL
+# cores minus one while stage 05 divided the LOGICAL count by its workers --
+# two answers to the same question on the same machine -- and three example
+# scripts typed 30 by hand. Every function that takes `n_cores` asks here.
+#
+# Above the physical count is allowed but said out loud: hyperthreads share a
+# core's arithmetic units, and torch on CPU runs slower, not faster, when its
+# threads outnumber the cores they compete for.
+
+.physical_cores <- function() {
+  n <- suppressWarnings(parallel::detectCores(logical = FALSE))
+  if (is.na(n) || n < 1L) n <- suppressWarnings(parallel::detectCores(logical = TRUE))
+  if (is.na(n) || n < 1L) n <- 1L
+  as.integer(n)
+}
+
+#' The number of cores a call may use.
+#'
+#' @param n_cores NULL for the physical cores minus one (one left for the
+#'   system), or a whole number >= 1.
+#' @param what    What the cores are for, for the message.
+#' @return An integer >= 1.
+resolve_cores <- function(n_cores = NULL, what = "this step") {
+  phys <- .physical_cores()
+  if (is.null(n_cores)) return(max(1L, phys - 1L))
+  n <- suppressWarnings(as.integer(n_cores))
+  if (length(n_cores) != 1L || is.na(n) || n < 1L || n != n_cores) {
+    stop("n_cores must be a whole number >= 1, got ",
+         paste(deparse(n_cores), collapse = ""), ".", call. = FALSE)
+  }
+  if (n > phys) {
+    message("  n_cores = ", n, " is above the ", phys, " physical core(s) of ",
+            "this machine; ", what, " will not run faster for it, and torch ",
+            "may run slower.")
+  }
+  n
+}
+
 # ── Torch / device setup ──────────────────────────────────────────────────────
 
 #' Configure torch threads and select compute device.
 #'
-#' @param n_threads   Number of intra-op threads (set to available CPU cores).
+#' @param n_threads   Number of intra-op threads; NULL for the physical cores
+#'   minus one (see resolve_cores()).
 #' @param use_cuda    Use GPU if available.
 #' @return A torch_device object.
 setup_torch_device <- function(n_threads = NULL, use_cuda = TRUE) {
@@ -169,12 +210,7 @@ setup_torch_device <- function(n_threads = NULL, use_cuda = TRUE) {
   # script overrode it with 30 -- the author's workstation -- so a user on a
   # laptop would have oversubscribed and a user on a bigger box would have
   # idled. NULL reads the physical core count and leaves one for the OS.
-  if (is.null(n_threads)) {
-    cores <- parallel::detectCores(logical = FALSE)
-    if (is.na(cores)) cores <- 8L
-    n_threads <- max(1L, cores - 1L)
-  }
-  n_threads <- as.integer(n_threads)
+  n_threads <- resolve_cores(n_threads, what = "torch")
   Sys.setenv(
     OMP_NUM_THREADS = as.character(n_threads),
     MKL_NUM_THREADS = as.character(n_threads)

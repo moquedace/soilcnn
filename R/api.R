@@ -41,9 +41,11 @@
 #' the store, read the raster resolution, and verify the store can serve this
 #' configuration.
 #'
-#' @param patch_dir    Directory written by the extraction step.
+#' @param patch_dir    Directory written by the extraction step -- or the
+#'   `dsm_store` dsm_prepare() returned, in which case nothing else is needed.
 #' @param points       Point table, or a path to the CSV written by stage 01.
-#' @param type_table   Predictor types, or a path to its CSV.
+#'   NULL for a store written by dsm_prepare(), which carries its own copy.
+#' @param type_table   Predictor types, or a path to its CSV. NULL as above.
 #' @param windows      Windows to load. NULL loads every window the store has,
 #'   which is the wrong default when the grid needs two of five -- pass the
 #'   windows the grid actually uses and the store reads only those.
@@ -51,10 +53,34 @@
 #'   `raster_table`, which is the only source that cannot drift.
 #' @param raster_table Path to raster_table_used.csv, for `cell_size`.
 #' @param target_col   Expected target column, for the store lock.
-#' @return A `dsm_data` object.
-dsm_load <- function(patch_dir, points, type_table, windows = NULL,
+#' @return A `dsm_data` object. `$transform` is the target transform the store
+#'   was built under -- name, forward and inverse -- or NULL when the store did
+#'   not record one.
+dsm_load <- function(patch_dir, points = NULL, type_table = NULL, windows = NULL,
                      cell_size = NULL, raster_table = NULL, target_col = NULL,
                      verbose = TRUE) {
+
+  # A STORE WRITTEN BY dsm_prepare() CARRIES ITS OWN TABLES, and its recipe
+  # says where they are. That is what lets dsm_load(store) take one argument:
+  # the six-step preamble this function replaced is not re-imposed on the user
+  # as five paths to type. A store from before dsm_prepare() has no recipe,
+  # and the explicit arguments stay required for it.
+  if (inherits(patch_dir, "dsm_store")) patch_dir <- patch_dir$store_dir
+  recipe_path <- file.path(patch_dir, "recipe.rds")
+  recipe <- if (file.exists(recipe_path)) readRDS(recipe_path) else NULL
+  if (is.null(points) || is.null(type_table)) {
+    if (is.null(recipe)) {
+      stop("`points` and `type_table` are required: ", patch_dir, " holds no ",
+           "recipe.rds, so it was not written by dsm_prepare() and does not ",
+           "carry its own tables.", call. = FALSE)
+    }
+    if (is.null(points))     points     <- file.path(patch_dir, recipe$files$points)
+    if (is.null(type_table)) type_table <- file.path(patch_dir, recipe$files$type_table)
+    if (is.null(raster_table) && is.null(cell_size)) {
+      raster_table <- file.path(patch_dir, recipe$files$raster_table)
+    }
+    if (is.null(target_col)) target_col <- recipe$target
+  }
 
   read_if_path <- function(z, what) {
     if (is.character(z) && length(z) == 1L) {
@@ -129,10 +155,23 @@ dsm_load <- function(patch_dir, points, type_table, windows = NULL,
                    target_col = target_col,
                    cell_size  = cell_size)
 
+  # THE TRANSFORM IS READ, NOT RE-TYPED. Stage 02 recorded "log1p" in the
+  # manifest, and stages 04 and 05 then typed its inverse, expm1, by hand --
+  # so a store built without the log would have been back-transformed with one
+  # anyway. From here the inverse travels with the data. An unknown name stops
+  # (target_transform_spec() says why): an inverse that cannot be looked up
+  # would give every "native" metric in the wrong space.
+  tr_name <- if ("target_transform" %in% names(store$manifest)) {
+    as.character(store$manifest$target_transform[1])
+  } else recipe$transform
+  transform <- if (is.null(tr_name) || is.na(tr_name)) NULL else
+    target_transform_spec(tr_name)
+
   out <- structure(
     list(store = store, points = points, type_table = type_table,
          cell_size = cell_size, patch_dir = patch_dir,
-         target_col = target_col %||% store_spec(store)$target_col),
+         target_col = target_col %||% store_spec(store)$target_col,
+         transform = transform, recipe = recipe),
     class = "dsm_data")
   if (verbose) print(out)
   out
@@ -145,6 +184,8 @@ print.dsm_data <- function(x, ...) {
   cat("  channels   : ", x$store$n_channels, "\n", sep = "")
   cat("  windows    : ", paste(x$store$window_sizes, collapse = ", "), "\n", sep = "")
   cat("  target     : ", x$target_col %||% "(not recorded)", "\n", sep = "")
+  cat("  transform  : ",
+      if (is.null(x$transform)) "(not recorded)" else x$transform$name, "\n", sep = "")
   cat("  cell size  : ",
       if (is.null(x$cell_size)) "(unknown -- 'auto' buffers unavailable)"
       else format(x$cell_size, digits = 8), "\n", sep = "")

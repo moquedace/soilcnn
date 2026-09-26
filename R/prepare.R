@@ -1,0 +1,1039 @@
+# ── From a table of points and a folder of rasters to a patch store ───────────
+#
+# WHAT THIS REPLACES.
+#
+# Until 2026-09-26 this was two example scripts, examples/soc_stock_0_5cm/01
+# and 02, written for one dataset: the SOC stock GPKG, its column names, its
+# 181 rasters, its temperature sentinel. Everything a second user needed to
+# change sat in the middle of 1,300 lines of script. dsm_prepare() is those two
+# scripts with the dataset taken out: every decision that was a literal there
+# is an argument here, and every argument is written into the store, so no
+# later stage has to be told it again.
+#
+# THE RECIPE.
+#
+# Three kinds of decision are made here, and each must be honoured identically
+# every time a value crosses from the rasters into the model:
+#
+#   the target transform  "log1p" or "none". Training happens in that space;
+#                         every metric, every map and the smearing correction
+#                         need its inverse. Stage 02 wrote it into the manifest
+#                         -- and stages 04 and 05 then typed the inverse again
+#                         by hand, as expm1, in two places nothing linked.
+#   the predictor types   dummies (not scaled), percentages (divided by 100),
+#                         continuous (z-scored from each fold's training rows).
+#   the QC rules          NA floors, percentage clamps, the drop list.
+#
+# All of it goes to recipe.rds inside the store, beside copies of the small
+# tables the store needs. A store directory is therefore self-contained: it can
+# be moved, and dsm_load(store) needs nothing else.
+#
+# WHAT IS DECLARED AND WHAT IS DETECTED.
+#
+# Percentages are DECLARED, as regular expressions over the cleaned raster
+# names: nothing in a channel's values tells a percentage from a continuous
+# variable. Dummies are DETECTED by default -- at most two distinct values, both
+# in {0, 1} -- or declared. A declaration always wins over the detection: a
+# channel declared a percentage is never demoted to a dummy because the points
+# happened to see only 0 and 1. (On the SOC data no channel is both, so this
+# reproduces stage 01's table exactly; stage 01 needed a separate override
+# list, force_as_percentage, for the case.)
+#
+# WHAT IS NOT HERE: SCALING. Means and sds are estimated from the TRAINING
+# rows of a fold, so they belong to a fitted model and not to the data -- see
+# R/preprocess.R. Patches are stored RAW. QC is the only thing applied to them,
+# because QC is fold-independent: a physically impossible value is impossible
+# whoever trains.
+
+# ── the target transforms this framework can invert ───────────────────────────
+#
+# Two, deliberately. log1p is the one the smearing correction in R/smearing.R
+# knows how to undo (Duan's estimator is for a log-trained model); any other
+# transform would need its own correction on the way back, and a transform
+# without one is a biased map. Adding one later means adding it here and
+# nowhere else, because everything downstream asks this table.
+.target_transforms <- list(
+  none  = list(name = "none",  forward = identity, inverse = identity),
+  log1p = list(name = "log1p", forward = log1p,    inverse = expm1)
+)
+
+#' The forward and inverse functions for a named target transform.
+#'
+#' @param name "none" or "log1p".
+#' @return list(name, forward, inverse).
+target_transform_spec <- function(name) {
+  if (is.null(name) || length(name) != 1L || is.na(name) ||
+      !name %in% names(.target_transforms)) {
+    stop("Unknown target transform '", paste(name, collapse = ", "), "'. ",
+         "Known: ", paste(names(.target_transforms), collapse = ", "),
+         ".\n  A transform needs its inverse for every metric and map, so an ",
+         "unknown one cannot be read back.", call. = FALSE)
+  }
+  .target_transforms[[name]]
+}
+
+# ── dsm_prepare ───────────────────────────────────────────────────────────────
+
+#' Build a patch store from a point table and a folder of aligned rasters.
+#'
+#' @param points     An sf object, a data.frame with coordinate columns, or a
+#'   path to a spatial file sf can read (GPKG, shapefile, GeoJSON).
+#' @param target     Name of the target column in `points`.
+#' @param raster_dir Folder of aligned single-band rasters, one predictor per
+#'   file. Only files at the top level matching `raster_pattern` are read.
+#' @param windows    Patch sizes in pixels, odd. REQUIRED: a window's ground
+#'   extent is window x resolution, so there is no default that is right at
+#'   every resolution. 3/9/15 were chosen for 250 m.
+#' @param out_dir    Where to write, as out_dir/patches (the store),
+#'   out_dir/metadata (tables for a human) and out_dir/points.csv. Or give
+#'   the three separately with store_dir, metadata_dir and points_file.
+#' @param profile_id Column that identifies an observation. Rows sharing it are
+#'   de-duplicated (the first is kept) and later kept in the same fold. Absent,
+#'   every row is its own profile.
+#' @param coords, crs For a data.frame: the coordinate columns and their CRS.
+#'   NULL crs means the coordinates are already in the rasters' CRS.
+#' @param percentage Regular expressions over the CLEANED raster names for
+#'   channels in 0-100. Anchor them (^pnv_, ^peatland_extent$) to avoid
+#'   matching more than intended; every match is reported.
+#' @param dummy      "auto" to detect 0/1 channels, or the channel names.
+#' @param drop       Channel names (raw or cleaned) to leave out.
+#' @param na_below   Named numeric: names are regexes over cleaned names,
+#'   values are thresholds. A value <= its threshold becomes NA (a nodata
+#'   sentinel such as -9999, or stage 01's temperature floor of -100).
+#' @param percentage_limits Percentages are clamped into this range; NULL to
+#'   leave them as read. The clamp keeps the slight overshoot of an
+#'   interpolated surface instead of turning it into NA.
+#' @param transform  "none" or "log1p" -- the space the model trains in.
+#' @param target_min Rows with target <= target_min are dropped. NULL keeps any
+#'   finite target the transform accepts.
+#' @param subsample  NULL, or list(frac, block_size, seed): keep a fraction of
+#'   the points in whole spatial blocks, for a run that finishes in minutes.
+#'   Recorded, so a subsampled result is never mistaken for a full one.
+#' @param n_cores    Cores for the extraction, one band per core. NULL uses the
+#'   physical cores minus one. The result does not depend on it.
+#' @param overwrite  A store_dir that already holds a store is refused unless
+#'   TRUE, in which case that store's files are removed first.
+#' @return A `dsm_store`, which dsm_load() accepts directly.
+dsm_prepare <- function(points, target, raster_dir, windows,
+                        out_dir           = NULL,
+                        store_dir         = NULL,
+                        metadata_dir      = NULL,
+                        points_file       = NULL,
+                        profile_id        = "profile_id",
+                        coords            = c("x", "y"),
+                        crs               = NULL,
+                        percentage        = NULL,
+                        dummy             = "auto",
+                        drop              = NULL,
+                        na_below          = NULL,
+                        percentage_limits = c(0, 100),
+                        transform         = c("none", "log1p"),
+                        target_min        = NULL,
+                        subsample         = NULL,
+                        target_label      = NULL,
+                        target_unit       = NULL,
+                        raster_pattern    = "\\.tif$",
+                        chunk_nrows       = 1000L,
+                        n_cores           = NULL,
+                        overwrite         = FALSE,
+                        verbose           = TRUE) {
+
+  t_start <- Sys.time()
+  say <- function(...) if (verbose) message(...)
+
+  # ── 0. the arguments, all checked before anything is read ─────────────────
+  if (missing(windows)) {
+    stop("`windows` is required: the patch sizes in pixels, e.g. c(3, 9, 15). ",
+         "A window's ground extent is window x resolution, so no default is ",
+         "right at every resolution.", call. = FALSE)
+  }
+  windows <- sort(unique(as.integer(windows)))
+  if (length(windows) == 0L || anyNA(windows) || any(windows < 1L) ||
+      any(windows %% 2L != 1L)) {
+    stop("`windows` must be odd whole numbers (a patch has one centre pixel); ",
+         "got ", paste(windows, collapse = ", "), ".", call. = FALSE)
+  }
+  transform <- match.arg(transform)
+  tr <- target_transform_spec(transform)
+  if (!is.character(target) || length(target) != 1L) {
+    stop("`target` must be the name of one column.", call. = FALSE)
+  }
+  if (!is.character(raster_dir) || length(raster_dir) != 1L || !dir.exists(raster_dir)) {
+    stop("raster_dir does not exist: ", raster_dir, call. = FALSE)
+  }
+  if (!is.null(percentage_limits) &&
+      (!is.numeric(percentage_limits) || length(percentage_limits) != 2L ||
+       percentage_limits[1] >= percentage_limits[2])) {
+    stop("percentage_limits must be NULL or c(lower, upper) with lower < upper.",
+         call. = FALSE)
+  }
+  if (!is.null(na_below) && (!is.numeric(na_below) || is.null(names(na_below)) ||
+                             any(!nzchar(names(na_below))))) {
+    stop("na_below must be a NAMED numeric vector, e.g. ",
+         "c(\"surface_temperature_celsius$\" = -100).", call. = FALSE)
+  }
+  if (!identical(dummy, "auto") && !is.character(dummy)) {
+    stop("dummy must be \"auto\" or a character vector of channel names.",
+         call. = FALSE)
+  }
+  if (!is.null(target_min) && (!is.numeric(target_min) || length(target_min) != 1L)) {
+    stop("target_min must be NULL or one number.", call. = FALSE)
+  }
+  if (!is.null(subsample) &&
+      (!is.list(subsample) || !all(c("frac", "block_size") %in% names(subsample)))) {
+    stop("subsample must be NULL or list(frac = , block_size = , seed = ).",
+         call. = FALSE)
+  }
+  chunk_nrows <- as.integer(chunk_nrows)
+  if (is.na(chunk_nrows) || chunk_nrows < 1L) {
+    stop("chunk_nrows must be a whole number >= 1.", call. = FALSE)
+  }
+  n_cores <- resolve_cores(n_cores, what = "the extraction")
+
+  if (!is.null(out_dir)) {
+    store_dir    <- store_dir    %||% file.path(out_dir, "patches")
+    metadata_dir <- metadata_dir %||% file.path(out_dir, "metadata")
+    points_file  <- points_file  %||% file.path(out_dir, "points.csv")
+  }
+  if (is.null(store_dir) || is.null(metadata_dir) || is.null(points_file)) {
+    stop("Give out_dir, or all three of store_dir, metadata_dir and ",
+         "points_file.", call. = FALSE)
+  }
+  target_label <- target_label %||% target
+  .prep_clear_store(store_dir, overwrite, say)
+  create_output_dirs(c(store_dir, metadata_dir, file.path(metadata_dir, "patches"),
+                       dirname(points_file)))
+
+  # ── 1. the points ─────────────────────────────────────────────────────────
+  points_source <- if (is.character(points) && length(points) == 1L) points else
+    class(points)[1]
+  pts   <- .prep_read_points(points)
+  is_sf <- inherits(pts, "sf")
+  if (!target %in% names(pts)) {
+    stop("Target column '", target, "' is not in the point table. Columns: ",
+         paste(setdiff(names(pts), attr(pts, "sf_column")), collapse = ", "),
+         call. = FALSE)
+  }
+  if (!is_sf && !all(coords %in% names(pts))) {
+    stop("Coordinate column(s) ", paste(setdiff(coords, names(pts)), collapse = ", "),
+         " not found. Pass `coords`, or an sf object.", call. = FALSE)
+  }
+  say("Points read: ", nrow(pts))
+
+  # ── 2. an optional subsample, BEFORE any raster is touched ────────────────
+  #
+  # The extraction below is where the time goes, so a subsample anywhere later
+  # would save nothing. Whole blocks rather than random points: a random
+  # subsample thins the spatial clusters, so leakage falls, the buffer discards
+  # less, and the folds look cleaner than the data is (measured on the test
+  # fixture: 9.4 neighbours within 1 km per point instead of 29.0).
+  run_profile    <- "full"
+  subsample_note <- "full dataset"
+  if (!is.null(subsample)) {
+    xy0 <- if (is_sf) sf::st_coordinates(sf::st_geometry(pts)) else
+      as.matrix(pts[, coords])
+    keep <- block_subsample(xy0[, 1], xy0[, 2], frac = subsample$frac,
+                            block_size = subsample$block_size,
+                            seed = subsample$seed %||% 42L)
+    subsample_note <- describe_subsample(keep)
+    pts <- pts[keep, , drop = FALSE]
+    run_profile <- "dev"
+    say("\n", strrep("!", 78))
+    say("SUBSAMPLE -- this is NOT a result run")
+    say("  ", subsample_note)
+    say("  Comparable only with another run of the same subsample.")
+    say(strrep("!", 78), "\n")
+  }
+
+  # ── 3. the rasters ─────────────────────────────────────────────────────────
+  rt <- .prep_raster_table(raster_dir, raster_pattern, drop, say)
+  preds <- rt$use$predictor
+  reserved <- c("profile_id", "sample_id", "x", "y", "target_native",
+                "target_transform")
+  if (target %in% reserved) {
+    stop("The target column may not be called ", target, ": that name is ",
+         "reserved for the point table this function writes.", call. = FALSE)
+  }
+  clash <- intersect(preds, c(reserved, target))
+  if (length(clash) > 0L) {
+    stop("Raster(s) named ", paste(clash, collapse = ", "), " collide with a ",
+         "column of the point table. Rename the file(s).", call. = FALSE)
+  }
+  stack <- terra::rast(rt$use$raster_file)
+  names(stack) <- preds
+  if (!nzchar(terra::crs(stack))) {
+    stop("The rasters carry no CRS, so the points cannot be placed on them.",
+         call. = FALSE)
+  }
+  say("Predictor rasters to use: ", length(preds))
+
+  # ── 4. place the points on the rasters and read the centre values ─────────
+  if (is_sf) {
+    pts <- sf::st_transform(pts, crs = sf::st_crs(terra::crs(stack, proj = TRUE)))
+    xy  <- sf::st_coordinates(pts)
+    vec <- terra::vect(pts)
+    tab <- sf::st_drop_geometry(pts)
+  } else {
+    xy <- as.matrix(pts[, coords])
+    storage.mode(xy) <- "double"
+    if (!is.null(crs)) {
+      vec <- terra::project(terra::vect(xy, crs = crs), terra::crs(stack))
+      xy  <- terra::crds(vec)
+    } else {
+      vec <- terra::vect(xy, crs = terra::crs(stack))
+    }
+    tab <- as.data.frame(pts)
+  }
+  pv <- terra::extract(stack, vec, ID = FALSE) %>%
+    tibble::as_tibble() %>%
+    dplyr::mutate(dplyr::across(dplyr::everything(), as.numeric))
+
+  pid <- if (!is.null(profile_id) && profile_id %in% names(tab)) {
+    as.character(tab[[profile_id]])
+  } else {
+    say("  No '", profile_id %||% "profile_id", "' column: every row is its own ",
+        "profile.")
+    as.character(seq_len(nrow(tab)))
+  }
+  tn <- as.numeric(tab[[target]])
+  df <- tibble::tibble(profile_id = pid, x = as.numeric(xy[, 1]),
+                       y = as.numeric(xy[, 2]))
+  df[[target]] <- tn
+  df <- dplyr::bind_cols(df, pv)
+  df$target_native    <- tn
+  df$target_transform <- tr$forward(tn)
+
+  # ── 5. QC at the points -- the SAME rules the patches get below ───────────
+  #
+  # Stage 01 wrote these rules twice: once inline for the point values, once
+  # as qc_table.csv for stage 02 to apply to the patches. They agreed because
+  # someone kept them in step. Here one table drives both, through the same
+  # qc_band_values().
+  pct_all <- .prep_match(percentage, preds, "percentage", say)
+  qc_all  <- make_qc_table(
+    predictors   = preds,
+    na_below     = na_below,
+    clamp_range  = if (is.null(percentage_limits)) character(0) else pct_all,
+    clamp_limits = percentage_limits %||% c(0, 100))
+  for (i in seq_along(preds)) {
+    df[[preds[i]]] <- qc_band_values(df[[preds[i]]], qc_all[i, ])
+  }
+
+  bad_pred   <- rowSums(!is.finite(as.matrix(df[, preds]))) > 0L
+  bad_target <- is.na(df$profile_id) | is.na(df$x) | is.na(df$y) |
+    !is.finite(df$x) | !is.finite(df$y) |
+    is.na(df$target_native) | !is.finite(df$target_native) |
+    is.na(df$target_transform) | !is.finite(df$target_transform)
+  if (!is.null(target_min)) {
+    bad_target <- bad_target | (!is.na(df$target_native) &
+                                  df$target_native <= target_min)
+  }
+
+  qc_summary <- tibble::tibble(
+    n_rows_extracted    = nrow(df),
+    n_target_problem    = sum(bad_target),
+    n_predictor_problem = sum(bad_pred),
+    n_any_problem       = sum(bad_target | bad_pred))
+  qc_summary$pct_any_problem <- round(100 * qc_summary$n_any_problem /
+                                        qc_summary$n_rows_extracted, 2)
+  qc_summary$n_rows_after_qc <- qc_summary$n_rows_extracted -
+    qc_summary$n_any_problem
+  if (verbose) {
+    message("\n-- QC summary --")
+    print_wide(qc_summary)
+  }
+
+  raw <- df[!(bad_target | bad_pred), , drop = FALSE] %>%
+    dplyr::select(profile_id, x, y, dplyr::all_of(target), target_native,
+                  target_transform, dplyr::all_of(preds)) %>%
+    dplyr::distinct(profile_id, .keep_all = TRUE)
+  if (nrow(raw) == 0L) stop("No rows remained after QC.", call. = FALSE)
+  say("Rows after QC: ", nrow(raw))
+
+  # ── 6. predictor types ─────────────────────────────────────────────────────
+  types <- purrr::map_dfr(preds, function(nm) {
+    v    <- raw[[nm]]
+    vu   <- v[!is.na(v) & is.finite(v)]
+    uniq <- sort(unique(vu))
+    tibble::tibble(
+      predictor     = nm,
+      n_unique      = length(uniq),
+      min_value     = min(vu, na.rm = TRUE),
+      max_value     = max(vu, na.rm = TRUE),
+      is_dummy      = length(uniq) <= 2 && all(uniq %in% c(0, 1)),
+      is_percentage = nm %in% pct_all
+    )
+  })
+  auto_dummy <- identical(dummy, "auto")
+  if (!auto_dummy) {
+    dummy_clean <- unique(vapply(dummy, janitor::make_clean_names, character(1)))
+    gone <- setdiff(dummy_clean, preds)
+    if (length(gone) > 0L) {
+      stop("dummy names not among the rasters: ", paste(gone, collapse = ", "),
+           call. = FALSE)
+    }
+    both <- intersect(dummy_clean, pct_all)
+    if (length(both) > 0L) {
+      stop("Declared both a dummy and a percentage: ",
+           paste(both, collapse = ", "), ". A channel has one type.",
+           call. = FALSE)
+    }
+    types$is_dummy <- types$predictor %in% dummy_clean
+  }
+  # A DECLARATION WINS OVER THE DETECTION (see the header).
+  types$is_dummy[types$is_percentage] <- FALSE
+
+  # ── 7. the row key, and channels that cannot be scaled ────────────────────
+  #
+  # THIS FUNCTION DECIDES NO ROLES. Which rows train, validate and test is
+  # decided by a fold plan, from coordinates, in seconds -- a split carried
+  # inside the store would cost a re-extraction to change.
+  split <- dplyr::mutate(raw, sample_id = dplyr::row_number())
+
+  dummy_cols <- types$predictor[types$is_dummy]
+  sds <- vapply(preds, function(nm) stats::sd(split[[nm]], na.rm = TRUE),
+                numeric(1))
+  bad_scaling <- names(sds)[is.na(sds) | !is.finite(sds) |
+                              (sds <= 0 & !(names(sds) %in% dummy_cols))]
+  if (length(bad_scaling) > 0L) {
+    say("\nDropping channel(s) with no variance over the points (a z-score ",
+        "would divide by zero): ", paste(bad_scaling, collapse = ", "))
+    preds <- setdiff(preds, bad_scaling)
+    types <- dplyr::filter(types, predictor %in% preds)
+  }
+  n_dummy <- sum(types$is_dummy)
+  n_pct   <- sum(types$is_percentage)
+  n_cont  <- sum(!types$is_dummy & !types$is_percentage)
+  say("\nPredictor types -- dummy: ", n_dummy, " | percentage: ", n_pct,
+      " | continuous: ", n_cont)
+  if (auto_dummy && n_dummy > 0L) {
+    say("  detected as dummy (0/1 at the points): ",
+        paste(types$predictor[types$is_dummy], collapse = ", "))
+  }
+
+  # ── 8. the tables ──────────────────────────────────────────────────────────
+  dataset_check <- tibble::tibble(
+    target_col              = target,
+    n_rows                  = nrow(split),
+    n_profiles              = dplyr::n_distinct(split$profile_id),
+    min_target              = min(split$target_native, na.rm = TRUE),
+    q01_target              = as.numeric(stats::quantile(split$target_native, 0.01, na.rm = TRUE)),
+    median_target           = stats::median(split$target_native, na.rm = TRUE),
+    mean_target             = mean(split$target_native, na.rm = TRUE),
+    q99_target              = as.numeric(stats::quantile(split$target_native, 0.99, na.rm = TRUE)),
+    max_target              = max(split$target_native, na.rm = TRUE),
+    median_target_transform = stats::median(split$target_transform, na.rm = TRUE),
+    n_predictors            = length(preds),
+    n_dummy_predictors      = n_dummy,
+    n_percentage_predictors = n_pct,
+    n_continuous_predictors = n_cont)
+  if (verbose) {
+    message("\n-- Dataset summary --")
+    print_wide(dataset_check)
+  }
+
+  point_table <- dplyr::select(split, profile_id, sample_id, x, y,
+                               dplyr::all_of(target), target_native,
+                               target_transform, dplyr::all_of(preds))
+
+  # CHANNEL RISK. Three families of channel have shipped a broken map before,
+  # and none shows up as an error or a bad metric -- only as holes or as
+  # extrapolation, at the very end:
+  #   constant       zero information at the points but NOT constant over the
+  #                  map (glaciers are 0 at every profile and 1 over ice); its
+  #                  weights never get a gradient and stay at random init.
+  #   near_constant  the same, smaller.
+  #   has_na         NA at the points.
+  # Computed exactly as stage 01 did -- on the rows that survived QC, which is
+  # why has_na cannot fire here (rows with an NA were already dropped). Kept
+  # as it is so this function reproduces stage 01 byte for byte; the fix is
+  # recorded in docs/project_log.md and goes in a commit of its own.
+  channel_risk <- types %>%
+    dplyr::mutate(
+      n_na_at_points = purrr::map_int(predictor,
+                                      ~ sum(!is.finite(raw[[.x]]))),
+      pct_na = round(100 * n_na_at_points / nrow(raw), 3),
+      type   = dplyr::case_when(is_dummy ~ "dummy",
+                                is_percentage ~ "percentage",
+                                TRUE ~ "continuous"),
+      risk   = dplyr::case_when(
+        n_unique <= 1L             ~ "constant",
+        n_unique <= 2L & !is_dummy ~ "near_constant",
+        n_na_at_points > 0L        ~ "has_na",
+        TRUE                       ~ "")) %>%
+    dplyr::select(predictor, type, n_unique, min_value, max_value,
+                  n_na_at_points, pct_na, risk)
+  .prep_report_risk(channel_risk, run_profile, nrow(split), say, verbose)
+
+  pct_final <- types$predictor[types$is_percentage]
+  qc_table  <- make_qc_table(
+    predictors   = preds,
+    na_below     = na_below,
+    clamp_range  = if (is.null(percentage_limits)) character(0) else pct_final,
+    clamp_limits = percentage_limits %||% c(0, 100))
+
+  raster_used <- rt$use[match(preds, rt$use$predictor), , drop = FALSE]
+
+  target_config <- tibble::tibble(
+    run_profile                   = run_profile,
+    subsample                     = subsample_note,
+    target_label                  = target_label,
+    target_col                    = target,
+    target_unit                   = target_unit %||% NA_character_,
+    target_transform              = transform,
+    target_min                    = target_min %||% NA_real_,
+    predictor_raster_dir          = raster_dir,
+    manual_predictor_drop         = paste(rt$drop_present, collapse = ";"),
+    na_below                      = .prep_serialise_rules(na_below),
+    percentage_predictor_patterns = paste(percentage, collapse = ";"),
+    dummy_rule                    = if (auto_dummy) "auto" else paste(dummy, collapse = ";"),
+    n_predictors_final            = length(preds),
+    n_dummy                       = n_dummy,
+    n_percentage                  = n_pct,
+    n_continuous                  = n_cont,
+    n_rows_after_qc               = nrow(raw),
+    points_source                 = points_source)
+
+  safe_write_csv2(point_table, points_file)
+  safe_write_csv2(channel_risk,  file.path(metadata_dir, "channel_risk.csv"))
+  safe_write_csv2(qc_table,      file.path(metadata_dir, "qc_table.csv"))
+  safe_write_csv2(qc_summary,    file.path(metadata_dir, "qc_summary.csv"))
+  safe_write_csv2(types,         file.path(metadata_dir, "predictor_type_table.csv"))
+  safe_write_csv2(rt$all,        file.path(metadata_dir, "raster_table_all.csv"))
+  safe_write_csv2(raster_used,   file.path(metadata_dir, "raster_table_used.csv"))
+  safe_write_csv2(dataset_check, file.path(metadata_dir, "dataset_check.csv"))
+  safe_write_csv2(dplyr::select(split, profile_id, sample_id, x, y,
+                                target_native, target_transform),
+                  file.path(metadata_dir, "point_metadata.csv"))
+  safe_write_csv2(target_config, file.path(metadata_dir, "target_config.csv"))
+
+  # ── 9. the patches ─────────────────────────────────────────────────────────
+  ex <- .prep_extract_patches(
+    files       = raster_used$raster_file,
+    qc_table    = qc_table,
+    xy          = as.matrix(point_table[, c("x", "y")]),
+    windows     = windows,
+    chunk_nrows = chunk_nrows,
+    n_cores     = n_cores,
+    say         = say)
+
+  # ── 10. who invalidated what ───────────────────────────────────────────────
+  #
+  # The full-window rule turns ONE non-finite pixel into a lost patch, so one
+  # sparse-NA channel can empty a map -- it happened here: a test tile covered
+  # 0.72% until the percentage clamp was fixed. An AND over every channel
+  # cannot say which one did it; this table can. A channel high in
+  # n_sole_cause is actionable. A high n_invalidated with no sole cause is a
+  # place where the whole stack is nodata (coast, water, raster edge), and
+  # dropping a channel would recover nothing.
+  n_points  <- nrow(point_table)
+  blame     <- ex$blame
+  valid     <- ex$edge_ok & rowSums(blame) == 0L
+  n_valid   <- sum(valid)
+  valid_idx <- which(valid)
+  blame_report <- tibble::tibble(
+    predictor     = preds,
+    type          = dplyr::case_when(types$is_dummy ~ "dummy",
+                                     types$is_percentage ~ "percentage",
+                                     TRUE ~ "continuous"),
+    n_invalidated = as.integer(colSums(blame)),
+    n_sole_cause  = as.integer(colSums(blame & (rowSums(blame) == 1L)))) %>%
+    dplyr::mutate(pct_invalidated = round(100 * n_invalidated / n_points, 3),
+                  pct_sole_cause  = round(100 * n_sole_cause  / n_points, 3)) %>%
+    dplyr::arrange(dplyr::desc(n_invalidated))
+  safe_write_csv2(blame_report,
+                  file.path(metadata_dir, "patches", "channel_invalidation.csv"))
+  .prep_report_blame(blame_report, blame, n_points, n_valid, max(windows), say,
+                     verbose)
+  if (n_valid == 0L) stop("No point is valid after the window rule.", call. = FALSE)
+
+  # ── 11. persist, metadata first ────────────────────────────────────────────
+  #
+  # patch_meta.csv defines WHICH points survived, and every window file must
+  # line up with it row for row; written first, a crash mid-write leaves a
+  # store that can be understood. Then one window at a time, largest first,
+  # each released before the next, so the peak is bounded by the largest
+  # window rather than by all of them. saveRDS of the plain array, NOT
+  # torch_save of a tensor: torch_save() in this torch build corrupts silently
+  # above 2^31 bytes (see R/dataset.R).
+  meta_valid <- point_table[valid_idx, c("profile_id", "sample_id", "x", "y",
+                                         "target_native", "target_transform")]
+  safe_write_csv2(meta_valid, file.path(store_dir, "patch_meta.csv"))
+
+  keys <- patch_window_key(windows)
+  # A sample for visual inspection (99b), taken while the arrays are in memory.
+  sample_idx <- with_local_seed(42L, sort(sample(n_valid, min(6L, n_valid))))
+  safe_save_rds(
+    list(meta       = meta_valid[sample_idx, ],
+         windows    = stats::setNames(lapply(keys, function(k)
+           ex$patch_list[[k]][valid_idx[sample_idx], , , , drop = FALSE]), keys),
+         predictors = preds),
+    file.path(store_dir, "patch_sample.rds"), compress = TRUE)
+
+  saved <- tibble::tibble()
+  for (wi in order(windows, decreasing = TRUE)) {
+    w   <- windows[wi]
+    key <- keys[wi]
+    arr <- ex$patch_list[[key]][valid_idx, , , , drop = FALSE]
+    res <- save_patch_window(arr, store_dir, w)
+    rm(arr)
+    ex$patch_list[[key]] <- NULL
+    invisible(gc(verbose = FALSE))
+    say(sprintf("  %-20s written %.2f GB  %s", res$file, res$gb,
+                if (res$ok) "[size ok]" else
+                  sprintf("[SIZE MISMATCH: expected %.2f GB]", res$exp_gb)))
+    saved <- dplyr::bind_rows(saved, tibble::tibble(
+      window = w, file = res$file, gb = res$gb,
+      status = if (res$ok) "written" else "size_mismatch"))
+  }
+
+  # The spec this store was built under. Three things force a re-extraction --
+  # the predictors, the windows and the target -- and check_store_spec() reads
+  # them from here to refuse, in seconds, a configuration the store cannot
+  # serve. Same columns as stage 02 wrote, so every existing reader works.
+  manifest <- tibble::tibble(
+    target_label         = target_label,
+    store_complete       = nrow(saved) == length(windows) &&
+                           all(saved$status != "size_mismatch"),
+    n_channels           = length(preds),
+    n_points_input       = n_points,
+    n_points_valid       = n_valid,
+    pct_removed          = round(100 * (n_points - n_valid) / n_points, 2),
+    windows_extracted    = paste(windows, collapse = ", "),
+    storage              = "rds_double_one_file_per_window",
+    scaling_applied      = FALSE,
+    qc_applied           = "qc_table.csv",
+    chunk_nrows_used     = chunk_nrows,
+    predictor_cols_final = paste(preds, collapse = ";"),
+    target_col           = target,
+    target_transform     = transform,
+    cell_size            = ex$cell_size,
+    raster_nrow          = ex$n_rows,
+    raster_ncol          = ex$n_cols,
+    extracted_at         = as.character(Sys.time()))
+  safe_save_rds(manifest, file.path(store_dir, "patch_manifest.rds"),
+                compress = FALSE)
+  safe_write_csv2(manifest, file.path(metadata_dir, "patches", "patch_manifest.csv"))
+  safe_write_csv2(saved,    file.path(metadata_dir, "patches", "patch_files.csv"))
+
+  # ── 12. the recipe, and the tables the store needs, INSIDE the store ──────
+  store_files <- list(points       = "points.csv",
+                      type_table   = "predictor_type_table.csv",
+                      qc_table     = "qc_table.csv",
+                      raster_table = "raster_table_used.csv")
+  safe_write_csv2(point_table, file.path(store_dir, store_files$points))
+  safe_write_csv2(types,       file.path(store_dir, store_files$type_table))
+  safe_write_csv2(qc_table,    file.path(store_dir, store_files$qc_table))
+  safe_write_csv2(raster_used, file.path(store_dir, store_files$raster_table))
+
+  recipe <- list(
+    recipe_version    = 1L,
+    created_at        = as.character(Sys.time()),
+    target            = target,
+    target_label      = target_label,
+    target_unit       = target_unit,
+    transform         = transform,
+    target_min        = target_min,
+    profile_id        = profile_id,
+    windows           = windows,
+    percentage        = percentage,
+    percentage_limits = percentage_limits,
+    dummy             = dummy,
+    drop              = drop,
+    drop_applied      = rt$drop_present,
+    dropped_no_variance = bad_scaling,
+    na_below          = na_below,
+    subsample         = subsample,
+    run_profile       = run_profile,
+    predictors        = preds,
+    types             = dplyr::select(types, predictor, is_dummy, is_percentage),
+    raster_dir        = raster_dir,
+    raster_pattern    = raster_pattern,
+    raster_crs        = terra::crs(stack, proj = TRUE),
+    cell_size         = ex$cell_size,
+    n_points_input    = n_points,
+    n_points_valid    = n_valid,
+    n_cores           = ex$n_workers,
+    files             = store_files)
+  safe_save_rds(recipe, file.path(store_dir, "recipe.rds"), compress = FALSE)
+
+  out <- structure(
+    list(store_dir = store_dir, metadata_dir = metadata_dir,
+         points_file = points_file, recipe = recipe, manifest = manifest),
+    class = "dsm_store")
+  say(sprintf("\nStore written in %.1f min.",
+              as.numeric(difftime(Sys.time(), t_start, units = "mins"))))
+  if (verbose) print(out)
+  invisible(out)
+}
+
+#' @export
+print.dsm_store <- function(x, ...) {
+  r <- x$recipe
+  cat("<dsm_store> ", x$store_dir, "\n", sep = "")
+  cat("  points     : ", format(r$n_points_valid, big.mark = ","), " valid of ",
+      format(r$n_points_input, big.mark = ","), if (identical(r$run_profile, "dev"))
+        "  (SUBSAMPLE)" else "", "\n", sep = "")
+  cat("  channels   : ", length(r$predictors), "  (", sum(r$types$is_dummy),
+      " dummy, ", sum(r$types$is_percentage), " percentage, ",
+      sum(!r$types$is_dummy & !r$types$is_percentage), " continuous)\n", sep = "")
+  cat("  windows    : ", paste(r$windows, collapse = ", "), "\n", sep = "")
+  cat("  target     : ", r$target, "  (trained as ", r$transform, ")\n", sep = "")
+  cat("  cell size  : ", format(r$cell_size, digits = 8), "\n", sep = "")
+  invisible(x)
+}
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+# A store_dir that already holds a store is refused unless overwrite = TRUE.
+# The obvious alternative -- stage 02's "skip a window file already of the right
+# size" -- is exactly wrong for a function: two stores of the same shape built
+# from different points or predictors have files of identical size, and the
+# skip would keep the old patches under the new manifest.
+.prep_clear_store <- function(store_dir, overwrite, say) {
+  if (!dir.exists(store_dir)) return(invisible(character(0)))
+  own <- c("patch_manifest.rds", "patch_meta.csv", "patch_sample.rds",
+           "recipe.rds", "points.csv", "predictor_type_table.csv",
+           "qc_table.csv", "raster_table_used.csv")
+  existing <- c(file.path(store_dir, own)[file.exists(file.path(store_dir, own))],
+                list.files(store_dir, pattern = "^patches_w[0-9]+\\.rds$",
+                           full.names = TRUE))
+  if (length(existing) == 0L) return(invisible(character(0)))
+  if (!isTRUE(overwrite)) {
+    stop("store_dir already holds a patch store:\n  ", store_dir,
+         "\n  Pass overwrite = TRUE to replace it, or write somewhere else.",
+         call. = FALSE)
+  }
+  unlink(existing)
+  say("Removed the previous store in ", store_dir, " (", length(existing),
+      " file(s)).")
+  invisible(existing)
+}
+
+.prep_read_points <- function(points) {
+  if (is.character(points) && length(points) == 1L) {
+    if (!file.exists(points)) stop("Point file not found: ", points, call. = FALSE)
+    if (!requireNamespace("sf", quietly = TRUE)) {
+      stop("Reading a spatial file needs the sf package.", call. = FALSE)
+    }
+    points <- sf::st_read(points, quiet = TRUE)
+  }
+  if (!is.data.frame(points)) {
+    stop("points must be an sf object, a data.frame with coordinate columns, ",
+         "or a path to a spatial file.", call. = FALSE)
+  }
+  if (inherits(points, "sf") && !requireNamespace("sf", quietly = TRUE)) {
+    stop("points is an sf object but the sf package is not installed.",
+         call. = FALSE)
+  }
+  points
+}
+
+# THE NAMES, CLEANED ONE BY ONE. janitor::make_clean_names() over the whole
+# vector de-duplicates as it goes ("a_b", "a_b_2"), so stage 01's duplicate
+# check after it could never fire: two files that clean to the same name were
+# silently renamed instead of refused. Cleaning each name alone gives the same
+# names when there is no clash and makes a clash visible.
+.prep_clean <- function(x) {
+  if (length(x) == 0L) return(character(0))
+  vapply(x, janitor::make_clean_names, character(1), USE.NAMES = FALSE)
+}
+
+.prep_raster_table <- function(raster_dir, pattern, drop, say) {
+  files <- list.files(raster_dir, pattern = pattern, full.names = TRUE,
+                      recursive = FALSE)
+  if (length(files) == 0L) {
+    stop("No file matching '", pattern, "' in ", raster_dir, call. = FALSE)
+  }
+  all <- tibble::tibble(
+    raster_file     = files,
+    raster_name_raw = tools::file_path_sans_ext(basename(files)),
+    predictor       = .prep_clean(tools::file_path_sans_ext(basename(files))))
+  dup <- unique(all$predictor[duplicated(all$predictor)])
+  if (length(dup) > 0L) {
+    stop("These files clean to the same predictor name, so their channels ",
+         "could not be told apart:\n  ",
+         paste(vapply(dup, function(d) paste0(d, " <- ",
+               paste(basename(all$raster_file[all$predictor == d]), collapse = ", ")),
+               character(1)), collapse = "\n  "),
+         "\n  Rename the files.", call. = FALSE)
+  }
+
+  drop_clean   <- unique(.prep_clean(drop))
+  drop_present <- intersect(drop_clean, all$predictor)
+  drop_missing <- setdiff(drop_clean, all$predictor)
+  if (length(drop_present) > 0L) {
+    say("Dropping as declared: ", paste(drop_present, collapse = ", "))
+  }
+  if (length(drop_missing) > 0L) {
+    say("Drop entries that match no raster: ", paste(drop_missing, collapse = ", "))
+  }
+
+  use <- all %>%
+    dplyr::filter(!predictor %in% drop_present) %>%
+    dplyr::arrange(predictor)
+
+  # ONE PREDICTOR PER FILE, ON ONE GRID. terra::rast() on a misaligned set
+  # fails with "extents do not match" and names no file; a multi-band file
+  # would shift every channel after it by one. Both are checked here, file by
+  # file, so the message can say which.
+  ref <- terra::rast(use$raster_file[1])
+  bad_layers <- character(0)
+  bad_geom   <- character(0)
+  for (f in use$raster_file) {
+    r <- terra::rast(f)
+    if (terra::nlyr(r) != 1L) bad_layers <- c(bad_layers, basename(f))
+    if (!terra::compareGeom(ref, r, stopOnError = FALSE)) {
+      bad_geom <- c(bad_geom, basename(f))
+    }
+  }
+  if (length(bad_layers) > 0L) {
+    stop("One predictor per file, and these have more than one band: ",
+         paste(bad_layers, collapse = ", "), call. = FALSE)
+  }
+  if (length(bad_geom) > 0L) {
+    stop("These rasters are not on the same grid as ", basename(use$raster_file[1]),
+         " (extent, rows/columns or CRS differ):\n  ",
+         paste(bad_geom, collapse = ", "),
+         "\n  Every predictor must stack pixel for pixel.", call. = FALSE)
+  }
+  list(all = all, use = use, drop_present = drop_present,
+       drop_missing = drop_missing)
+}
+
+# Regex patterns over cleaned names, reported pattern by pattern so an
+# unanchored pattern that matches more than intended is visible.
+.prep_match <- function(patterns, preds, what, say) {
+  if (is.null(patterns) || length(patterns) == 0L) return(character(0))
+  hit <- preds[vapply(preds, function(p) any(grepl(paste(patterns, collapse = "|"), p)),
+                      logical(1))]
+  for (pat in patterns) {
+    n <- sum(grepl(pat, preds))
+    if (n == 0L) say("  ", what, " pattern '", pat, "' matches no raster.")
+  }
+  say("  ", what, ": ", length(hit), " channel(s) matched by ",
+      length(patterns), " pattern(s)")
+  hit
+}
+
+.prep_serialise_rules <- function(rules) {
+  if (is.null(rules) || length(rules) == 0L) return("")
+  paste(sprintf("%s=%s", names(rules), format(unname(rules))), collapse = ";")
+}
+
+.prep_report_risk <- function(channel_risk, run_profile, n_rows, say, verbose) {
+  flagged <- dplyr::filter(channel_risk, risk != "")
+  say("\n-- Channel risk --")
+  if (nrow(flagged) == 0L) {
+    say("  No channel flagged.")
+    return(invisible(flagged))
+  }
+  say("  ", nrow(flagged), " channel(s) flagged -- the kind that has broken ",
+      "MAPS here, not metrics:")
+  if (verbose) print_wide(dplyr::arrange(flagged, risk, dplyr::desc(pct_na)), n = Inf)
+  n_const <- sum(flagged$risk == "constant")
+  if (n_const > 0L) {
+    say("\n  ", n_const, " constant channel(s): zero information at the points ",
+        "but non-zero somewhere on the map.")
+    say("  Their weights never get a gradient, so they apply a seed-dependent ",
+        "bias exactly where the network extrapolates.")
+    if (identical(run_profile, "dev")) {
+      say("  THIS IS A SUBSAMPLE -- do not act on it yet. A rare class is ",
+          "constant at ", format(n_rows, big.mark = ","), " points because the ")
+      say("  subsample missed it; dropping it would change the predictor set of ",
+          "the full run from an artefact of the draw.")
+    } else {
+      say("  Add them to `drop`, or keep them deliberately.")
+    }
+  }
+  invisible(flagged)
+}
+
+.prep_report_blame <- function(blame_report, blame, n_points, n_valid, w_max,
+                               say, verbose) {
+  n_blamed <- sum(rowSums(blame) > 0)
+  say("\n-- Which channels invalidated points (full-window rule) --")
+  say("  window rule lost : ", format(n_blamed, big.mark = ","),
+      " point(s) to non-finite values")
+  say("  final valid      : ", format(n_valid, big.mark = ","), " / ",
+      format(n_points, big.mark = ","), "  (",
+      round(100 * (n_points - n_valid) / n_points, 2), "% removed)")
+  top <- dplyr::filter(blame_report, n_invalidated > 0L)
+  if (nrow(top) == 0L) {
+    say("  No channel invalidated a single point.")
+    return(invisible(NULL))
+  }
+  if (verbose) print_wide(dplyr::slice_head(top, n = 15), n = Inf)
+  worst <- top[which.max(top$pct_sole_cause), ]
+  if (worst$pct_sole_cause[1] > 0.1) {
+    say("\n  WARNING: '", worst$predictor[1], "' ALONE lost ",
+        round(worst$pct_sole_cause[1], 3), "% of the points. Sparse NA does ",
+        "far more damage to the MAP,")
+    say("  where each NA pixel becomes a hole of up to ", w_max, "x", w_max,
+        ". Check its coverage before a full prediction run.")
+  } else if (max(top$pct_invalidated) > 1) {
+    say("\n  ", round(max(top$pct_invalidated), 2), "% of points lost, but no ",
+        "channel is the SOLE cause of any: that is where the whole")
+    say("  stack is nodata (coast, water, the raster edge). Dropping a ",
+        "channel would recover none of them.")
+  }
+  invisible(NULL)
+}
+
+# ── the extraction ────────────────────────────────────────────────────────────
+#
+# ONE BAND PER CORE, AND THE RESULT DOES NOT DEPEND ON HOW MANY.
+#
+# Stage 02 looped chunk-outer, band-inner. Here it is band-outer, and that is
+# what makes the parallel version identical to the serial one: each band is its
+# own file, each point belongs to exactly one chunk of rows, so a band's patches
+# for every point can be computed without seeing any other band. A worker gets a
+# band index, reads that file's strips, applies that band's QC rule, and returns
+# the arrays; the parent places them by index. Nothing a worker does depends on
+# what another did, or on the order they finish.
+#
+# The workers get the geometry once (.prep_worker_setup) and a band index per
+# call. Both functions are top-level on purpose: a closure defined inside
+# dsm_prepare() would be serialised together with dsm_prepare()'s frame --
+# which holds the patch arrays, gigabytes of them -- and sent to every worker.
+.prep_extract_patches <- function(files, qc_table, xy, windows, chunk_nrows,
+                                  n_cores, say) {
+  t0     <- Sys.time()
+  ref    <- terra::rast(files[1])
+  # terra returns the grid size as a double; the manifest keeps it as terra
+  # gives it (stage 02 did), the indexing below uses integers.
+  n_rows_raw <- terra::nrow(ref)
+  n_cols_raw <- terra::ncol(ref)
+  n_rows <- as.integer(n_rows_raw)
+  n_cols <- as.integer(n_cols_raw)
+  n_ch   <- length(files)
+  n_pts  <- nrow(xy)
+
+  cells   <- terra::cellFromXY(ref, xy)
+  row_ids <- terra::rowFromCell(ref, cells)
+  col_ids <- terra::colFromCell(ref, cells)
+
+  # The edge check, once, against every window -- so all windows share one
+  # surviving set of points.
+  edge_ok <- !is.na(row_ids) & !is.na(col_ids)
+  for (w in windows) {
+    ok <- patch_centre_in_bounds(row_ids, col_ids, n_rows, n_cols, w)
+    ok[is.na(ok)] <- FALSE
+    edge_ok <- edge_ok & ok
+  }
+  say("\nAfter the edge check: ", sum(edge_ok), " / ", n_pts, "  (",
+      round(100 * (n_pts - sum(edge_ok)) / n_pts, 2),
+      "% too close to the raster edge for a ", max(windows), "x",
+      max(windows), " window)")
+  if (!any(edge_ok)) stop("No point survived the edge check.", call. = FALSE)
+
+  # The reading plan: geometry, computed once, reused by every band.
+  half_w_max <- (max(windows) - 1L) %/% 2L
+  chunks <- list()
+  for (cs in seq(1L, n_rows, by = chunk_nrows)) {
+    ce <- min(cs + chunk_nrows - 1L, n_rows)
+    in_chunk <- edge_ok & !is.na(row_ids) & row_ids >= cs & row_ids <= ce
+    if (!any(in_chunk)) next
+    idx        <- which(in_chunk)
+    read_start <- max(1L, cs - half_w_max)
+    read_end   <- min(n_rows, ce + half_w_max)
+    local_rows <- row_ids[idx] - read_start + 1L
+    chunks[[length(chunks) + 1L]] <- list(
+      idx        = idx,
+      read_start = as.integer(read_start),
+      read_nrows = as.integer(read_end - read_start + 1L),
+      cell_mats  = lapply(windows, function(w)
+        patch_cell_index(local_rows, col_ids[idx], n_cols, w)))
+  }
+  rows_read <- sum(vapply(chunks, function(ch) ch$read_nrows, integer(1)))
+  say(sprintf("Reading plan: %d chunk(s) of %d rows hold a point -- %s of %s raster rows per band",
+              length(chunks), chunk_nrows, format(rows_read, big.mark = ","),
+              format(n_rows, big.mark = ",")))
+
+  keys <- patch_window_key(windows)
+  gb   <- n_pts * n_ch * sum(windows^2) * 8 / 1e9
+  say(sprintf("Patch arrays: %.1f GB in memory while extracting", gb))
+
+  patch_list <- stats::setNames(
+    lapply(windows, function(w) array(NA_real_, dim = c(n_pts, n_ch, w, w))), keys)
+  blame <- matrix(FALSE, nrow = n_pts, ncol = n_ch)
+
+  n_workers <- min(n_cores, n_ch)
+  job <- list(files = files, rules = as.data.frame(qc_table), chunks = chunks,
+              windows = windows, n_points = n_pts)
+
+  # The assignment into patch_list is inline on purpose: done inside a helper
+  # through <<-, R copies the whole multi-GB array on every band.
+  if (n_workers == 1L) {
+    say("Extracting ", n_ch, " band(s) on 1 core...")
+    for (i in seq_len(n_ch)) {
+      res <- .prep_band_worker(i, job$files, job$rules, job$chunks, job$windows,
+                               job$n_points)
+      for (wi in seq_along(windows)) patch_list[[keys[wi]]][, i, , ] <- res$arrays[[wi]]
+      if (length(res$invalid) > 0L) blame[res$invalid, i] <- TRUE
+      if (i %% 20L == 0L) {
+        say(sprintf("  %d / %d bands  (%.1f min)", i, n_ch,
+                    as.numeric(difftime(Sys.time(), t0, units = "mins"))))
+      }
+    }
+  } else {
+    say("Extracting ", n_ch, " band(s) on ", n_workers, " cores...")
+    cl <- parallel::makeCluster(n_workers)
+    on.exit(parallel::stopCluster(cl), add = TRUE)
+    parallel::clusterExport(cl, c(".prep_band_worker", ".prep_worker_setup",
+                                  ".prep_worker_band", "qc_band_values",
+                                  "patch_band_assemble"),
+                            envir = environment(.prep_band_worker))
+    parallel::clusterCall(cl, .prep_worker_setup, job)
+    batches <- split(seq_len(n_ch), ceiling(seq_len(n_ch) / n_workers))
+    for (b in batches) {
+      res_list <- parallel::parLapply(cl, b, .prep_worker_band)
+      for (k in seq_along(b)) {
+        i <- b[k]
+        for (wi in seq_along(windows)) {
+          patch_list[[keys[wi]]][, i, , ] <- res_list[[k]]$arrays[[wi]]
+        }
+        if (length(res_list[[k]]$invalid) > 0L) blame[res_list[[k]]$invalid, i] <- TRUE
+      }
+      rm(res_list)
+      say(sprintf("  %d / %d bands  (%.1f min)", max(b), n_ch,
+                  as.numeric(difftime(Sys.time(), t0, units = "mins"))))
+    }
+  }
+  say(sprintf("Extraction finished in %.1f min.",
+              as.numeric(difftime(Sys.time(), t0, units = "mins"))))
+
+  list(patch_list = patch_list, blame = blame, edge_ok = edge_ok,
+       n_rows = n_rows_raw, n_cols = n_cols_raw, cell_size = terra::res(ref)[1],
+       n_workers = n_workers)
+}
+
+# One band: every chunk's strip, QC, then each window's patches. Returns the
+# arrays for every point (NA where a point is not in any chunk) and the points
+# whose window this band left non-finite.
+.prep_band_worker <- function(i, files, rules, chunks, windows, n_points) {
+  r    <- terra::rast(files[i])
+  rule <- rules[i, , drop = FALSE]
+  arrays  <- lapply(windows, function(w) array(NA_real_, dim = c(n_points, w, w)))
+  invalid <- logical(n_points)
+  for (ch in chunks) {
+    band_vec <- as.vector(terra::values(r, row = ch$read_start, nrows = ch$read_nrows))
+    band_vec <- qc_band_values(band_vec, rule)
+    for (wi in seq_along(windows)) {
+      pb <- patch_band_assemble(band_vec, ch$cell_mats[[wi]], windows[wi])
+      arrays[[wi]][ch$idx, , ] <- pb$array
+      if (!all(pb$valid)) invalid[ch$idx[!pb$valid]] <- TRUE
+    }
+  }
+  list(arrays = arrays, invalid = which(invalid))
+}
+
+.prep_worker_setup <- function(job) {
+  assign(".prep_job", job, envir = globalenv())
+  invisible(NULL)
+}
+
+.prep_worker_band <- function(i) {
+  j <- get(".prep_job", envir = globalenv())
+  .prep_band_worker(i, j$files, j$rules, j$chunks, j$windows, j$n_points)
+}
