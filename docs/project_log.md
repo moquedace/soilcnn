@@ -3476,3 +3476,49 @@ honesto. Resíduos de blocos dão um intervalo válido para interpolação perto
 dos perfis; resíduos de kNNDM, para o trabalho que o mapa faz. Esta é a
 segunda consequência da pergunta científica 1 — a primeira foi o número
 reportado; esta é a largura do intervalo no mapa.
+
+### O intervalo de hoje, medido — e o log testado antes de construí-lo
+
+Recalculado a partir dos CSVs com a receita exata do 04 (`cv_residuals()` +
+`conformal_calibrate()`); a cobertura total bate com os 87,8% que o 04
+reportou.
+
+- 3.092 resíduos da CV em blocos do `cfg_003`, mediana dos seeds por ponto,
+  |obs − pred| em t/ha
+- q90 = **39,6 t/ha** (q95 = 55,3): todo pixel recebe mediana ± 39,6, cortado
+  em zero
+- largura **79 t/ha em todo pixel**. Como a mediana do estoque é 29 t/ha, o
+  limite inferior é **zero na maior parte do mapa**
+- o SD entre os 10 seeds tem mediana **4,3 t/ha** no teste; o intervalo é 9×
+  mais largo — a medida, no modelo implantado, do que o cabeçalho de
+  `R/conformal.R` afirmava
+
+Cobertura no teste congelado (591 pontos, ~118 por quintil, erro padrão ≈ 3
+pontos percentuais), nominal 90%:
+
+| quintil do predito | hoje (± q em t/ha) | log1p | escala ajustada |
+|---|---|---|---|
+| 1 (~10 t/ha) | 94% | 78% | 89% |
+| 2 (~19) | 94% | 94% | 92% |
+| 3 (~26) | 92% | 92% | 88% |
+| 4 (~33) | 82% | 86% | 83% |
+| 5 (~58) | **77%** | 97% | 88% |
+| total | 88% | 90% | 88% |
+
+- **Hoje**: 77% no quintil de maior estoque, onde está a maior parte do
+  carbono — 4 erros padrão abaixo do prometido.
+- **Log**: acerta o total, mas inverte o problema (78% no quintil baixo). Trata
+  o erro como proporcional ao valor predito, e ele não é.
+- **Escala ajustada**: |resíduo| = 8,59 + 0,258 × predito, ajustada numa metade
+  dos resíduos de calibração; o q vem da outra metade, e é essa separação que
+  mantém a garantia. Cobertura entre 83% e 92% em todos os quintis.
+
+**Consequência:** a opção (a) do registro acima estava errada no detalhe. A
+largura deve crescer com o nível, mas numa escala ajustada aos dados, e não na
+imposta pelo log. A família escolhida continua a mesma — conformal normalizado,
+sem retreino, com o DI como a segunda dimensão da escala.
+
+**O que este teste não pode mostrar:** o teste congelado fica perto do treino
+(blocos), então nenhuma destas coberturas vale a 824 km. É para isso que serve
+o DI, e é por isso que a fonte dos resíduos de calibração continua sendo um
+argumento.
