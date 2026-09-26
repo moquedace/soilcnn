@@ -214,6 +214,36 @@ ok["two_cores_give_the_identical_arrays"] <-
 ok["two_cores_give_the_identical_point_set"] <-
   isTRUE(all.equal(safe_read_csv2(file.path(st2$store_dir, "patch_meta.csv")), meta))
 
+# ── 7b. how the raster is READ changes the time, never the result ────────────
+#
+# The extraction reads, per row chunk, one window per group of nearby points.
+# The fixture's points all fall in one chunk and one group at the defaults, so
+# the index arithmetic of a window that starts mid-raster would go untested.
+# Here every point gets its own read (no merging, reads as narrow as a patch),
+# and separately the rows are cut into chunks of 3 -- both must give the
+# identical arrays.
+st_1pt <- prep("one_read_per_point", n_cores = 1L, read_gap = 0L, read_max_cols = 5L)
+ok["one_read_per_point_gives_the_identical_arrays"] <-
+  identical(readRDS(file.path(st_1pt$store_dir, "patches_w03.rds")), w3) &&
+  identical(readRDS(file.path(st_1pt$store_dir, "patches_w05.rds")), w5)
+ok["one_read_per_point_really_split_the_reads"] <-
+  st_1pt$recipe$n_reads_per_band > st$recipe$n_reads_per_band
+st_rows <- prep("short_chunks", n_cores = 1L, chunk_nrows = 3L)
+ok["three_row_chunks_give_the_identical_arrays"] <-
+  identical(readRDS(file.path(st_rows$store_dir, "patches_w05.rds")), w5)
+
+# The grouping itself, on columns chosen to hit each rule. Half window 2, so a
+# point at column c needs columns c-2 .. c+2.
+cg <- .prep_column_groups(c(10L, 12L, 30L, 31L, 100L), h = 2L, gap = 5L, max_cols = 30L)
+ok["column_groups_merge_close_windows_and_split_far_ones"] <-
+  identical(cg, list(1:2, 3:4, 5L))
+# 10 and 20 span columns 8..22 (15 wide); adding 30 would make 8..32 = 25 > 24.
+cg2 <- .prep_column_groups(c(10L, 20L, 30L, 40L), h = 2L, gap = 100L, max_cols = 24L)
+ok["column_groups_never_exceed_the_width_cap"] <-
+  identical(cg2, list(1:2, 3:4))
+ok["the_recipe_records_how_the_store_was_read"] <-
+  is.numeric(st$recipe$gdal_cache_mb) && st$recipe$n_reads_per_band >= 1
+
 # ── 8. an sf object takes the same path as stage 01 ──────────────────────────
 if (requireNamespace("sf", quietly = TRUE)) {
   pts_sf <- sf::st_as_sf(pts, coords = c("x", "y"), crs = 4326)

@@ -110,7 +110,15 @@ target_transform_spec <- function(name) {
 #'   the points in whole spatial blocks, for a run that finishes in minutes.
 #'   Recorded, so a subsampled result is never mistaken for a full one.
 #' @param n_cores    Cores for the extraction, one band per core. NULL uses the
-#'   physical cores minus one. The result does not depend on it.
+#'   physical cores minus one, fewer if `max_ram_gb` cannot hold them. The
+#'   result does not depend on it.
+#' @param max_ram_gb RAM the extraction may use in total. NULL for 70% of what
+#'   is available when it starts (read with the ps package; without it, no
+#'   cap). Decides how many of the `n_cores` workers actually run.
+#' @param read_gap, read_max_cols How the points of a row chunk are grouped
+#'   into reads: windows closer than `read_gap` columns share a read, and no
+#'   read is wider than `read_max_cols`. Performance knobs only -- the store is
+#'   identical whatever they are, and the test suite proves it.
 #' @param overwrite  A store_dir that already holds a store is refused unless
 #'   TRUE, in which case that store's files are removed first.
 #' @return A `dsm_store`, which dsm_load() accepts directly.
@@ -135,6 +143,9 @@ dsm_prepare <- function(points, target, raster_dir, windows,
                         raster_pattern    = "\\.tif$",
                         chunk_nrows       = 1000L,
                         n_cores           = NULL,
+                        max_ram_gb        = NULL,
+                        read_gap          = 256L,
+                        read_max_cols     = 4096L,
                         overwrite         = FALSE,
                         verbose           = TRUE) {
 
@@ -184,9 +195,22 @@ dsm_prepare <- function(points, target, raster_dir, windows,
     stop("subsample must be NULL or list(frac = , block_size = , seed = ).",
          call. = FALSE)
   }
-  chunk_nrows <- as.integer(chunk_nrows)
+  chunk_nrows   <- as.integer(chunk_nrows)
+  read_gap      <- as.integer(read_gap)
+  read_max_cols <- as.integer(read_max_cols)
   if (is.na(chunk_nrows) || chunk_nrows < 1L) {
     stop("chunk_nrows must be a whole number >= 1.", call. = FALSE)
+  }
+  if (is.na(read_gap) || read_gap < 0L) {
+    stop("read_gap must be a whole number >= 0.", call. = FALSE)
+  }
+  if (is.na(read_max_cols) || read_max_cols < max(windows)) {
+    stop("read_max_cols must be at least the largest window (", max(windows),
+         "), or a single patch would not fit in one read.", call. = FALSE)
+  }
+  if (!is.null(max_ram_gb) && (!is.numeric(max_ram_gb) || length(max_ram_gb) != 1L ||
+                               max_ram_gb <= 0)) {
+    stop("max_ram_gb must be NULL or one positive number.", call. = FALSE)
   }
   n_cores <- resolve_cores(n_cores, what = "the extraction")
 
@@ -509,13 +533,17 @@ dsm_prepare <- function(points, target, raster_dir, windows,
 
   # ── 9. the patches ─────────────────────────────────────────────────────────
   ex <- .prep_extract_patches(
-    files       = raster_used$raster_file,
-    qc_table    = qc_table,
-    xy          = as.matrix(point_table[, c("x", "y")]),
-    windows     = windows,
-    chunk_nrows = chunk_nrows,
-    n_cores     = n_cores,
-    say         = say)
+    files         = raster_used$raster_file,
+    qc_table      = qc_table,
+    xy            = as.matrix(point_table[, c("x", "y")]),
+    windows       = windows,
+    chunk_nrows   = chunk_nrows,
+    n_cores       = n_cores,
+    max_ram_gb    = max_ram_gb,
+    read_gap      = read_gap,
+    read_max_cols = read_max_cols,
+    cell_bytes    = rt$max_cell_bytes,
+    say           = say)
 
   # ── 10. who invalidated what ───────────────────────────────────────────────
   #
@@ -654,6 +682,8 @@ dsm_prepare <- function(points, target, raster_dir, windows,
     n_points_input    = n_points,
     n_points_valid    = n_valid,
     n_cores           = ex$n_workers,
+    gdal_cache_mb     = ex$gdal_cache_mb,
+    n_reads_per_band  = ex$n_reads,
     files             = store_files)
   safe_save_rds(recipe, file.path(store_dir, "recipe.rds"), compress = FALSE)
 
@@ -780,12 +810,21 @@ print.dsm_store <- function(x, ...) {
   ref <- terra::rast(use$raster_file[1])
   bad_layers <- character(0)
   bad_geom   <- character(0)
+  # The bytes a cell takes ON DISK, the widest over the files: it sizes the
+  # GDAL block cache the extraction needs (see .prep_extract_patches).
+  # Unknown types count as 8, which only makes the cache larger than needed.
+  type_bytes <- c(INT1U = 1, INT1S = 1, INT2U = 2, INT2S = 2, INT4U = 4,
+                  INT4S = 4, FLT4S = 4, INT8U = 8, INT8S = 8, FLT8S = 8)
+  max_cell_bytes <- 1
   for (f in use$raster_file) {
     r <- terra::rast(f)
     if (terra::nlyr(r) != 1L) bad_layers <- c(bad_layers, basename(f))
     if (!terra::compareGeom(ref, r, stopOnError = FALSE)) {
       bad_geom <- c(bad_geom, basename(f))
     }
+    dt <- tryCatch(terra::datatype(r)[1], error = function(e) NA_character_)
+    b  <- if (!is.na(dt) && dt %in% names(type_bytes)) type_bytes[[dt]] else 8
+    max_cell_bytes <- max(max_cell_bytes, b)
   }
   if (length(bad_layers) > 0L) {
     stop("One predictor per file, and these have more than one band: ",
@@ -798,7 +837,7 @@ print.dsm_store <- function(x, ...) {
          "\n  Every predictor must stack pixel for pixel.", call. = FALSE)
   }
   list(all = all, use = use, drop_present = drop_present,
-       drop_missing = drop_missing)
+       drop_missing = drop_missing, max_cell_bytes = max_cell_bytes)
 }
 
 # Regex patterns over cleaned names, reported pattern by pattern so an
@@ -882,22 +921,48 @@ print.dsm_store <- function(x, ...) {
 
 # ── the extraction ────────────────────────────────────────────────────────────
 #
-# ONE BAND PER CORE, AND THE RESULT DOES NOT DEPEND ON HOW MANY.
+# READ ONLY WHAT THE PATCHES NEED.
 #
-# Stage 02 looped chunk-outer, band-inner. Here it is band-outer, and that is
-# what makes the parallel version identical to the serial one: each band is its
-# own file, each point belongs to exactly one chunk of rows, so a band's patches
-# for every point can be computed without seeing any other band. A worker gets a
-# band index, reads that file's strips, applies that band's QC rule, and returns
-# the arrays; the parent places them by index. Nothing a worker does depends on
-# what another did, or on the order they finish.
+# Stage 02 read, for every band and every chunk of 1,000 rows that held a
+# point, the FULL WIDTH of the raster: 1,014 rows x 160,298 columns = 1.3 GB of
+# doubles, to cut out a few hundred 15 x 15 patches. One band at a time that
+# fit. The first parallel version of this function ran fifteen of those at
+# once, and the copies qc_band_values() makes on the way pushed the peak to
+# ~100 GB on a 63 GB machine -- the run of 2026-09-26 was interrupted for it.
 #
-# The workers get the geometry once (.prep_worker_setup) and a band index per
+# So the points of each row chunk are sorted by column and grouped, and each
+# group is read as its own window: the rows its points span plus the half
+# window, the columns likewise. A read is bounded by chunk_nrows x
+# read_max_cols, whatever the grid -- 33 MB at the defaults, against 1.3 GB --
+# and the memory per worker no longer depends on the width of the world.
+#
+# WHAT THIS DOES NOT SAVE, AND WHAT MAKES UP FOR IT. The SOC rasters are
+# stored in strips of one full row, LZW-compressed (every one of the 187). A
+# 15-column window still makes GDAL decompress the whole of each row it
+# touches, so decompression is not what shrinks. What shrinks is everything
+# after it: R no longer converts and allocates 160,298 doubles per row for the
+# sake of 15. And each row is decompressed ONCE per band, not once per read,
+# provided GDAL's block cache holds a chunk's rows -- which is why the cache
+# is sized here, per worker, from the chunk and the row width, and why a band
+# is opened once (readStart) and read window by window (readValues):
+# terra::values() opens and closes the file on every call, and closing it
+# empties the cache.
+#
+# ONE BAND PER CORE, AND THE RESULT DOES NOT DEPEND ON HOW MANY. Each band is
+# its own file and each point belongs to exactly one read, so a worker's band
+# depends on no other band, and the parent places the arrays by index. Nothing
+# a worker does depends on what another did, or on the order they finish; and
+# nothing depends on how the reads were cut, because a patch is the raster's
+# cells around its point however they were fetched. The test suite checks both
+# -- two cores against one, and one read per point against the defaults.
+#
+# The workers get the plan once (.prep_worker_setup) and a band index per
 # call. Both functions are top-level on purpose: a closure defined inside
 # dsm_prepare() would be serialised together with dsm_prepare()'s frame --
-# which holds the patch arrays, gigabytes of them -- and sent to every worker.
+# which holds the patch arrays -- and sent to every worker.
 .prep_extract_patches <- function(files, qc_table, xy, windows, chunk_nrows,
-                                  n_cores, say) {
+                                  n_cores, max_ram_gb, read_gap, read_max_cols,
+                                  cell_bytes, say) {
   t0     <- Sys.time()
   ref    <- terra::rast(files[1])
   # terra returns the grid size as a double; the manifest keeps it as terra
@@ -910,11 +975,12 @@ print.dsm_store <- function(x, ...) {
   n_pts  <- nrow(xy)
 
   cells   <- terra::cellFromXY(ref, xy)
-  row_ids <- terra::rowFromCell(ref, cells)
-  col_ids <- terra::colFromCell(ref, cells)
+  row_ids <- as.integer(terra::rowFromCell(ref, cells))
+  col_ids <- as.integer(terra::colFromCell(ref, cells))
 
   # The edge check, once, against every window -- so all windows share one
-  # surviving set of points.
+  # surviving set of points. It also guarantees every read below lies inside
+  # the raster, so no read is ever clipped.
   edge_ok <- !is.na(row_ids) & !is.na(col_ids)
   for (w in windows) {
     ok <- patch_centre_in_bounds(row_ids, col_ids, n_rows, n_cols, w)
@@ -927,47 +993,95 @@ print.dsm_store <- function(x, ...) {
       max(windows), " window)")
   if (!any(edge_ok)) stop("No point survived the edge check.", call. = FALSE)
 
-  # The reading plan: geometry, computed once, reused by every band.
-  half_w_max <- (max(windows) - 1L) %/% 2L
-  chunks <- list()
+  # ── the reading plan: geometry, computed once, reused by every band ───────
+  h <- (max(windows) - 1L) %/% 2L
+  reads <- list()
+  n_chunks <- 0L
   for (cs in seq(1L, n_rows, by = chunk_nrows)) {
     ce <- min(cs + chunk_nrows - 1L, n_rows)
-    in_chunk <- edge_ok & !is.na(row_ids) & row_ids >= cs & row_ids <= ce
+    in_chunk <- edge_ok & row_ids >= cs & row_ids <= ce
+    in_chunk[is.na(in_chunk)] <- FALSE
     if (!any(in_chunk)) next
-    idx        <- which(in_chunk)
-    read_start <- max(1L, cs - half_w_max)
-    read_end   <- min(n_rows, ce + half_w_max)
-    local_rows <- row_ids[idx] - read_start + 1L
-    chunks[[length(chunks) + 1L]] <- list(
-      idx        = idx,
-      read_start = as.integer(read_start),
-      read_nrows = as.integer(read_end - read_start + 1L),
-      cell_mats  = lapply(windows, function(w)
-        patch_cell_index(local_rows, col_ids[idx], n_cols, w)))
+    n_chunks <- n_chunks + 1L
+    idx <- which(in_chunk)
+    idx <- idx[order(col_ids[idx])]
+    for (g in .prep_column_groups(col_ids[idx], h, read_gap, read_max_cols)) {
+      gi <- idx[g]
+      r0 <- min(row_ids[gi]) - h
+      r1 <- max(row_ids[gi]) + h
+      c0 <- min(col_ids[gi]) - h
+      c1 <- max(col_ids[gi]) + h
+      width <- c1 - c0 + 1L
+      lr <- row_ids[gi] - r0 + 1L
+      lc <- col_ids[gi] - c0 + 1L
+      reads[[length(reads) + 1L]] <- list(
+        idx = gi, row = r0, nrows = r1 - r0 + 1L, col = c0, ncols = width,
+        cell_mats = lapply(windows, function(w) patch_cell_index(lr, lc, width, w)))
+    }
   }
-  rows_read <- sum(vapply(chunks, function(ch) ch$read_nrows, integer(1)))
-  say(sprintf("Reading plan: %d chunk(s) of %d rows hold a point -- %s of %s raster rows per band",
-              length(chunks), chunk_nrows, format(rows_read, big.mark = ","),
-              format(n_rows, big.mark = ",")))
+  cells_read <- sum(vapply(reads, function(rd) as.numeric(rd$nrows) * rd$ncols, numeric(1)))
+  max_read_gb <- max(vapply(reads, function(rd) as.numeric(rd$nrows) * rd$ncols, numeric(1))) * 8 / 1e9
+  say(sprintf("Reading plan: %s window read(s) per band over %d row chunk(s); %.3g%% of the raster's cells, largest read %.0f MB",
+              format(length(reads), big.mark = ","), n_chunks,
+              100 * cells_read / (as.numeric(n_rows) * n_cols), max_read_gb * 1e3))
+
+  # ── memory: the GDAL cache that makes one decompression per row enough ────
+  #
+  # A chunk's rows, full width, at the bytes a cell takes on disk -- plus 10%.
+  # Floored at 64 MB (GDAL's own minimum is sane, not generous) and capped at
+  # 4 GB (a larger chunk should be a smaller chunk_nrows, not a larger cache).
+  gdal_cache_mb <- ceiling(min(4096, max(64,
+    1.1 * (chunk_nrows + 2 * h) * as.numeric(n_cols) * cell_bytes / 2^20)))
+  arrays_gb <- n_pts * n_ch * sum(windows^2) * 8 / 1e9
+  # Per worker: its cache, the largest read three times over (the read, the
+  # copy qc_band_values() makes, a temporary), its band's arrays, and a base
+  # R + terra session.
+  per_worker_gb <- gdal_cache_mb / 1024 + 3 * max_read_gb +
+    n_pts * sum(windows^2) * 8 / 1e9 + 0.4
+
+  budget_gb <- max_ram_gb
+  if (is.null(budget_gb) && requireNamespace("ps", quietly = TRUE)) {
+    avail <- tryCatch(ps::ps_system_memory()$avail / 1e9, error = function(e) NA_real_)
+    if (is.finite(avail)) budget_gb <- 0.7 * avail
+  }
+  n_workers <- min(n_cores, n_ch)
+  if (!is.null(budget_gb)) {
+    room <- budget_gb - arrays_gb - 1          # the parent: the arrays and itself
+    fits <- max(1L, as.integer(floor(room / per_worker_gb)))
+    if (fits < n_workers) {
+      say(sprintf("  RAM caps the workers at %d of the %d cores asked for (%.1f GB budget, ~%.1f GB each).",
+                  fits, n_workers, budget_gb, per_worker_gb))
+      n_workers <- fits
+    }
+  }
+  say(sprintf("RAM plan: patch arrays %.1f GB in the parent; %d worker(s) x ~%.1f GB (GDAL cache %d MB each)%s",
+              arrays_gb, n_workers, per_worker_gb, gdal_cache_mb,
+              if (is.null(budget_gb)) "; no budget (install ps to have one measured)"
+              else sprintf("; budget %.1f GB", budget_gb)))
 
   keys <- patch_window_key(windows)
-  gb   <- n_pts * n_ch * sum(windows^2) * 8 / 1e9
-  say(sprintf("Patch arrays: %.1f GB in memory while extracting", gb))
-
   patch_list <- stats::setNames(
     lapply(windows, function(w) array(NA_real_, dim = c(n_pts, n_ch, w, w))), keys)
   blame <- matrix(FALSE, nrow = n_pts, ncol = n_ch)
 
-  n_workers <- min(n_cores, n_ch)
-  job <- list(files = files, rules = as.data.frame(qc_table), chunks = chunks,
-              windows = windows, n_points = n_pts)
+  job <- list(files = files, rules = as.data.frame(qc_table), reads = reads,
+              windows = windows, n_points = n_pts, gdal_cache_mb = gdal_cache_mb)
 
   # The assignment into patch_list is inline on purpose: done inside a helper
   # through <<-, R copies the whole multi-GB array on every band.
   if (n_workers == 1L) {
     say("Extracting ", n_ch, " band(s) on 1 core...")
+    # In this session the cache is only ever RAISED, and put back afterwards:
+    # it belongs to the user's R session, not to this function.
+    old_cache <- .prep_gdal_cache()
+    if (isTRUE(is.finite(old_cache)) && old_cache < gdal_cache_mb) {
+      terra::gdalCache(gdal_cache_mb)
+      on.exit(terra::gdalCache(old_cache), add = TRUE)
+    }
+    say("  GDAL cache in this session: ", format(.prep_gdal_cache()), " (asked ",
+        gdal_cache_mb, " MB)")
     for (i in seq_len(n_ch)) {
-      res <- .prep_band_worker(i, job$files, job$rules, job$chunks, job$windows,
+      res <- .prep_band_worker(i, job$files, job$rules, job$reads, job$windows,
                                job$n_points)
       for (wi in seq_along(windows)) patch_list[[keys[wi]]][, i, , ] <- res$arrays[[wi]]
       if (length(res$invalid) > 0L) blame[res$invalid, i] <- TRUE
@@ -981,10 +1095,12 @@ print.dsm_store <- function(x, ...) {
     cl <- parallel::makeCluster(n_workers)
     on.exit(parallel::stopCluster(cl), add = TRUE)
     parallel::clusterExport(cl, c(".prep_band_worker", ".prep_worker_setup",
-                                  ".prep_worker_band", "qc_band_values",
-                                  "patch_band_assemble"),
+                                  ".prep_worker_band", ".prep_gdal_cache",
+                                  "qc_band_values", "patch_band_assemble"),
                             envir = environment(.prep_band_worker))
-    parallel::clusterCall(cl, .prep_worker_setup, job)
+    got <- parallel::clusterCall(cl, .prep_worker_setup, job)
+    say("  GDAL cache per worker: ", format(got[[1]]), " (asked ", gdal_cache_mb,
+        " MB) -- read back, not assumed")
     batches <- split(seq_len(n_ch), ceiling(seq_len(n_ch) / n_workers))
     for (b in batches) {
       res_list <- parallel::parLapply(cl, b, .prep_worker_band)
@@ -1005,35 +1121,76 @@ print.dsm_store <- function(x, ...) {
 
   list(patch_list = patch_list, blame = blame, edge_ok = edge_ok,
        n_rows = n_rows_raw, n_cols = n_cols_raw, cell_size = terra::res(ref)[1],
-       n_workers = n_workers)
+       n_workers = n_workers, gdal_cache_mb = gdal_cache_mb,
+       n_reads = length(reads))
 }
 
-# One band: every chunk's strip, QC, then each window's patches. Returns the
-# arrays for every point (NA where a point is not in any chunk) and the points
-# whose window this band left non-finite.
-.prep_band_worker <- function(i, files, rules, chunks, windows, n_points) {
+# Group points, already sorted by column, into reads. A point joins the
+# current group when its window starts no more than `gap` columns after the
+# group's window ends, and the group stays no wider than `max_cols`. Returns
+# positions into the sorted vector.
+.prep_column_groups <- function(cols, h, gap, max_cols) {
+  n <- length(cols)
+  groups <- list()
+  start  <- 1L
+  g_lo   <- cols[1] - h
+  g_hi   <- cols[1] + h
+  for (k in seq_len(n)[-1L]) {
+    lo <- cols[k] - h
+    hi <- cols[k] + h
+    if (lo - g_hi <= gap && (max(g_hi, hi) - g_lo + 1L) <= max_cols) {
+      g_hi <- max(g_hi, hi)
+    } else {
+      groups[[length(groups) + 1L]] <- start:(k - 1L)
+      start <- k
+      g_lo  <- lo
+      g_hi  <- hi
+    }
+  }
+  groups[[length(groups) + 1L]] <- start:n
+  groups
+}
+
+# One band: open once, every planned window, QC, then each patch size.
+# Returns the arrays for every point (NA where a point is in no read) and the
+# points whose window this band left non-finite.
+.prep_band_worker <- function(i, files, rules, reads, windows, n_points) {
   r    <- terra::rast(files[i])
   rule <- rules[i, , drop = FALSE]
   arrays  <- lapply(windows, function(w) array(NA_real_, dim = c(n_points, w, w)))
   invalid <- logical(n_points)
-  for (ch in chunks) {
-    band_vec <- as.vector(terra::values(r, row = ch$read_start, nrows = ch$read_nrows))
-    band_vec <- qc_band_values(band_vec, rule)
+  terra::readStart(r)
+  on.exit(terra::readStop(r), add = TRUE)
+  for (rd in reads) {
+    v <- terra::readValues(r, row = rd$row, nrows = rd$nrows, col = rd$col,
+                           ncols = rd$ncols, mat = FALSE)
+    v <- qc_band_values(v, rule)
     for (wi in seq_along(windows)) {
-      pb <- patch_band_assemble(band_vec, ch$cell_mats[[wi]], windows[wi])
-      arrays[[wi]][ch$idx, , ] <- pb$array
-      if (!all(pb$valid)) invalid[ch$idx[!pb$valid]] <- TRUE
+      pb <- patch_band_assemble(v, rd$cell_mats[[wi]], windows[wi])
+      arrays[[wi]][rd$idx, , ] <- pb$array
+      if (!all(pb$valid)) invalid[rd$idx[!pb$valid]] <- TRUE
     }
   }
   list(arrays = arrays, invalid = which(invalid))
 }
 
+# In each worker, once: the plan, and a GDAL cache sized to hold a chunk's
+# rows. Without it every worker gets GDAL's default -- 5% of the machine's
+# RAM, each -- and fifteen of them would claim three quarters of it for cache.
 .prep_worker_setup <- function(job) {
   assign(".prep_job", job, envir = globalenv())
-  invisible(NULL)
+  tryCatch(terra::gdalCache(job$gdal_cache_mb), error = function(e) NULL)
+  .prep_gdal_cache()
+}
+
+# The GDAL cache size as terra reports it, or NA. Read back after setting it,
+# and printed: terra's documentation gives the unit, the installed package on
+# this machine does not, and a wrong unit would cost speed silently.
+.prep_gdal_cache <- function() {
+  suppressWarnings(as.numeric(tryCatch(terra::gdalCache(), error = function(e) NA)))[1]
 }
 
 .prep_worker_band <- function(i) {
   j <- get(".prep_job", envir = globalenv())
-  .prep_band_worker(i, j$files, j$rules, j$chunks, j$windows, j$n_points)
+  .prep_band_worker(i, j$files, j$rules, j$reads, j$windows, j$n_points)
 }

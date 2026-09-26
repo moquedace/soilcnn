@@ -3610,3 +3610,60 @@ todos os runs anteriores. Fica para o passo 2, medido.
   dados reais, com as configurações lidas de volta do `target_config.csv` e do
   manifest, num diretório separado, e compara 19 artefatos com o store atual.
   O `01` e o `02` só passam a chamar a função depois que isso der 19/19.
+
+### O P1 estourou a memória, e a causa era a extração em paralelo que eu escrevi
+
+A suíte passou (25/25), mas o `_p1_prepare_check.R` saturou a RAM e foi
+interrompido. A conta:
+
+- a grade tem **63.721 linhas × 160.298 colunas**;
+- o `02` lia, por banda e por bloco de 1.000 linhas, **a largura inteira**:
+  1.014 × 160.298 células = **1,3 GB** em double, para recortar algumas
+  centenas de patches de 15 × 15;
+- uma banda por vez isso cabia. A primeira versão paralela rodava **15 ao
+  mesmo tempo**, e com as cópias temporárias que o `qc_band_values()` faz no
+  caminho o pico chegava a ~**100 GB** numa máquina de 63.
+
+A versão paralela multiplicou por 15 um custo que o `02` pagava uma vez só, e
+eu não medi antes de entregar.
+
+### O que os arquivos são por dentro
+
+Li o cabeçalho TIFF dos 187 rasters: todos **em faixas de uma linha, LZW,
+float32**. Isso decide o que se pode economizar. Ler uma janela de 15 colunas
+não poupa descompressão: tocar uma linha obriga o GDAL a descomprimir as
+160.298 colunas dela. Poupa tudo o que vem depois — o R deixa de converter e
+alocar 160 mil doubles por linha para aproveitar 15.
+
+### O desenho novo
+
+- **Ler só as colunas em volta dos pontos.** Os pontos de cada bloco de linhas
+  são ordenados por coluna e agrupados; cada grupo é lido como uma janela
+  própria. Uma leitura fica limitada a `chunk_nrows × read_max_cols` —
+  33 MB nos padrões, contra 1,3 GB —, e a memória por worker deixa de depender
+  da largura do mundo.
+- **Uma descompressão por linha.** Cada banda é aberta uma vez (`readStart`) e
+  lida janela a janela (`readValues`). `terra::values()` abre e fecha o arquivo
+  a cada chamada, e fechar o arquivo esvazia o cache do GDAL. O cache de cada
+  worker é dimensionado para caber as linhas de um bloco: 682 MB no SOC.
+  Sem isso, cada worker herdaria o padrão do GDAL — 5% da RAM **cada um** — e
+  15 deles reservariam três quartos da máquina para cache.
+- **O número de workers respeita um orçamento.** `max_ram_gb` (padrão: 70% do
+  que está livre quando a extração começa, medido pelo pacote `ps`). O plano de
+  RAM é impresso antes de começar.
+- **`read_gap` e `read_max_cols`** controlam como os pontos são agrupados. São
+  alavancas de desempenho e **nada mais**: o teste força uma leitura por ponto
+  e blocos de 3 linhas, e exige arrays idênticos aos do padrão.
+
+### Uma incerteza registrada, não suposta
+
+O `terra` 1.9-46 instalado exporta `gdalCache()`, mas nada no disco diz a
+unidade (a documentação do terra diz MB). Uma unidade errada não quebraria nem
+o resultado nem a memória, só a velocidade. Então o código lê de volta o valor
+aplicado e imprime ao lado do pedido — a primeira execução responde.
+
+*Alternativas descartadas:* (1) só limitar o número de workers pela memória,
+mantendo as leituras de largura inteira — funcionaria, mas com ~6 workers e
+convertendo 1,3 GB por leitura; (2) ler uma janela por ponto sem agrupar —
+multiplicaria as chamadas ao GDAL no conjunto completo (41 mil pontos × 181
+bandas ≈ 7,4 milhões de leituras).
