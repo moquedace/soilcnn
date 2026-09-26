@@ -3522,3 +3522,91 @@ sem retreino, com o DI como a segunda dimensão da escala.
 (blocos), então nenhuma destas coberturas vale a 824 km. É para isso que serve
 o DI, e é por isso que a fonte dos resíduos de calibração continua sendo um
 argumento.
+
+## 2026-09-26 — Passo 1: `dsm_prepare()`, a receita, e o store que se carrega sozinho
+
+### O que é
+
+`R/prepare.R`: uma tabela de pontos (sf, data.frame ou arquivo espacial) e uma
+pasta de rasters alinhados viram um store de patches. É o `01` e o `02` com o
+dataset tirado de dentro: tudo o que lá era literal virou argumento, e todo
+argumento é gravado no store.
+
+O que se declara: `windows` (obrigatório), `percentage` (regex sobre os nomes
+limpos), `dummy` (`"auto"` ou nomes), `drop`, `na_below`, `percentage_limits`,
+`transform` (`"none"` ou `"log1p"`), `target_min`, `profile_id`, `subsample`,
+`n_cores`.
+
+**A receita** (`recipe.rds`) guarda transformação, tipos, regras de QC,
+descartes, janelas, resolução, CRS e quantos núcleos a extração usou. O store
+passa a carregar cópias das quatro tabelas de que precisa, então é
+autocontido: `dsm_load(store)` não precisa de mais nada, e expõe
+`$transform` — nome, direta e inversa — lido do que o store registrou.
+
+### Decisões, com as alternativas que perderam
+
+- **`windows` sem padrão.** 3/9/15 foram escolhidos para 250 m; a extensão de
+  uma janela é janela × resolução. A regra do `api.R` é que nenhum padrão pode
+  ser "um número medido em outro dataset". *Alternativa descartada:* manter
+  3/9/15 como padrão, que funcionaria em silêncio e errado a 30 m ou a 1 km.
+- **A declaração vence a detecção.** Um canal declarado como percentagem nunca
+  é rebaixado a dummy porque os pontos só viram 0 e 1. O `01` precisava de uma
+  lista à parte (`force_as_percentage`) para isso. Nos dados do SOC nenhum
+  canal é as duas coisas, então a tabela sai igual.
+- **Uma banda por núcleo, e o resultado não depende de quantos.** O `02` fazia
+  bloco-fora, banda-dentro. Aqui é banda-fora: cada banda é um arquivo, cada
+  ponto está num único bloco de linhas, então a banda de um worker não depende
+  de nenhuma outra, e o pai remonta por índice. O teste prova `n_cores = 2`
+  idêntico a `n_cores = 1`, bit a bit. As funções dos workers ficam no nível
+  de cima de propósito: uma closure definida dentro do `dsm_prepare()` seria
+  serializada junto com o frame dele — que segura os arrays de patches, GB
+  deles — e mandada a cada worker.
+- **Um store existente é recusado**, a menos que `overwrite = TRUE`. O `02`
+  pulava janelas cujo arquivo já tinha o tamanho certo, para retomar depois de
+  um crash; numa função isso está errado: dois stores de mesma forma,
+  construídos de pontos ou preditores diferentes, têm arquivos de tamanho
+  idêntico, e o pulo manteria os patches velhos sob o manifest novo.
+- **Um `n_cores`, uma conta.** `resolve_cores()` no `utils.R`: núcleos físicos
+  − 1 por padrão, validado, e avisa acima dos físicos. O `setup_torch_device()`
+  passou a usar a mesma conta. Antes ele contava físicos − 1 enquanto o `05`
+  dividia os lógicos pelos workers — duas respostas na mesma máquina.
+
+### Três checks do `01` que nunca podiam disparar
+
+- **Nomes duplicados.** `janitor::make_clean_names()` aplicado ao vetor inteiro
+  já desduplica (`a_b`, `a_b_2`), então o `count(predictor) > 1` depois dele
+  nunca achava nada: dois rasters que viram o mesmo nome eram renomeados em
+  silêncio. Agora cada nome é limpo sozinho e o conflito é recusado, nomeando
+  os arquivos.
+- **CRS.** `if (!is.na(terra::crs(r)) == FALSE)`: o terra devolve `""` para
+  "sem CRS", não `NA`, então a condição era sempre falsa. Agora `nzchar()`.
+- **`has_na` no relatório de risco.** É calculado depois que as linhas com NA
+  já foram removidas pelo QC, então conta zero sempre. **Reproduzido como
+  está**, para a verificação contra o store atual ser limpa; a correção vai num
+  commit só dela.
+
+E uma correção ao que eu disse antes: o manifest **registrava** sim
+`target_transform = "log1p"`. O defeito era que ninguém lia — o `04` e o `05`
+digitavam `expm1` à mão.
+
+### Um achado de CPU
+
+Esta máquina tem **16 núcleos físicos e 32 lógicos**. O `03`, o `03b` e o `04`
+passam `n_threads = 30` ao torch — ou seja, rodam com threads quase o dobro
+dos núcleos que fazem a conta. A partir de agora o `setup_torch_device()` avisa
+disso em cada run. O número não foi mudado aqui: a contagem de threads pode
+mexer na quinta casa, e mudar isso em silêncio quebraria a comparação com
+todos os runs anteriores. Fica para o passo 2, medido.
+
+### Como isto é verificado
+
+- `tests/test_prepare.R` (44 asserções; 43 sem o pacote sf): uma grade 30 × 40 com seis rasters
+  cujo valor em cada célula é conhecido por fórmula, e 13 pontos em que cada um
+  exercita um caminho — sentinela no centro, sentinela dentro da janela, borda,
+  alvo zero, alvo NA, perfil repetido, percentagem acima de 100 e abaixo de 0.
+  O patch é comparado com a fórmula do raster, o centro de cada patch com o
+  valor do ponto (`check_patch_centres()`), e `n_cores = 2` com `n_cores = 1`.
+- `examples/soc_stock_0_5cm/_p1_prepare_check.R`: roda o `dsm_prepare()` nos
+  dados reais, com as configurações lidas de volta do `target_config.csv` e do
+  manifest, num diretório separado, e compara 19 artefatos com o store atual.
+  O `01` e o `02` só passam a chamar a função depois que isso der 19/19.
