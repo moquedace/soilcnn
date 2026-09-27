@@ -8,13 +8,14 @@
 # 250 m grid. What it could not measure is the global run's cost: its speed
 # came from the 20 km grid (rows of 2,004 columns) and from a probe unit
 # ~2,000 columns wide. At 250 m a step reads rows of 160,298 columns: R
-# converts every one of them, the step's buffer alone is ~5 GB, and three or
-# five workers read the same HDD at once. Those are the numbers the global run
-# depends on, and they are measured here, for three layouts of the same cores:
+# converts every one of them, the step's buffer alone is ~5 GB, and several
+# workers read the same HDD at once. Those are the numbers the global run
+# depends on, and they are measured here, for two layouts of the same cores
+# (the first run's three, and why the second asks about two, are below the
+# settings):
 #
-#   a  3 workers x 5 threads    (dsm_final()'s measured best for training)
+#   a  2 workers x 7 threads    (what the RAM allows, with every core)
 #   b  1 worker  x 15 threads
-#   c  5 workers x 3 threads
 #
 # Each layout maps ITS OWN band of full-width rows near 47 N, next to each
 # other -- the same latitude, so about the same land, and none of them in the
@@ -29,12 +30,12 @@
 # WHAT IT DECIDES: the layout the global run uses, and its ETA. The checks
 # only say the measurement is sound and the RAM model held.
 #
-# WHAT IT WRITES: the three maps under outputs/.../spatial_prediction/.../
+# WHAT IT WRITES: the maps under outputs/.../spatial_prediction/.../
 # dsm_predict/t3_<layout>_<commit> (full-width, ~1-3 GB each) and the tables
 # in outputs/.../tuning/.../capability_sweep/t3_predict/. A second run of the
 # same commit resumes the maps and only repeats the tables.
 #
-# COST: ~35-50 min, most of it layout b's single worker.
+# COST: ~25-35 min.
 #
 # Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/examples/soc_stock_0_5cm/_t3_predict_layouts.R")
 # ══════════════════════════════════════════════════════════════════════════════
@@ -85,9 +86,20 @@ code_tag     <- .git_commit_at(project_root)
 n_cores      <- env_int("soc_t3_n_cores", 15L)
 unit_rows    <- 32L
 
-# The layouts: the same cores, split three ways.
-layouts <- tibble::tibble(layout = c("a", "b", "c"), threads = c(5L, 15L, 3L),
-                          units = c(6L, 3L, 5L))
+# The layouts: the same cores, split two ways.
+#
+# THE FIRST RUN (commit 811beae) tried 5, 15 and 3 threads a worker. The RAM
+# cut the first to 2 workers and the third to 3, and every layout computed
+# ~20,000 valid px/s whatever its split: 2 x 5, 1 x 15 and 3 x 3 threads gave
+# 21.3k, 20.4k and 20.0k px/s of compute. Beyond ~10 threads the machine's
+# memory bandwidth, not its cores, sets the pace. Its workers also peaked at
+# 24-32 GB (the reader's garbage, since fixed). So the second run asks what is
+# left: 2 workers x 7 threads -- what the RAM allows, with every core --
+# against 1 x 15.
+layouts <- tibble::tibble(layout = c("a", "b"), threads = c(7L, 15L), units = c(4L, 3L))
+# Rows the first run mapped (448, from the first profile's) may still be in
+# the file cache: this run maps the bands after them.
+offset_rows <- env_int("soc_t3_offset_rows", 448L, min = 0L)
 
 final_run_id <- latest_run_dir(final_base, prefix = "final_",
                                require_file = file.path("comparison", "final_run_summary.rds"),
@@ -123,7 +135,7 @@ h <- (max(unlist(cfg_row$window_sizes)) - 1L) %/% 2L
 # The bands of rows: side by side from the first profile's row (47 N).
 r_first <- as.integer(terra::rowFromCell(g250, terra::cellFromXY(
   g250, cbind(data$store$meta$x[1], data$store$meta$y[1]))))
-starts <- r_first - 3L + c(0L, cumsum(layouts$units[-nrow(layouts)])) * unit_rows
+starts <- r_first - 3L + offset_rows + c(0L, cumsum(layouts$units[-nrow(layouts)])) * unit_rows
 layouts$r0 <- as.integer(starts)
 layouts$r1 <- as.integer(starts + layouts$units * unit_rows - 1L)
 
