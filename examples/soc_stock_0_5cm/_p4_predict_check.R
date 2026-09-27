@@ -350,8 +350,9 @@ if (file.exists(pr_rec)) {
   message(sprintf(paste0(
     "\n(info) the probe unit: %d row(s) of 181 rasters read in %.0f s (%.2f s per full row); ",
     "%s valid px through %d seed(s) + DI in %.0f s (%.2e s per px, %d thread(s)).\n",
-    "       Global 250 m, roughly: %.1f h of reading on one reader, and %.1f h of network per ",
-    "worker for ~%.2g valid px -- the two overlap across workers.\n",
+    "       Global 250 m, roughly: %.1f h of reading on one reader, and %.1f worker-hours of ",
+    "network for ~%.2g valid px -- divided among the workers, and the two overlap.\n",
+    "       A probe unit is small, and pays per-call costs a full-width chunk spreads: an upper bound.\n",
     "       The probe's reads are ~2,000 columns wide: GDAL decompresses every full row, but R\n",
     "       converts only those columns, so a full-width map converts more per row than this.\n",
     "       Peak RAM of the probe's worker: %.1f GB."),
