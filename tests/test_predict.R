@@ -264,6 +264,11 @@ options(old_rc)
 ok["a_worker_over_its_memory_gives_way_to_a_fresh_one"] <-
   identical(as.integer(map_rc$manifest$worker_restarts), 2L) &&
   all(vapply(bands_all, function(b) identical(rd(map_rc, b), snap[[b]]), logical(1)))
+# Each unit was mapped by a process of its own, and each of the three exits
+# left its note beside the unit it followed -- the record a resumed map keeps.
+ok["each_unit_names_its_process_and_each_exit_leaves_a_note"] <-
+  length(unique(map_rc$units$pid)) == 3L && !anyNA(map_rc$units$pid) &&
+  length(Sys.glob(file.path(map_rc$run_dir, "units", "*", "recycled.rds"))) == 3L
 
 # ── 4. a part of the map, by the other engine ─────────────────────────────────
 part <- mp(run_id = "map_part_patch", engine = "patch", probe = FALSE,

@@ -1403,6 +1403,9 @@ print.dsm_prediction <- function(x, ...) {
       rec$worker  <- job$worker
       rec$threads <- job$threads
       rec$peak_gb <- .final_peak_gb()
+      # The process too: a slot's worker is replaced after a restart, and a
+      # resumed map starts new ones, so memory is followed by process.
+      rec$pid     <- Sys.getpid()
       # The record LAST: its existence is what says the unit is finished.
       safe_save_rds(rec, done, compress = FALSE)
       s <- rec$seconds
@@ -1415,6 +1418,11 @@ print.dsm_prediction <- function(x, ...) {
     if (is.finite(rss) && is.finite(job$recycle_gb %||% NA_real_) && rss > job$recycle_gb) {
       message(sprintf("  working set %.1f GB after %s, above %.1f GB: this worker exits, and a fresh one takes its place.",
                       rss, uid, job$recycle_gb))
+      # A note beside the unit it followed, so a restart is known after the
+      # run -- a resumed map's manifest counts only its own call's.
+      safe_save_rds(list(unit_id = uid, rss_gb = rss, limit_gb = job$recycle_gb,
+                         pid = Sys.getpid(), at = Sys.time()),
+                    file.path(udir, "recycled.rds"), compress = FALSE)
       return(list(worker = job$worker, peak_gb = .final_peak_gb(), recycled = TRUE, rss_gb = rss))
     }
   }
@@ -2037,7 +2045,8 @@ print.dsm_prediction <- function(x, ...) {
     write_s = r$seconds[["write"]], total_s = r$total_s,
     valid_px_per_s = r$n_valid / max(1e-9, r$total_s), worker = r$worker %||% NA_integer_,
     threads = r$threads %||% NA_integer_, step_rows = r$step_rows, chunk_cols = r$chunk_cols,
-    peak_gb = r$peak_gb %||% NA_real_, finished_at = as.character(r$finished_at))))
+    peak_gb = r$peak_gb %||% NA_real_, pid = r$pid %||% NA_integer_,
+    finished_at = as.character(r$finished_at))))
 }
 
 .predict_band_summary <- function(recs, band_tbl) {
