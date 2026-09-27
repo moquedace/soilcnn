@@ -63,7 +63,8 @@
   "train_table.R",      # the tabular runner
   "caret_adapter.R",    # optional: borrow caret's model library
   "api.R",              # dsm_load / spatial_cv / dsm_train
-  "final.R"             # dsm_final: the selected config under N seeds, and its report
+  "final.R",            # dsm_final: the selected config under N seeds, and its report
+  "predict.R"           # the network over a raster strip: fully convolutional where exact
 )
 
 # A MISSING MODULE IS AN ERROR, NOT A WARNING. This used to warn and carry on,

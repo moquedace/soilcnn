@@ -54,6 +54,7 @@ test_files <- c(
   "test_conformal.R",        # the interval covers what it promises
   "test_smearing.R",         # the mean surface beside the median surface
   "test_architecture.R",     # embed_pool wiring
+  "test_fcn.R",              # the fully convolutional path gives what the network gives
   "test_augmentation.R",     # D4 symmetries
   "test_run_dirs.R",         # "latest" by time, the pt-br csv round trip, resume identity
   "test_checks.R",           # the check ledger cannot pass by doing nothing

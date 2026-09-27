@@ -4421,3 +4421,104 @@ recebe nada).
 O U1 agora compara as duas fontes quando a rodada kNNDM existe, cada uma com a
 sua referência de DI e o seu limiar de AOA, construídos a partir do seu plano
 de folds.
+
+
+## 2026-09-27 — U2 e U1 com duas fontes; e o motor totalmente convolucional
+
+### U2: nada a treinar
+
+A rodada kNNDM do desenho C1 (`soc_0_5cm_design_knndm`) já continha uma
+configuração **idêntica** à implantada, igual em todos os hiperparâmetros,
+com resíduos para os 3.137 pontos fora do teste. O casamento por
+hiperparâmetros achou a config sem depender do nome.
+
+### U1 com as duas fontes de calibração (teste, 591 pontos)
+
+| 90% | cobertura | largura média | por nível | por DI |
+|---|---|---|---|---|
+| constante, blocos | 87,8% | 65,1 | 93/95/92/82/77 | 94/92/83/85/85 |
+| nível + DI, blocos | 86,6% | 63,8 | 86/90/85/83/90 | 84/88/84/86/91 |
+| constante, kNNDM | **90,0%** | 71,2 | 94/97/93/84/82 | 97/92/87/87/86 |
+| nível + DI, kNNDM | ~84,6% | ~61 | 83/88/85/80/86 | 84/88/82/82/87 |
+
+(Na última linha, o console cortou o nome e a cobertura; o valor sai da média
+dos quintos. O limiar da AOA sob kNNDM é 0,945, contra 0,700 sob blocos. A
+escala kNNDM ficou 3,55 + 0,234·nível + 17,3·DI.)
+
+**Leitura.** Com resíduos kNNDM, o nível + DI fica **mais estreito** no teste
+e cobre menos. Os pontos de validação kNNDM estão longe do treino (DI mediano
+0,51 contra 0,30 no teste), a escala atribui ao DI o erro maior deles, e o
+teste, perto dos perfis, recebe intervalos estreitos que o seu erro real
+ultrapassa. **O teste não consegue arbitrar a escolha para o mapa**: ele é
+sorteado perto dos perfis, e o mapa é na maior parte longe. O constante kNNDM
+acerta os 90% no teste, mas é desigual por nível.
+
+**Consequência de desenho.** As bandas de intervalo são função só da mediana
+e do DI (e dos objetos de calibração). O `dsm_predict()` pode escrevê-las para
+mais de uma fonte de calibração na mesma passada, sem rodar a rede de novo, e
+a escolha fica documentada ao lado.
+
+### O motor totalmente convolucional (`R/predict.R`)
+
+`fcn_predict_strip()` roda as convoluções de um ramo **uma vez** sobre uma
+faixa inteira do raster. Com padding `valid`, cada peça do ramo é exatamente
+equivariante à translação:
+
+- a convolução 3×3 sem padding;
+- o BatchNorm em avaliação (afim por canal);
+- a ativação;
+- o atalho residual (1×1, recortado no centro).
+
+Por pixel sobra pouco:
+
+- **`gap`:** média móvel do mapa de atributos (`avg_pool2d`, passo 1).
+- **`flatten`:** convolução com o peso da camada linear remodelado para
+  (K, C, o, o).
+- **SE com `gap`:** exato, porque o peso do SE é constante no patch e comuta
+  com a média.
+- **Depois:** o BatchNorm do embedding, o gate e a cabeça.
+
+São ~200 mil multiplicações por pixel por seed, em vez de 27 milhões: ~100×.
+
+**Onde não é exato, e o que acontece.** Um ramo `same` enche **cada patch** de
+zeros na própria borda; numa faixa, essas posições veriam vizinhos reais. SE
+com `flatten` não comuta com a camada linear. Esses ramos seguem patch a patch
+(`fcn_supported()` diz qual é qual). No caso típico, o 3×3 de um modelo
+`valid_large`, isso custa pouco. O cfg_003 implantado é exato inteiro.
+
+**Não finitos.** Valores não finitos entram como 0 antes das convoluções,
+porque um NaN se espalharia por qualquer algoritmo de convolução que o torch
+escolher. Só as janelas dos pixels já descartados pela regra da janela
+completa contêm um desses valores.
+
+**Verificação.** O `tests/test_fcn.R` monta 10 variantes de arquitetura com
+pesos aleatórios e estatísticas de BatchNorm **não triviais**; um BatchNorm
+recém-criado é a identidade e esconderia um erro de posição. As variantes são:
+
+- `gap` e `flatten`, com e sem resíduo;
+- SE com `gap`;
+- ramo duplo com gate vetorial, escalar e concatenação;
+- dois ramos `valid`;
+- `same`;
+- `flatten` + SE.
+
+Cada uma prevê uma faixa com buracos NaN de três jeitos: `model(patches)`, o
+motor patch a patch e o motor convolucional. Os três têm que concordar a 1e-4,
+e o `fcn_supported()` tem que dizer exatamente quais ramos pode rodar.
+Resultado: pendente.
+
+### O que vem: o `dsm_predict()`
+
+O desenho de leitura para rasters em faixas de uma linha:
+
+- **A unidade de trabalho é uma faixa de linhas,** processada em blocos de
+  colunas dentro do mesmo processo, com `readStart` e o cache do GDAL
+  dimensionado para as linhas da faixa. Assim cada linha de cada banda é
+  descomprimida uma vez, em vez de uma vez por bloco de coluna, como no `05`
+  com tiles 2D.
+- **As unidades são reservadas com `dir.create()`**, como no `dsm_final()`,
+  retomáveis, e montadas em VRT.
+- **Todas as bandas na mesma passada:** mediana, mínimo, máximo, média das
+  seeds, média com smearing, SD, MAD, DI, AOA e os intervalos (constante e
+  nível + DI) por fonte de calibração.
+- **P4:** igual ao `05` na grade de 20 km.
