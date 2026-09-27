@@ -5093,3 +5093,67 @@ coleta completa:
 
 **Plano B, se a raiz não tiver conserto:** um processo novo por unidade. A
 memória começa limpa em cada uma, a ~5 s de partida por unidade.
+
+
+## 2026-09-27 — T5: o torch não devolve o tensor das linhas do passo; elas passam a ir em blocos de canais
+
+**T5 (commit b56d6ff).** Cada experimento roda num processo R novo, com 15
+threads. Ele se repete 3 vezes sobre as mesmas 32 linhas de largura inteira
+(17.473–17.504). Depois de cada repetição e de uma coleta completa, mede-se o
+working set, em GB:
+
+| experimento | base | 1ª | 2ª | 3ª | cresce por rep. |
+|---|---|---|---|---|---|
+| `x[k, , ] <- tensor` (atribuição) | 0,34 | 3,97 | 7,69 | 11,40 | 3,71 |
+| tensor feito de vetor do R | 0,33 | 4,01 | 7,73 | 11,44 | 3,71 |
+| `terra::readValues()` sozinho | 0,34 | 3,97 | 3,97 | 3,97 | 0,00 |
+| o leitor do mapa | 0,34 | 7,90 | 11,64 | 15,37 | 3,74 |
+| o leitor com `torch_stack()` | 0,34 | 11,88 | 14,55 | 20,38 | 4,25 |
+
+- **O terra não vaza.** Os 3,6 GB que ficam na 1ª leitura são o cache de
+  blocos do GDAL (5% da RAM por padrão; o mapa usa 512 MB) e não crescem.
+- **O tensor das linhas nunca é devolvido.** São 181 × 32 × 160.312 float32
+  (160.298 colunas + 14 de halo) = 3,71 GB. Todo experimento que o monta
+  retém exatamente esse tamanho a cada repetição, seja montado canal a canal
+  com `[<-`, a partir de vetores do R ou com `torch_stack()`. Então não é a
+  atribuição nem a conversão: é o próprio tensor.
+- **O halo do passo volta a cada passo (T4).** São 181 × 14 × 160.312 × 4 =
+  1,6 GB. O que separa os dois é o tamanho: 2^31 bytes (2,15 GB) fica entre
+  eles, e é o mesmo limite do `torch_save()` nesta versão (ver
+  `safe_torch_save()`). Em algum ponto, um tamanho é guardado em 32 bits.
+
+**A correção (commit 02e4bc5).** O leitor devolve as linhas do passo em
+**blocos de canais consecutivos**, cada um abaixo de 1,5 GB
+(`.predict_channel_blocks()`):
+
+- na largura inteira, os 181 canais viram 3 blocos (73 + 73 + 35), com
+  1,50 GB no maior;
+- o halo é guardado por bloco;
+- a faixa de cada pedaço junta as colunas dos blocos, na ordem dos canais.
+
+Os valores são os mesmos; só muda o recipiente. A RAM também não muda: os
+blocos somam os mesmos bytes. Numa grade pequena, tudo cabe num bloco só. Por
+isso o `test_predict.R` força blocos de um canal cada
+(`options(dsm.predict.block_bytes = 5000)`), para que todo mapa do teste
+passe pela junção. Ele também confere a partição de um passo de largura
+inteira.
+
+**Perdeu:**
+
+- **Um processo por unidade (o plano B):** limparia a memória entre as
+  unidades, mas não dentro delas. Uma unidade do mapa global tem 256 linhas,
+  ou 8 passos, e reteria 8 × 3,7 ≈ 30 GB. Teria de ser um passo por unidade,
+  a ~5 s de partida cada.
+- **Passos de 16 linhas:** o tensor das linhas ficaria em 1,9 GB, abaixo de
+  2^31. Mas a parte convolucional da rede roda sobre as 2h + passo linhas da
+  faixa para dar as linhas do passo. Seriam 30 linhas de convolução para 16
+  de mapa (1,9×), contra 46 para 32 (1,4×), e a rede já é ~60% do tempo.
+
+**Para confirmar:**
+
+- **T5, 2ª rodada:** um tensor de 1,0, 1,9, 2,2 e 3,7 GB, cada um criado,
+  preenchido e solto. Os dois abaixo de 2^31 bytes devem voltar; os dois
+  acima, não. O leitor em blocos deve ficar plano.
+- **T3, 4ª rodada:** nas 224 linhas a partir do deslocamento 1.248, depois das
+  que o T4 e o T5 leram. O `t3_05` pede que o pico de cada worker pare de
+  subir.
