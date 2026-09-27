@@ -1594,7 +1594,8 @@ print.dsm_prediction <- function(x, ...) {
 
 # The densest group of profiles in one step's rows and chunk_cols columns: the
 # cheapest unit that still puts dozens of them through the whole chain.
-.predict_probe_points <- function(inp, grid, step_rows, max_points = 48L, max_cols = 2048L) {
+.predict_probe_points <- function(inp, grid, step_rows, keep = NULL, max_points = 48L,
+                                  max_cols = 2048L) {
   meta <- inp$meta
   if (!isTRUE(grid$same_as_store) || !all(c("x", "y", "sample_id") %in% names(meta))) return(NULL)
   ref  <- terra::rast(inp$files[1])
@@ -1603,6 +1604,7 @@ print.dsm_prediction <- function(x, ...) {
   col  <- as.integer(terra::colFromCell(ref, cell))
   h <- grid$h
   ok <- !is.na(cell) & row > h & row <= grid$nrow - h & col > h & col <= grid$ncol - h
+  if (!is.null(keep)) ok <- ok & meta$sample_id %in% keep
   if (!any(ok)) return(NULL)
   d <- data.frame(sample_id = meta$sample_id[ok], row = row[ok], col = col[ok])
   d <- d[order(d$row, d$col), , drop = FALSE]
@@ -1620,37 +1622,50 @@ print.dsm_prediction <- function(x, ...) {
   sel
 }
 
-# Each seed's transformed prediction for these profiles, as the final run
-# stored it (predictions/seedNNNN_pred_all.csv), or NULL if it stored none.
-.predict_stored_pred <- function(fr, sample_ids) {
-  out <- matrix(NA_real_, length(sample_ids), length(fr$seeds))
-  for (s in seq_along(fr$seeds)) {
-    p <- file.path(fr$run_dir, fr$config_id, "predictions", sprintf("seed%04d_pred_all.csv", fr$seeds[s]))
+# Every seed's transformed prediction for every profile the final run stored
+# one for (predictions/seedNNNN_pred_all.csv): list(ids, pred), pred a matrix
+# ids x seeds; NULL when a seed stored none.
+#
+# NOT EVERY PROFILE IS THERE. The refit's split drops the profiles its buffer
+# puts too near the test and validation sets -- 129 of the SOC store's 3,728
+# -- and those have no prediction to compare with. The probe draws from the
+# profiles that have one; the first P4 run drew from all of them, met a gap
+# and gave up.
+.predict_stored_all <- function(fr) {
+  tabs <- lapply(fr$seeds, function(s) {
+    p <- file.path(fr$run_dir, fr$config_id, "predictions", sprintf("seed%04d_pred_all.csv", s))
     if (!file.exists(p)) return(NULL)
     d <- safe_read_csv2(p)
     if (!all(c("sample_id", "pred_transform") %in% names(d))) return(NULL)
-    out[, s] <- as.numeric(d$pred_transform[match(sample_ids, d$sample_id)])
-  }
-  out
+    d[is.finite(d$pred_transform), c("sample_id", "pred_transform"), drop = FALSE]
+  })
+  if (any(vapply(tabs, is.null, logical(1)))) return(NULL)
+  ids <- Reduce(intersect, lapply(tabs, function(d) d$sample_id))
+  if (length(ids) == 0L) return(NULL)
+  pred <- vapply(tabs, function(d) as.numeric(d$pred_transform[match(ids, d$sample_id)]),
+                 numeric(length(ids)))
+  list(ids = ids, pred = matrix(pred, nrow = length(ids)))
 }
 
 .predict_probe <- function(job, fr, inp, grid, run_dir, say, tol = 1e-3) {
-  pts <- .predict_probe_points(inp, grid, job$step_rows)
+  st <- .predict_stored_all(fr)
+  if (is.null(st)) {
+    reason <- "the final run stored no transform-space prediction (pred_transform) for its seeds"
+    say("\nProbe: not applicable -- ", reason, ".")
+    return(list(status = "not_applicable", reason = reason))
+  }
+  pts <- .predict_probe_points(inp, grid, job$step_rows, keep = st$ids)
   if (is.null(pts)) {
     reason <- if (!isTRUE(grid$same_as_store)) {
       "these rasters are not the grid the store was extracted from, so no profile is a pixel of this map"
-    } else "no profile of the store is far enough from the grid's edge"
+    } else "no profile with a stored prediction is far enough from the grid's edge"
     say("\nProbe: not applicable -- ", reason, ".")
     return(list(status = "not_applicable", reason = reason))
   }
-  stored <- .predict_stored_pred(fr, pts$sample_id)
-  if (is.null(stored) || anyNA(stored)) {
-    reason <- "the final run stored no transform-space prediction for these profiles"
-    say("\nProbe: not applicable -- ", reason, ".")
-    return(list(status = "not_applicable", reason = reason))
-  }
-  say(sprintf("\nProbe: %d profile(s) in rows %d-%d, cols %d-%d, through the whole chain...",
-              nrow(pts), min(pts$row), max(pts$row), min(pts$col), max(pts$col)))
+  stored <- st$pred[match(pts$sample_id, st$ids), , drop = FALSE]
+  say(sprintf("\nProbe: %d profile(s) in rows %d-%d, cols %d-%d, through the whole chain (%d of %d profiles have a stored prediction)...",
+              nrow(pts), min(pts$row), max(pts$row), min(pts$col), max(pts$col),
+              length(st$ids), nrow(inp$meta)))
   pdir <- file.path(run_dir, "probe")
   unlink(pdir, recursive = TRUE)
   pj <- job

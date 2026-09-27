@@ -287,6 +287,22 @@ ok["and_nothing_was_mapped"] <-
   !any(file.exists(file.path(fin$run_dir, "maps", "map_swapped", "units",
                              sprintf("u%05d", 1:3), "done.rds")))
 
+# A profile the refit left out -- its buffer drops some near the test set --
+# has no stored prediction. The probe must draw from the ones that have one,
+# not give up: P4's first run on the SOC data met 129 such profiles and did.
+pa_path <- file.path(fin$run_dir, cid, "predictions", "seed0042_pred_all.csv")
+pa_orig <- readLines(pa_path)
+pa <- safe_read_csv2(pa_path)
+row6 <- data$store$meta$sample_id[abs(data$store$meta$y - (y1 - 5.5 * cs)) < 1e-9]
+safe_write_csv2(pa[!pa$sample_id %in% row6, , drop = FALSE], pa_path)
+gaps <- mp(run_id = "map_probe_gaps", bands = "ensemble_median",
+           extent = list(rows = c(20L, 20L), cols = c(20L, 22L)))
+gap_ids <- safe_read_csv2(file.path(gaps$run_dir, "probe.csv"))$sample_id
+writeLines(pa_orig, pa_path)
+ok["the_probe_draws_only_profiles_with_a_stored_prediction"] <-
+  length(row6) == 9L && identical(gaps$probe$status, "pass") && gaps$probe$n >= 9L &&
+  !any(gap_ids %in% row6)
+
 # ── 7. two sources over the same profiles share one DI ────────────────────────
 two <- mp(run_id = "map_sources", probe = FALSE, calibration = c(block = fit$run_dir, again = fit$run_dir),
           bands = c("ensemble_median", "di", "aoa"), extent = list(rows = c(10L, 20L), cols = c(10L, 30L)))
