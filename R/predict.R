@@ -389,7 +389,7 @@ dsm_predict <- function(final, data, rasters = NULL, qc_table = NULL, extent = N
 
   # ── 5. the work: workers, steps, units ────────────────────────────────────
   work  <- .predict_work_plan(grid, inp, fr$cfg, band_tbl, n_cores, tpw, max_ram_gb,
-                              unit_rows, step_rows, chunk_cols, say)
+                              unit_rows, step_rows, chunk_cols, say, n_seeds = length(fr$seeds))
   units <- .predict_units(grid$rows, grid$cols, work$unit_rows)
   settings <- .predict_settings(fr, inp, grid, work, band_tbl, alpha, clamp, engine, cal)
   # THE SETTINGS ARE LOCKED BY THE FIRST FINISHED UNIT, not by the first call:
@@ -1036,29 +1036,45 @@ print.dsm_prediction <- function(x, ...) {
 # ── helpers: the work ─────────────────────────────────────────────────────────
 #
 # THE RAM MODEL, per worker, for a step of g rows over W columns of C channels:
-# the step's rows as float32 (the new rows and the kept halo), the mask, the
-# double copies one band's read goes through, the network's strip and feature
-# maps over one chunk, the band vectors of a step; then GDAL's cache (0.5 GB),
-# an R + torch + terra session with the seeds' models (2 GB), and the torch
-# garbage the collector leaves between two full collections plus the freed
-# blocks torch keeps for reuse (3.5 GB: ~2.4 GB/s for 1 s -- P4 measured that
-# rate for the deployed network -- and a cache capped at the 1 GB
-# light-collection threshold; see .predict_gc_hook()). An estimate, said to
-# be one: the real peak of every worker is measured and written beside it.
-.predict_worker_gb <- function(g, h, w_out, n_ch, chunk_cols, conv_sum) {
+#
+#   the step's rows as float32, the kept halo and the new rows, and the mask
+#   the next halo, cloned while the step's rows are still alive
+#   one band in flight: its R doubles, its float32 tensor, its masks
+#   the network's strip and feature maps over one chunk
+#   the step's per-pixel R vectors -- the seeds' predictions twice (as read and
+#     native), every band's values, four columns per interval computed -- as
+#     if every pixel were valid, since a band of land can be
+#
+# then GDAL's cache (0.5 GB), an R + torch + terra session with the seeds'
+# models (2 GB), and the torch garbage the collector leaves between two full
+# collections plus the freed blocks torch keeps for reuse (3.5 GB: ~2.4 GB/s
+# for 1 s -- P4 measured that rate for the deployed network -- and a cache
+# capped at the 1 GB light-collection threshold; see .predict_gc_hook()).
+#
+# The first version counted neither the halo's clone nor the R vectors, and a
+# band's copies as three doubles; on full-width rows T3 measured 24-32 GB
+# against its 12.4 (with the reader's own garbage, since fixed). An estimate,
+# said to be one: the real peak of every worker is measured and written
+# beside it.
+.predict_worker_gb <- function(g, h, w_out, n_ch, chunk_cols, conv_sum, n_seeds = 10L,
+                               n_bands = 21L, n_iv = 4L) {
   w_buf <- w_out + 2 * h
   bytes <- (g + 2 * h) * w_buf * (4 * n_ch + 1) +
-    3 * g * w_buf * 8 +
+    2 * h * w_buf * 4 * n_ch +
+    g * w_buf * 20 +
     2 * (g + 2 * h) * (min(chunk_cols, w_out) + 2 * h) * (n_ch + 4 * conv_sum) * 4 +
-    6 * g * w_out * 8
+    g * w_out * (8 * (2 * n_seeds + n_bands + 4 * n_iv) + 16)
   bytes / 1e9 + 0.5 + 2 + 3.5
 }
 
 .predict_work_plan <- function(grid, inp, cfg, band_tbl, n_cores, tpw, max_ram_gb,
-                               unit_rows, step_rows, chunk_cols, say) {
+                               unit_rows, step_rows, chunk_cols, say, n_seeds = 10L) {
   n_ch <- length(inp$predictors)
   conv_sum <- sum(as.integer(cfg$conv_channels[[1]]))
-  gb <- function(g) .predict_worker_gb(g, grid$h, grid$n_cols_out, n_ch, chunk_cols, conv_sum)
+  iv <- band_tbl[band_tbl$kind == "interval", , drop = FALSE]
+  n_iv <- nrow(unique(iv[, c("source", "label", "method"), drop = FALSE]))
+  gb <- function(g) .predict_worker_gb(g, grid$h, grid$n_cols_out, n_ch, chunk_cols, conv_sum,
+                                       n_seeds = n_seeds, n_bands = nrow(band_tbl), n_iv = n_iv)
   n_workers <- max(1L, n_cores %/% tpw)
   budget <- max_ram_gb
   if (is.null(budget) && requireNamespace("ps", quietly = TRUE)) {
@@ -1066,12 +1082,24 @@ print.dsm_prediction <- function(x, ...) {
     if (is.finite(avail)) budget <- 0.7 * avail
   }
   cap <- 16L * as.integer(ceiling(grid$n_rows_out / 16))
+  n_asked <- n_workers
   if (is.null(step_rows)) {
     cand <- seq(128L, 16L, by = -16L)
     cand <- cand[cand <= max(16L, cap)]
+    # As many workers as fit, then the largest step those fit with: the step
+    # was sized for the workers asked for and the workers then cut, which left
+    # two workers on the step three would have needed.
     step_rows <- if (is.null(budget)) cand[1] else {
-      fit <- cand[vapply(cand, gb, numeric(1)) <= budget / n_workers]
+      repeat {
+        fit <- cand[vapply(cand, gb, numeric(1)) <= budget / n_workers]
+        if (length(fit) > 0L || n_workers == 1L) break
+        n_workers <- n_workers - 1L
+      }
       if (length(fit)) fit[1] else 16L
+    }
+    if (n_workers < n_asked) {
+      say(sprintf("RAM fits %d of the %d workers asked for (%.1f GB budget, ~%.1f GB each at steps of %d rows). The numbers do not change -- only the time.",
+                  n_workers, n_asked, budget, gb(step_rows), step_rows))
     }
   } else if (step_rows %% 16L != 0L) {
     step_rows <- 16L * as.integer(ceiling(step_rows / 16))
@@ -1089,6 +1117,11 @@ print.dsm_prediction <- function(x, ...) {
       say(sprintf("WARNING: one worker is estimated at %.1f GB against a budget of %.1f GB. It is started anyway.",
                   gb(step_rows), budget))
     }
+  }
+  idle <- n_cores - n_workers * tpw
+  if (n_workers < n_asked && idle >= n_workers) {
+    say(sprintf("  %d of the %d cores would sit idle: threads_per_worker = %d would use them.",
+                idle, n_cores, n_cores %/% n_workers))
   }
   if (is.null(unit_rows)) {
     k <- max(1L, min(8L, as.integer(ceiling(grid$n_rows_out / (4 * n_workers * step_rows)))))
