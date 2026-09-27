@@ -19,8 +19,8 @@
 #
 # Each layout maps ITS OWN band of full-width rows near 47 N, next to each
 # other -- the same latitude, so about the same land, and none of them in the
-# operating system's file cache when its turn comes. 32 rows a unit, every
-# band the global map writes, both calibration sources.
+# operating system's file cache when its turn comes. Units of two steps of 32
+# rows, every band the global map writes, both calibration sources.
 #
 # WHAT IS COMPARED: valid pixels per second of wall time; where a unit's time
 # goes (read / network / DI); seconds per full row read and per valid pixel;
@@ -35,7 +35,7 @@
 # in outputs/.../tuning/.../capability_sweep/t3_predict/. A second run of the
 # same commit resumes the maps and only repeats the tables.
 #
-# COST: ~25-35 min.
+# COST: ~30-40 min.
 #
 # Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/examples/soc_stock_0_5cm/_t3_predict_layouts.R")
 # ══════════════════════════════════════════════════════════════════════════════
@@ -84,7 +84,8 @@ maps_dir     <- file.path(sp_dir, "dsm_predict")
 t3_dir       <- file.path(tuning_base, "capability_sweep", "t3_predict")
 code_tag     <- .git_commit_at(project_root)
 n_cores      <- env_int("soc_t3_n_cores", 15L)
-unit_rows    <- 32L
+unit_rows    <- 64L                  # two steps: the halo moves within the window
+step_rows    <- 32L
 
 # The layouts: the same cores, split two ways.
 #
@@ -99,7 +100,7 @@ unit_rows    <- 32L
 layouts <- tibble::tibble(layout = c("a", "b"), threads = c(7L, 15L), units = c(4L, 3L))
 # Rows the earlier runs mapped may still be in the file cache: the first
 # mapped 448 from the first profile's, the second (commit dda346b) the 224
-# after those, the third the 224 after those.
+# after those, the third and the fourth 224 each after those.
 #
 # THE SECOND RUN found the leak this one checks for: a worker's peak climbed
 # ~5 GB a unit (a: 15.9 -> 21.1 GB; b: 16.9 -> 21.9 -> 25.9), while the first
@@ -109,13 +110,18 @@ layouts <- tibble::tibble(layout = c("a", "b"), threads = c(7L, 15L), units = c(
 #
 # THE THIRD RUN (commit a786d8b), with the strips in a few fixed shapes and
 # oneDNN's caches capped, still climbed ~4.3 GB a unit: it was not oneDNN.
-# T4 put the climb in the read phase and T5 in the tensor itself -- R torch
-# 0.17.0 here never gives back a tensor of 2^31 bytes or more, and a
-# full-width step's rows were one of 3.7 GB. They are now held in blocks of
-# channels under 1.5 GB (.predict_channel_blocks()). This run maps the rows
-# after T4's (288 from offset 896) and T5's (the next 32), starting a unit
-# past them so that not even its first halo is in the file cache.
-offset_rows <- env_int("soc_t3_offset_rows", 1248L, min = 0L)
+# T4 put the climb in the read phase. THE FOURTH RUN (commit 351c18c) held the
+# rows in channel blocks under 2^31 bytes, the guess T5's first run made, and
+# still climbed: a 13.9 -> 19.7 GB over 4 units, b 15.2 -> 21.2 over 3. T6
+# found the cause -- mimalloc, under libtorch on Windows, neither gives back
+# nor reuses a freed block of a few hundred MB, so every step's fresh rows
+# (3.7 GB), halo (1.6 GB) and halo clone (1.6 GB) stayed. The step's window is
+# now made once per worker (.predict_window()), and a worker over its memory
+# after a unit gives way to a fresh one (.predict_recycle_gb()). This run's
+# units are two steps, so the halo moves within the window at full width; the
+# RAM model, 1.6 GB lighter without the clone, may now give layout a its two
+# workers. It maps the 448 rows after the fourth run's.
+offset_rows <- env_int("soc_t3_offset_rows", 1472L, min = 0L)
 
 final_run_id <- latest_run_dir(final_base, prefix = "final_",
                                require_file = file.path("comparison", "final_run_summary.rds"),
@@ -160,7 +166,8 @@ message("T3 -- the map on the 250 m grid: workers x threads, full-width rows")
 message(strrep("=", 78))
 message("  final run   : ", final_dir, "  (", config_id, ", ", length(summ$seeds), " seeds)")
 message("  grid        : ", format(n_row_250, big.mark = ","), " x ", format(n_col_250, big.mark = ","),
-        " | ", n_cores, " cores | units of ", unit_rows, " rows, full width")
+        " | ", n_cores, " cores | units of ", unit_rows, " rows in steps of ", step_rows,
+        ", full width")
 for (i in seq_len(nrow(layouts))) {
   message(sprintf("  layout %s   : %d thread(s) a worker, rows %d-%d (%d units)", layouts$layout[i],
                   layouts$threads[i], layouts$r0[i], layouts$r1[i], layouts$units[i]))
@@ -178,7 +185,7 @@ for (i in seq_len(nrow(layouts))) {
   m <- dsm_predict(final_dir, data, rasters = rt, qc_table = qc_path, calibration = calibration,
                    extent = list(rows = c(ly$r0, ly$r1), cols = c(1L, n_col_250)),
                    n_cores = n_cores, threads_per_worker = ly$threads,
-                   unit_rows = unit_rows, step_rows = unit_rows,
+                   unit_rows = unit_rows, step_rows = step_rows,
                    probe = identical(ly$layout, "a"), output_dir = maps_dir,
                    run_id = sprintf("t3_%s_%s", ly$layout, code_tag))
   maps[[ly$layout]] <- m
