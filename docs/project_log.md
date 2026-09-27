@@ -5011,3 +5011,41 @@ recalculada em double.
 
 **T3, terceira rodada** (faixas novas de novo): **t3_05** exige que o pico de
 cada worker pare de crescer de uma unidade para a seguinte.
+
+
+## 2026-09-27 — T3, terceira rodada: o vazamento não era o cache do oneDNN; o T4 mede fase a fase
+
+**Com o código a786d8b:**
+
+- `test_predict.R` 29/29 e P4 10/10, a exatidão intacta com as faixas de
+  formato fixo e o DI num `addmm` só;
+- no mapa de 20 km, o pico de cada worker ficou em 6,7 GB (era 9,5);
+- **T3:** 1 × 15 threads = **20.745 px/s** (~33 h para o globo). O arranjo
+  2 × 7 foi cortado para 1 × 7 pelo orçamento de RAM (32 GB, 16,2 por
+  worker): 11.793.
+
+**O pico continua subindo por unidade:** 14,4 → 27,7 GB em 4 unidades de um
+passo (1 × 7), e 17,1 → 25,7 GB em 3 (1 × 15). São ~4,3 GB por unidade, com
+formatos fixos e caches limitados. Então **o cache de primitives do oneDNN
+não era a causa**, ou não a única.
+
+**O que os números sugerem:** ~4,3 GB é perto do buffer de um passo na
+largura inteira (halo 1,6 + linhas 3,7 GB). Na grade de 20 km, onde esse
+buffer tem ~0,2 GB, o crescimento quase não aparece. Algo que o passo lê
+fica retido. Não há vazamento conhecido e documentado no GDAL (procurado).
+
+**T4, em vez de outro palpite.** O `dsm_predict()` ganhou um rastreio opcional
+(`options(dsm.predict.trace_mem = TRUE)`): cada unidade grava o **working set
+atual** do worker depois de cada fase de cada passo (início, leitura, rede +
+DI, bandas, escrita, coleta completa, fim da unidade).
+
+Se o nível que a coleta deixa sobe de passo em passo, a fase que o precede é o
+vazamento. O `_t4_worker_memory.R` roda 3 unidades de largura inteira em três
+configurações, cada uma uma hipótese:
+
+- **como está;**
+- **`GDAL_NUM_THREADS = 1`:** decodificação do GDAL em várias threads;
+- **`MKL_DISABLE_FAST_MM = 1`:** o gerenciador de memória do MKL guarda
+  buffers.
+
+Desligado, o rastreio não custa nada.
