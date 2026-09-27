@@ -1176,6 +1176,9 @@ print.dsm_prediction <- function(x, ...) {
          smearing = s$smearing, intervals = s$intervals)),
        threads = tpw, gdal_cache_mb = 512L, blocky = work$blocky,
        gc_threshold_mb = 1000L, gc_every_s = 1,
+       # The largest tensor a step's rows are held in (.predict_channel_blocks());
+       # the test suite lowers it to exercise several blocks on a small grid.
+       block_bytes = getOption("dsm.predict.block_bytes", 1.5e9),
        units_dir = file.path(run_dir, "units"), probe_cells = NULL,
        # options(dsm.predict.trace_mem = TRUE): every unit records the worker's
        # CURRENT working set after each phase of each step (see .predict_unit).
@@ -1383,21 +1386,48 @@ print.dsm_prediction <- function(x, ...) {
        fcn_engine = if (identical(job$engine, "patch")) "patch" else "fcn")
 }
 
+# THE STEP'S ROWS IN BLOCKS OF CHANNELS, NONE OF THEM 2 GiB.
+#
+# R torch 0.17.0 here does not give back a tensor as large as a full-width
+# step's rows. T5 made one of 3.71 GB, dropped it and ran a full collection,
+# three times: the working set rose 3.71 GB each time -- whether the tensor
+# was filled band by band with `[<-`, made from R vectors, or built by
+# torch_stack() -- while terra's reads alone stayed flat. Yet the step's
+# 1.6 GB halo came back every step (T4). Between the two sits 2^31 bytes, the
+# limit torch_save() has in this version (see safe_torch_save()): somewhere a
+# size lives in 32 bits. So the rows are held as consecutive blocks of
+# channels, each under `max_bytes`, and a strip is joined from the blocks'
+# columns.
+.predict_channel_blocks <- function(n_ch, rows, w_buf, max_bytes = 1.5e9) {
+  per_channel <- 4 * as.numeric(rows) * w_buf
+  if (per_channel > max_bytes) {
+    stop(sprintf("One channel of a step is %.2f GB (%d rows x %s columns), over the %.2f GB a tensor may take here: use a smaller step_rows.",
+                 per_channel / 1e9, as.integer(rows), format(w_buf, big.mark = ","), max_bytes / 1e9),
+         call. = FALSE)
+  }
+  k <- max(1L, as.integer(floor(max_bytes / per_channel)))
+  unname(split(seq_len(n_ch), ceiling(seq_len(n_ch) / k)))
+}
+
 # Rows of every band, QC'd and scaled, as float32 over the unit's buffer
-# columns, with the mask of cells finite in every channel. Rows and columns
-# outside the raster are 0 and masked: the full-window rule then discards any
-# centre whose window leaves the raster, which is the rule stage 05 applied.
-.predict_read_rows <- function(rows, rc0, rc1, pad_l, pad_r, w_buf, env, job) {
+# columns -- a list of tensors, one per block of channels -- with the mask of
+# cells finite in every channel. Rows and columns outside the raster are 0 and
+# masked: the full-window rule then discards any centre whose window leaves
+# the raster, which is the rule stage 05 applied.
+.predict_read_rows <- function(rows, rc0, rc1, pad_l, pad_r, w_buf, env, job, blocks = NULL) {
   nr <- length(rows)
+  blocks <- blocks %||% .predict_channel_blocks(env$n_ch, nr, w_buf)
   inside <- rows >= 1L & rows <= job$grid$nrow
   if (!any(inside)) {
-    return(list(x = torch::torch_zeros(c(env$n_ch, nr, w_buf)),
+    return(list(x = lapply(blocks, function(ch) torch::torch_zeros(c(length(ch), nr, w_buf))),
                 fin = torch::torch_zeros(c(nr, w_buf), dtype = torch::torch_bool())))
   }
   ra <- min(rows[inside]); rn <- sum(inside)
   pads <- c(pad_l, pad_r, ra - rows[1], nr - (ra - rows[1]) - rn)
   wn <- rc1 - rc0 + 1L
-  x <- torch::torch_empty(c(env$n_ch, nr, w_buf))
+  x <- lapply(blocks, function(ch) torch::torch_empty(c(length(ch), nr, w_buf)))
+  block_of <- rep(seq_along(blocks), lengths(blocks))
+  pos_in   <- unlist(lapply(blocks, seq_along))
   fok <- NULL
   for (k in seq_len(env$n_ch)) {
     v <- terra::readValues(env$srcs[[k]], row = ra, nrows = rn, col = rc0, ncols = wn, mat = FALSE)
@@ -1416,7 +1446,7 @@ print.dsm_prediction <- function(x, ...) {
     f <- torch::torch_isfinite(t)
     fok <- if (is.null(fok)) f else torch::torch_logical_and(fok, f)
     t$masked_fill_(f$logical_not(), 0)
-    x[k, , ] <- if (any(pads > 0L)) torch::nnf_pad(t, pads) else t
+    x[[block_of[k]]][pos_in[k], , ] <- if (any(pads > 0L)) torch::nnf_pad(t, pads) else t
     rm(t, f)
     env$gc_hook()
   }
@@ -1603,6 +1633,10 @@ print.dsm_prediction <- function(x, ...) {
   bc0 <- u$c0 - h                               # raster column of buffer column 1
   rc0 <- max(1L, bc0); rc1 <- min(job$grid$ncol, u$c1 + h)
   pad_l <- rc0 - bc0; pad_r <- (u$c1 + h) - rc1
+  # One partition of the channels for the halo and the rows alike, sized on
+  # the larger of the two (see .predict_channel_blocks()).
+  blocks <- .predict_channel_blocks(C, max(job$step_rows, 2L * h), w_buf,
+                                    max_bytes = job$block_bytes %||% 1.5e9)
 
   unit_dir <- file.path(job$units_dir, u$unit_id)
   create_output_dirs(unit_dir)
@@ -1648,12 +1682,14 @@ print.dsm_prediction <- function(x, ...) {
     # two afterwards: the block, its halo's clone and its rows' copy alive
     # together were ~11 GB of a full-width worker's peak (T3).
     if (first && h > 0L) {
-      hb <- .predict_read_rows((o0 - h):(o0 + h - 1L), rc0, rc1, pad_l, pad_r, w_buf, env, job)
+      hb <- .predict_read_rows((o0 - h):(o0 + h - 1L), rc0, rc1, pad_l, pad_r, w_buf, env, job,
+                               blocks = blocks)
       halo <- hb$x; fin_halo <- hb$fin
       rm(hb)
     }
     first <- FALSE
-    blk <- .predict_read_rows((o0 + h):(o1 + h), rc0, rc1, pad_l, pad_r, w_buf, env, job)
+    blk <- .predict_read_rows((o0 + h):(o1 + h), rc0, rc1, pad_l, pad_r, w_buf, env, job,
+                              blocks = blocks)
     new <- blk$x; fin_new <- blk$fin
     rm(blk)
     tm[["read"]] <- tm[["read"]] + secs(tr)
@@ -1685,9 +1721,16 @@ print.dsm_prediction <- function(x, ...) {
       a0 <- j0 + ((min(j) - j0) %/% q) * q
       a1 <- min(j1, a0 + q * as.integer(ceiling((max(j) - a0 + 1) / q)) - 1L)
       bcols <- a0:(a1 + 2L * h)
-      strip <- if (h > 0L) {
-        torch::torch_cat(list(halo[, , bcols, drop = FALSE], new[, , bcols, drop = FALSE]), dim = 2L)
-      } else new[, , bcols, drop = FALSE]
+      # Each block's halo and rows over the strip's columns, then the blocks
+      # joined back in channel order.
+      pieces <- lapply(seq_along(blocks), function(b) {
+        if (h > 0L) {
+          torch::torch_cat(list(halo[[b]][, , bcols, drop = FALSE], new[[b]][, , bcols, drop = FALSE]),
+                           dim = 2L)
+        } else new[[b]][, , bcols, drop = FALSE]
+      })
+      strip <- if (length(pieces) == 1L) pieces[[1]] else torch::torch_cat(pieces, dim = 1L)
+      rm(pieces)
       strip <- strip$contiguous()
       cs <- cbind(i + h, j - a0 + 1L + h)
       tn <- Sys.time()
@@ -1763,10 +1806,12 @@ print.dsm_prediction <- function(x, ...) {
     # ── the halo the next step keeps ────────────────────────────────────────
     if (h > 0L) {
       if (gs >= 2L * h) {
-        halo <- new[, (gs - 2L * h + 1L):gs, , drop = FALSE]$clone()
+        halo <- lapply(new, function(z) z[, (gs - 2L * h + 1L):gs, , drop = FALSE]$clone())
         fin_halo <- fin_new[(gs - 2L * h + 1L):gs, , drop = FALSE]$clone()
       } else {
-        halo <- torch::torch_cat(list(halo[, (gs + 1L):(2L * h), , drop = FALSE], new), dim = 2L)
+        halo <- lapply(seq_along(new), function(b) {
+          torch::torch_cat(list(halo[[b]][, (gs + 1L):(2L * h), , drop = FALSE], new[[b]]), dim = 2L)
+        })
         fin_halo <- torch::torch_cat(list(fin_halo[(gs + 1L):(2L * h), , drop = FALSE], fin_new), dim = 1L)
       }
     }
