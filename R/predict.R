@@ -1469,7 +1469,9 @@ print.dsm_prediction <- function(x, ...) {
 # times left 3 GB behind, 0.5 GB ones 1.5 GB, while blocks of ~20 MB were
 # reused. R let go of every tensor -- T6 counted their finalizers -- emptying
 # a tensor's storage by hand gave nothing back, and neither one thread nor
-# mimalloc's own options (purge at once, no arenas) changed it. A full-width
+# mimalloc's own options (purge at once, no arenas) changed it. Its purge
+# never runs in 2.2.3: mi_arenas_try_purge() returns when the delay HAS
+# expired (arenas_expire < now; upstream's dev branch has > now). A full-width
 # step allocated its rows (3.7 GB), its first halo (1.6 GB) and the next
 # halo's clone (1.6 GB) afresh, and each worker grew by about that a step.
 # Holding the rows in blocks of channels under 2^31 bytes, the guess T5's

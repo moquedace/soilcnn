@@ -5218,3 +5218,104 @@ repetido 3 vezes, com um finalizador R que conta em cada tensor:
 
 O primeiro experimento também grava a versão, as opções e as estatísticas do
 mimalloc.
+
+
+## 2026-09-27 — T6: quem segura a memória é o mimalloc; a janela do passo passa a viver no worker
+
+**T6 (commit a7421ff).** Cada experimento roda num processo novo, repetido 3
+vezes, e o working set é medido depois de cada coleta completa. "Cresce" é o
+aumento médio por repetição, em GB:
+
+| experimento | tensor (GB) | cresce | finalizados |
+|---|---|---|---|
+| tensor de 1,0 GB | 1,0 | 0,95 | 3 de 3 |
+| … esvaziado à mão (`set_()`) | 1,0 | 0,95 (caiu 0 ao esvaziar) | 3 de 3 |
+| … com 1 thread | 1,0 | 0,95 | 3 de 3 |
+| … `MIMALLOC_PURGE_DELAY=0` | 1,0 | 1,00 | 3 de 3 |
+| … `MIMALLOC_DISALLOW_ARENA_ALLOC=1` | 1,0 | 0,95 | 3 de 3 |
+| tensor de 0,1 / 0,25 / 0,5 GB | | 0,05 / 0,20 / 0,45 | todos |
+| leitor, blocos de 1,5 GB | 3,71 | 3,72 | 9 de 9 |
+| leitor, blocos de 64 MB | 3,71 | 0,45 (0 e depois 0,9) | 183 de 183 |
+| leitor, blocos de um canal (20 MB) | 3,71 | 0,30 (0 e depois 0,6) | 543 de 543 |
+| leitor, 1,5 GB, esvaziado à mão | 3,71 | 3,74 | 9 de 9 |
+| leitor, 1,5 GB, 1 thread / purge 0 | 3,71 | 3,71 / 3,71 | 9 de 9 |
+| leitor, 1,5 GB, sem arenas | 3,71 | **10,2** | 9 de 9 |
+
+- **Não é o R.** O R finalizou todos os tensores: o contador bate em todos os
+  experimentos.
+- **Não é uma referência presa no torch.** Esvaziar o armazenamento à mão
+  antes de soltar o objeto não devolveu nada.
+- **É o alocador.** Com 1 thread, com as opções do mimalloc, e em todos os
+  tamanhos de 0,25 GB para cima, cresce o tamanho inteiro a cada vez. Sem
+  arenas fica muito pior.
+
+**O que o próprio mimalloc disse** (v2.2.3, compilado em 23/07/2025, no
+`c10.dll`), na saída do experimento de 1,0 GB:
+
+- 3 segmentos alocados, no máximo 1 vivo por vez: cada tensor foi liberado
+  antes do próximo;
+- mas 3 arenas de 1 GiB reservadas, uma nova a cada vez;
+- 2,8 GiB ainda "committed" na saída;
+- **zero purges**: nada devolvido ao sistema.
+
+O bloco liberado não é devolvido e também não é reaproveitado pelo próximo
+do mesmo tamanho.
+
+- **Por que nada volta:** nas tags v2.2.3 e v2.2.4, `mi_arenas_try_purge`
+  sai sem purgar justamente quando o prazo já venceu (`arenas_expire < now`).
+  No ramo `dev` do mimalloc a condição é `> now`. É a explicação dos zero
+  purges.
+- **Por que não reaproveita:** não localizei no código, mas o efeito medido
+  é o mesmo.
+
+**A correção (commit 2504916): a janela do passo vive no worker.** O halo e
+as linhas do passo viram um tensor só, `[halo; linhas]`, feito uma vez por
+worker e guardado entre as unidades:
+
+- a leitura escreve dentro dele (`into`, `at`);
+- as faixas da rede são cópias das colunas dele;
+- as últimas 2h linhas de um passo sobem para o topo, no lugar, para o
+  próximo passo.
+
+Nada desse tamanho é alocado de novo. Na largura inteira, os 3,7 + 1,6 + 1,6
+GB que cada passo alocava viram uma janela de 5,3 GB, alocada uma vez.
+
+- O plano mantém cada passo com pelo menos 2h linhas. Só o último passo de
+  uma unidade pode ser menor, e esse não guarda halo.
+- O modelo de RAM perde o clone do halo: 16,2 → ~14,6 GB por worker. Isso
+  pode dar ao arranjo 2 × 7 os seus dois workers.
+- Os blocos de canais (02e4bc5) foram removidos. O T6 para com um aviso: ele
+  mediu os blocos e roda em a7421ff.
+
+**A rede de segurança (commit 3ed10c1).** Os tensores pequenos também não
+voltam ao sistema, e os de 64–100 MB só às vezes são reaproveitados. Uma
+subida lenta ao longo de dois dias derrubaria a rodada global onde nenhum
+teste curto enxerga. Então:
+
+- um worker cujo working set, depois da coleta que fecha uma unidade, passa
+  do limite sai, e o mapa inicia outro no lugar enquanto houver unidades;
+- o limite é a parte do worker no orçamento de RAM, no máximo 25% acima da
+  estimativa e nunca abaixo dela;
+- cada reinício custa segundos; uma unidade do mapa global, minutos;
+- os reinícios ficam no manifesto (`worker_restarts`) e no print.
+
+**Perderam:**
+
+- **Blocos pequenos** (64 MB, um canal): cresceram 0,3–0,45 GB por
+  repetição, menos, mas não zero. Ao longo de ~2.000 passos, ainda estouraria.
+- **Opções do mimalloc:** nenhuma mudou nada, e sem arenas piorou.
+- **Um processo por unidade sempre:** limparia entre as unidades, mas não
+  dentro delas (8 passos). Custaria o reinício em todo mapa, inclusive nos
+  pequenos (o de 20 km, os testes). O reinício por limite só age quando
+  precisa.
+
+**`tests/test_predict.R`** ganhou três checagens (31 no total):
+
+- a janela é feita uma vez por formato;
+- unidades de dois passos (halo movido dentro da janela, janela reusada
+  pela unidade seguinte) dão o mapa idêntico, bit a bit;
+- com um limite que todo worker ultrapassa, 3 unidades levam 2 reinícios e o
+  mapa sai idêntico.
+
+**T3, 5ª rodada (commit 0da027f):** unidades de dois passos de 32 linhas,
+nas 448 linhas depois das da 4ª rodada.
