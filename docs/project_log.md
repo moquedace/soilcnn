@@ -4098,3 +4098,40 @@ foi 5,7% (30 threads, config pesada); nos outros casos, até 3%.
   confirmar ~2×, o `dsm_final()` (passo 3) treina as N seeds assim, com threads
   por unidade fixas e registradas. Assim o resultado não depende de quantas
   unidades couberam na máquina.
+
+
+## 2026-09-27 — T2: unidades lado a lado, medidas em vez de estimadas
+
+O T1 estimou que 3 unidades de 5 threads lado a lado renderiam ~2× a vazão de
+uma de 15, supondo que elas não se atrapalham. Mas elas dividem a banda de
+memória e o cache L3, e só rodando juntas dá para saber quanto. Isso importa
+porque o modelo final são N unidades independentes: a config escolhida
+reajustada com N seeds, no `dsm_final()` do passo 3.
+
+O `_t2_parallel_units.R` treina **as mesmas 6 unidades** (a config pesada do
+T1, seeds 42 a 47, 12 épocas, sem parada antecipada) de três jeitos:
+
+| arranjo | processos × threads | unidades por processo |
+|---|---|---|
+| `1x15` | 1 × 15 | 6 em sequência (o que o `04` faz hoje) |
+| `3x5`  | 3 × 5  | 2 |
+| `2x7`  | 2 × 7  | 3 |
+
+**Como mede, e por quê:**
+
+- **Uma barreira.** Cada processo carrega o store, marca que está pronto e
+  espera os outros. Sem ela, os três leriam 1,3 GB cada do mesmo HD ao mesmo
+  tempo, e a comparação seria sobre o disco, não sobre o treino.
+- **O cache da dobra é montado dentro do tempo medido**, por cada processo,
+  porque é isso que o `dsm_final()` vai fazer: tensores do torch não passam de
+  um processo R para outro.
+- **Duas passadas em ordens opostas**, como no T1.
+- **A checagem que mais importa (t2_04).** A seed 42 com 5 threads, treinada
+  ao lado de outras duas unidades, precisa dar exatamente o `val_ccc` que deu
+  sozinha no T1, e o mesmo vale com 7 e com 15 threads. Se rodar lado a lado
+  mudasse o número (um OpenMP que encolhe o pool sob carga faria isso), o
+  resultado dependeria de quantas unidades couberam na máquina, e o desenho
+  paralelo cairia, fosse qual fosse a velocidade.
+
+**Custo:** ~20–30 min. Cada processo apaga os checkpoints que gravou (36 ×
+~49 MB) depois de salvar os tempos.
