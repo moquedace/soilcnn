@@ -26,12 +26,9 @@ Rasters (TIF stack)                 Soil profiles (GPKG)
         │                                    │
         └────────────┬───────────────────────┘
                      ▼
-           01_prepare_dataset.R
-           Extract · QC · predictor types.  Decides no roles.
-                     │
-                     ▼
-           02_extract_patches.R
-           Patch store  N × C × H × W, stored RAW, one file per window
+           01_prepare_dataset.R  →  dsm_prepare()
+           Extract · QC · predictor types · patch store, stored RAW,
+           one file per window, with the recipe inside.  Decides no roles.
                      │
                      ▼
            03_run_tuning.R
@@ -537,8 +534,8 @@ The [`examples/soc_stock_0_5cm/`](examples/soc_stock_0_5cm/) directory contains 
 
 | Script | What it does |
 |--------|-------------|
-| [`01_prepare_dataset.R`](examples/soc_stock_0_5cm/01_prepare_dataset.R) | Read GPKG + rasters · QC · predictor types. Decides no roles, and owns no scaling |
-| [`02_extract_patches.R`](examples/soc_stock_0_5cm/02_extract_patches.R) | Extract 3×3, 9×9, 15×15 patches band-by-band, stored RAW, one file per window |
+| [`01_prepare_dataset.R`](examples/soc_stock_0_5cm/01_prepare_dataset.R) | The SOC settings, and one call to `dsm_prepare()`: GPKG + rasters → QC · predictor types · a patch store at 3×3, 9×9, 15×15, stored RAW, with its recipe. Decides no roles, and owns no scaling |
+| [`02_extract_patches.R`](examples/soc_stock_0_5cm/02_extract_patches.R) | Folded into 01 on 2026-09-26; now only says so |
 | [`03_run_tuning.R`](examples/soc_stock_0_5cm/03_run_tuning.R) | Choose a fold plan · generate the grid · train every (config, fold, seed) · report mean ± sd against the seed noise floor |
 | [`04_final_model.R`](examples/soc_stock_0_5cm/04_final_model.R) | Refit the selected config(s) on everything but the test set, by the tuning plan's own criterion · writes the scaling next to the weights |
 | [`05_predict_spatial.R`](examples/soc_stock_0_5cm/05_predict_spatial.R) | Worker: predicts **one** row × col tile · seed ensemble · median + uncertainty layers |
@@ -559,14 +556,14 @@ Nothing needs editing first. Every script finds the project for itself — it
 asks `Rscript --file`, then the `source()` frame, then the working directory,
 and climbs to the directory holding `R/load_all.R` — so a clone anywhere runs
 as it is, with no network access needed to start. The one thing a new user
-must set is `predictor_raster_dir` in `01_prepare_dataset.R` and
-`02_extract_patches.R`, which is where *their* rasters are.
+must set is `predictor_raster_dir` in `01_prepare_dataset.R`, which is
+where *their* rasters are.
 
 Every script is run with `source("<full path>")` from an R console, in this
 order, with `tests/run_all.R` before anything expensive:
 
 ```
-01 → 02 → 99 → 03 → 03b → 99 → 04 → 05 (or 05a_test → 05a → 05b) → 07 → 06 → 99 / 99b
+01 → 99 → 03 → 03b → 99 → 04 → 05 (or 05a_test → 05a → 05b) → 07 → 06 → 99 / 99b
 ```
 
 Each script clears the workspace, so a parameter cannot be passed as a

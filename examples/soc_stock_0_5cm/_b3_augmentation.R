@@ -299,7 +299,7 @@ create_output_dirs(b3_dir)
 
 if (!dir.exists(patch_dir)) {
   stop("Patch store not found: ", patch_dir,
-       "\n  Run 02_extract_patches.R first.", call. = FALSE)
+       "\n  Run 01_prepare_dataset.R first -- it builds the patch store.", call. = FALSE)
 }
 if (!dir.exists(tuning_dir)) {
   stop("Tuning run not found: ", tuning_dir,

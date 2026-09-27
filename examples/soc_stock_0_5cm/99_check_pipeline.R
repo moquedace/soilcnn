@@ -221,11 +221,19 @@ if (all_01_exist) {
   # a fold plan in stage 03, from coordinates, and fold_sizes.csv is where
   # those proportions get checked -- against the plan that will actually run.
   
-  # target_native and target_log1p agree (log1p(native) == log1p) -- checked
-  # indirectly through the median already computed in dataset_check.csv
-  implied_log1p <- log1p(dscheck$median_target[1])
-  check_equal("01", "median_target_log1p == log1p(median_target)",
-              round(dscheck$median_target_log1p[1], 4), round(implied_log1p, 4),
+  # target_native and target_transform agree -- checked indirectly through
+  # the median already computed in dataset_check.csv, under the transform the
+  # store RECORDED. Before dsm_prepare() the column was median_target_log1p and
+  # the transform was always log1p; both spellings are read, so this checks
+  # the store on disk whichever wrote it.
+  .med_col <- intersect(c("median_target_transform", "median_target_log1p"),
+                        names(dscheck))[1]
+  .tr_name <- if ("target_transform" %in% names(tconfig)) {
+    as.character(tconfig$target_transform[1])
+  } else "log1p"
+  implied_t <- target_transform_spec(.tr_name)$forward(dscheck$median_target[1])
+  check_equal("01", paste0("median in training space == ", .tr_name, "(median_target)"),
+              round(dscheck[[.med_col]][1], 4), round(implied_t, 4),
               "saved", "recomputed")
 
   # The dataset, the point table and the QC summary must agree on how many

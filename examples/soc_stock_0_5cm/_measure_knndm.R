@@ -68,7 +68,7 @@ meta_file <- file.path(patch_dir, "patch_meta.csv")
 
 if (!file.exists(meta_file)) {
   stop("patch_meta.csv not found: ", meta_file,
-       "\nRun 02_extract_patches.R first -- this measures the cost on the ",
+       "\nRun 01_prepare_dataset.R first (it builds the patch store) -- this measures the cost on the ",
        "REAL coordinates, not on a simulation of them.")
 }
 

@@ -3667,3 +3667,90 @@ mantendo as leituras de largura inteira — funcionaria, mas com ~6 workers e
 convertendo 1,3 GB por leitura; (2) ler uma janela por ponto sem agrupar —
 multiplicaria as chamadas ao GDAL no conjunto completo (41 mil pontos × 181
 bandas ≈ 7,4 milhões de leituras).
+
+### P1: PASS 19/19 — o `dsm_prepare()` constrói o mesmo store
+
+Com as configurações que o `01` e o `02` registraram, lidas de volta do
+`target_config.csv` e do manifest, num diretório separado:
+
+- as três janelas de patches **idênticas bit a bit** (`max |diff| 0`):
+  3.728 × 181 × 3 × 3, × 9 × 9, × 15 × 15;
+- o manifest idêntico nos 17 campos; tipos, regras de QC, risco de canal,
+  culpa do full-window rule, resumo de QC, tabela de rasters: idênticos valor
+  a valor e byte a byte;
+- `dsm_load(store)` sozinho carrega o store e lê a transformação de volta.
+
+Memória sob controle: 15 workers × ~1,1 GB, cache do GDAL de 683 MB por
+worker, **lido de volta igual ao pedido** — a unidade do `gdalCache()` é MB,
+como a documentação dizia.
+
+### A única diferença de texto: um erro de ida e volta pelo CSV, no caminho antigo
+
+Três arquivos saíram com "valores idênticos, bytes diferentes". Dois têm
+explicação óbvia (a coluna renomeada no cabeçalho). O terceiro, o
+`patch_meta.csv`, não tem coluna renomeada, e 472 das 3.728 linhas diferiam no
+**último dígito** do `target_native`: `…224473` contra `…224487`.
+
+Comparado com o valor original, lido direto do GPKG (que é um SQLite):
+
+| perfil | GPKG | antigo | novo |
+|---|---|---|---|
+| 1006165 | 85.83445839122449 | −1,4e-14 | **igual** |
+| 1006213 | 108.2978911764706 | −1,4e-14 | **igual** |
+| 1006227 | 46.27401995351123 | +7,1e-15 | **igual** |
+
+O caminho antigo gravava a tabela de pontos em CSV no `01` e o `02` a relia com
+o `readr`, cujo leitor **não arredonda corretamente o último dígito**: 13% dos
+valores voltavam deslocados de uma unidade na última casa. O `dsm_prepare()`
+mantém tudo em memória, e o valor novo é o do GPKG. É também por isso que o P1
+disse "valores idênticos": ele relê os dois com o mesmo `readr`, que leva os
+dois textos ao mesmo double. Os patches foram comparados em RDS, exatamente.
+
+Consequência prática: nenhuma — o alvo entra no torch em float32, com 7
+dígitos. É a regra 2 do `execution_plan.md` ("CSV é formato de apresentação")
+aparecendo por um caminho que ninguém esperava.
+
+### Onde foram os 93 minutos
+
+A extração em paralelo levou **60,6 min**; o store inteiro, **92,8**. O perfil
+do progresso diz onde está o custo: as primeiras 15 bandas levaram 10,5 min, as
+últimas 45 levaram menos de 4. As primeiras são contínuas (biomassa, `bio1`…
+`bio19`), float de alta entropia, que o LZW descomprime devagar; as últimas são
+dummies e classes, que comprimem bem. É o custo de descomprimir linhas inteiras
+de 160 mil colunas — inerente a TIFFs em faixas de uma linha.
+
+Os ~32 min fora da extração são, muito provavelmente, o `terra::extract()` dos
+valores de centro nos 4.154 pontos, que roda em série e descomprime a linha de
+cada ponto em cada um dos 181 arquivos. Duas acelerações possíveis, **nenhuma
+feita**:
+
+1. **Ler os centros na mesma passada paralela dos patches** — os valores de
+   centro são o centro de uma janela 1 × 1, e as linhas já estão sendo
+   descomprimidas. Economizaria a fase serial (~30 min aqui, horas no conjunto
+   completo de 41 mil pontos). Exige repetir o P1.
+2. **Converter os rasters para TIFF em blocos (tiles)** — é uma decisão sobre
+   os dados de origem, não sobre o código. Num arquivo em blocos de 256 × 256,
+   um patch de 15 × 15 toca de 1 a 4 blocos em vez de 15 linhas inteiras.
+
+### Duas correções que o P1 permitiu fazer
+
+- **`has_na` agora conta antes do descarte.** O `01` contava NA nos pontos
+  depois que o QC já tinha removido toda linha com NA, então o risco nunca
+  disparava. Agora conta sobre todas as linhas extraídas, depois das regras de
+  QC. Isto muda o `channel_risk.csv` (de propósito); o store não muda.
+- A lista de dummies detectadas, que imprimia 77 nomes numa linha, mostra 8 e
+  aponta para a tabela.
+
+### O `01` passa a chamar o `dsm_prepare()`, e o `02` deixa de existir como etapa
+
+O `01` agora são as configurações do SOC — pastas, descartes, padrões de
+percentagem, a sentinela de temperatura, as janelas — e uma chamada. O `02`
+ficou como arquivo que só diz para onde o trabalho foi, para quem segue a
+ordem antiga não encontrar "arquivo não existe". O `99` lê a coluna com os dois
+nomes e compara com a transformação que o store registrou. O P1 ganhou uma
+guarda: depois que o `01` novo rodar, o store em disco é do próprio
+`dsm_prepare()`, e compará-lo consigo mesmo não provaria nada.
+
+**Não é preciso rodar o `01` de novo agora**: o store em disco é idêntico ao
+que ele produziria. O do P1 é uma cópia do mesmo store, com a receita dentro,
+e pode ser apagado.

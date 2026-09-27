@@ -164,7 +164,7 @@ to maps, and what exists today:
 
 | step | package function | today |
 |---|---|---|
-| points + raster folder → patch store, at the windows the user declares | `dsm_prepare()` | only `examples/.../01` and `02`, written for the SOC data |
+| points + raster folder → patch store, at the windows the user declares | `dsm_prepare()` | **done 2026-09-26** — proven on the SOC data to build the identical store (P1, 19/19); 01 calls it, 02 is folded in |
 | folds, buffer, tuning, selection | `dsm_load()`, `*_cv()`, `dsm_train()`, `one_se()` | **done** |
 | a tuning grid drawn from the windows in the store | inside `dsm_train()` | the window space is fixed at 3/9/15 |
 | refit the chosen config under N seeds | `dsm_final()` | only `examples/.../04` |

@@ -99,6 +99,17 @@ for (f in c(file.path(old_store, "patch_manifest.rds"),
 
 tconf  <- safe_read_csv2(file.path(old_meta, "target_config.csv"))
 man    <- readRDS(file.path(old_store, "patch_manifest.rds"))
+
+# A ONE-TIME PROOF. It passed on 2026-09-26, 19 of 19, and 01 then became a
+# caller of dsm_prepare(). Once 01 has run again, the store on disk IS
+# dsm_prepare()'s, and this script would compare the function with itself --
+# a pass that proves nothing. The old 01 wrote soc_gpkg_file into
+# target_config.csv and dsm_prepare() does not, which is how that is told.
+if (!"soc_gpkg_file" %in% names(tconf)) {
+  stop("The store on disk was built by dsm_prepare(), not by the old 01 + 02.\n",
+       "  P1 compared the two once, on 2026-09-26 (19/19, patches bit for bit),\n",
+       "  and has nothing left to compare. See docs/project_log.md.", call. = FALSE)
+}
 splitc <- function(s) if (is.na(s) || !nzchar(s)) character(0) else strsplit(s, ";", fixed = TRUE)[[1]]
 
 settings <- list(
