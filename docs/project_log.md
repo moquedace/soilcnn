@@ -4135,3 +4135,50 @@ T1, seeds 42 a 47, 12 épocas, sem parada antecipada) de três jeitos:
 
 **Custo:** ~20–30 min. Cada processo apaga os checkpoints que gravou (36 ×
 ~49 MB) depois de salvar os tempos.
+
+
+## 2026-09-27 — T2: PASS 4/4 — lado a lado é 1,52× mais rápido e não muda nenhum número
+
+### O resultado
+
+As mesmas 6 unidades, tempo de parede a partir da barreira, média das duas
+passadas:
+
+| arranjo | tempo | vs `1x15` | atraso por unidade causado pelos vizinhos | pico de RAM por processo |
+|---|---|---|---|---|
+| `1x15` (sequência) | 4,58 min | 1 | — | 10,3 GB |
+| `2x7` | 3,44 min | **1,33×** | 1,12× | 10,0 GB |
+| `3x5` | 3,02 min | **1,52×** | 1,25× | 10,0 GB |
+
+As passadas diferiram em no máximo 0,06 no ganho.
+
+- **t2_04: lado a lado não muda nenhum número.** A seed 42 deu, ao lado de
+  outras unidades, exatamente o que deu sozinha no T1: 0,363685 com 5
+  threads, 0,360795 com 7 e 0,379778 com 15. E t2_03: as 18 combinações
+  (seed, threads) se repetiram bit a bit entre as passadas. **O resultado de
+  uma unidade depende só de (seed, threads por unidade)**, não de quem roda ao
+  lado nem de quantas unidades couberam na máquina.
+- **O ganho medido (1,52×) é menor que o estimado (2,0×)**, porque os vizinhos
+  atrasam cada unidade em ~25% (banda de memória e cache). A estimativa do T1
+  estava na direção certa e superestimava; foi para isso que o T2 existiu.
+- **Um achado que ninguém procurava: ~10 GB de pico por processo**, com 1,26
+  GB de janelas carregadas (3 e 15), ou seja ~8×. Não depende das threads. No
+  dev isso deixa rodar 3 processos (30 GB de 63). No conjunto completo (41 mil
+  pontos, janelas ~11× maiores) um processo só, na mesma proporção, passaria
+  de 100 GB. **Isso precisa ser resolvido antes da rodada completa**, com
+  paralelo ou sem: o `04` de hoje também não caberia.
+
+### O que decide para o `dsm_final()`
+
+1. **Unidades lado a lado, com threads por unidade FIXAS** (padrão 5,
+   medido aqui). O número de processos simultâneos sai de `n_cores ÷ threads
+   por unidade`, limitado pela RAM. Como o t2_04 provou que os vizinhos não
+   mudam os números, esse limite só muda o tempo, nunca o resultado.
+2. **Sempre em subprocesso, com `OMP_NUM_THREADS` definido antes de o torch
+   carregar**, mesmo com um processo só. Assim o resultado não depende do
+   estado da sessão do usuário. Era exatamente essa a suspeita do B6 para os
+   seus 1,2e-4.
+3. **As threads por unidade entram no registro da rodada**, como a seed.
+4. **O limite de RAM é estimado pelo T2** (1,5 GB + 7 × o tamanho das janelas
+   carregadas), e o pico real de cada processo é medido e relatado, para a
+   estimativa poder ser conferida em cada rodada.
