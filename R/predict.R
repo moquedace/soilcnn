@@ -1136,8 +1136,7 @@ print.dsm_prediction <- function(x, ...) {
        grid = grid[c("nrow", "ncol", "xmin", "ymax", "xres", "yres", "crs")],
        h = grid$h, step_rows = work$step_rows, chunk_cols = work$chunk_cols,
        batch = 4096L, gather_mb = 256, engine = engine, bands = band_tbl,
-       di_groups = lapply(cal$refs, function(r) list(x = r$x, weights = r$weights,
-                                                     avg_dist = r$avg_dist)),
+       di = .predict_di_plan(cal),
        sources = lapply(cal$sources, function(s) list(
          name = s$name, di_group = s$di_group, threshold = s$threshold,
          smearing = s$smearing, intervals = s$intervals)),
@@ -1319,19 +1318,20 @@ print.dsm_prediction <- function(x, ...) {
   for (s in srcs) terra::readStart(s)
   rules <- job$rules
   has_rule <- !is.na(rules$na_below) | !is.na(rules$clamp_lower) | !is.na(rules$clamp_upper)
-  di <- lapply(job$di_groups, function(g) {
-    x32 <- torch::torch_tensor(g$x, dtype = torch::torch_float32())
+  di <- lapply(job$di, function(u) {
+    x32 <- torch::torch_tensor(u$x, dtype = torch::torch_float32())
     list(xt_t = x32$t()$contiguous(), r2 = (x32 * x32)$sum(dim = 2L)$unsqueeze(1L),
-         x64 = torch::torch_tensor(g$x, dtype = torch::torch_float64()),
-         sqrt_w = torch::torch_tensor(sqrt(g$weights), dtype = torch::torch_float32())$unsqueeze(1L),
-         avg_dist = g$avg_dist)
+         x64 = torch::torch_tensor(u$x, dtype = torch::torch_float64()),
+         sqrt_w = torch::torch_tensor(sqrt(u$weights), dtype = torch::torch_float32())$unsqueeze(1L),
+         groups = u$groups)
   })
+  n_di <- sum(vapply(job$di, function(u) length(u$groups), integer(1)))
   # Whether torch hands back 0- or 1-based indices, asked rather than assumed:
   # an off-by-one here would pair every pixel with the wrong profile.
   index_base <- 2L - as.integer(torch::torch_argmin(torch::torch_tensor(c(3, 1, 2))))
   list(models = models, srcs = srcs, n_ch = length(job$files), n_seeds = length(models),
        rules = rules, has_rule = has_rule, inverse = target_transform_spec(job$transform)$inverse,
-       di = di, index_base = index_base, gc_hook = .predict_gc_hook(job$gc_every_s),
+       di = di, n_di = n_di, index_base = index_base, gc_hook = .predict_gc_hook(job$gc_every_s),
        fcn_engine = if (identical(job$engine, "patch")) "patch" else "fcn")
 }
 
@@ -1389,22 +1389,79 @@ print.dsm_prediction <- function(x, ...) {
   matrix(as.logical(v), gs, w_out)
 }
 
-# The DI of pixels: nearest training profile by float32 distances, then that
-# distance recomputed in double -- the same number aoa_di() gives, to the
-# rounding of the scaled values.
-.predict_di <- function(ref, x, index_base, batch = 8192L) {
-  n <- x$size(1L)
-  out <- numeric(n)
-  x <- x * ref$sqrt_w
-  for (s in seq(1L, n, by = batch)) {
-    e <- min(n, s + batch - 1L)
-    xb <- x[s:e, , drop = FALSE]
-    d2 <- (xb * xb)$sum(dim = 2L, keepdim = TRUE) - 2 * torch::torch_mm(xb, ref$xt_t) + ref$r2
-    nn <- as.integer(torch::torch_argmin(d2, dim = 2L)) + index_base
-    x64 <- xb$to(dtype = torch::torch_float64())
-    out[s:e] <- as.numeric(((x64 - ref$x64[nn, , drop = FALSE])^2)$sum(dim = 2L)$sqrt())
+# ONE DISTANCE MATRIX FOR EVERY REFERENCE.
+#
+# Sources whose fold plans kept different profiles have different references
+# -- but the same profiles in the same scaled space: the SOC block plan's
+# 3,092 are all among the kNNDM plan's 3,137. A matrix product per reference
+# computed the same distances twice, and the DI took 25% of T3's full-width
+# map. So the distances go to the UNION of the references' profiles, once,
+# and each reference takes its nearest profile among its own columns -- the
+# same neighbour, the same distance, the same DI. References the union cannot
+# hold (another weighting, or rows of one profile that differ) keep a matrix
+# of their own.
+#
+# A list of unions, each list(x = the union's weighted rows, weights, groups =
+# list(list(g = the DI group, cols = its rows in x, all = every row?,
+# avg_dist))).
+.predict_di_plan <- function(cal) {
+  n_g <- length(cal$refs)
+  if (n_g == 0L) return(list())
+  alone <- function(g) {
+    r <- cal$refs[[g]]
+    list(x = r$x, weights = r$weights,
+         groups = list(list(g = g, cols = seq_len(nrow(r$x)), all = TRUE, avg_dist = r$avg_dist)))
   }
-  out / ref$avg_dist
+  w <- cal$refs[[1]]$weights
+  if (n_g == 1L || !all(vapply(cal$refs, function(r) identical(r$weights, w), logical(1)))) {
+    return(lapply(seq_len(n_g), alone))
+  }
+  # Each reference's profiles, in its rows' order (aoa_reference() builds the
+  # rows and cv$sample_id from the same index).
+  ids <- lapply(seq_len(n_g), function(g) {
+    s <- cal$sources[[which(vapply(cal$sources, function(z) z$di_group == g, logical(1)))[1]]]
+    s$aref$cv$sample_id
+  })
+  u_ids <- unique(unlist(ids))
+  u_x <- matrix(NA_real_, length(u_ids), ncol(cal$refs[[1]]$x))
+  for (g in seq_len(n_g)) {
+    pos  <- match(ids[[g]], u_ids)
+    seen <- !is.na(u_x[pos, 1L])
+    if (any(seen) && !identical(unname(u_x[pos[seen], , drop = FALSE]),
+                                unname(cal$refs[[g]]$x[seen, , drop = FALSE]))) {
+      return(lapply(seq_len(n_g), alone))
+    }
+    u_x[pos, ] <- cal$refs[[g]]$x
+  }
+  list(list(x = u_x, weights = w, groups = lapply(seq_len(n_g), function(g) {
+    cols <- match(ids[[g]], u_ids)
+    list(g = g, cols = cols, all = identical(cols, seq_along(u_ids)),
+         avg_dist = cal$refs[[g]]$avg_dist)
+  })))
+}
+
+# The DI of pixels against every reference: pixels x groups. The nearest
+# profile by float32 distances, then that distance recomputed in double --
+# the same number aoa_di() gives, to the rounding of the scaled values.
+.predict_di_all <- function(di, x, index_base, n_groups, batch = 8192L) {
+  n <- x$size(1L)
+  out <- matrix(NA_real_, n, n_groups)
+  for (u in di) {
+    xw <- x * u$sqrt_w
+    for (s in seq(1L, n, by = batch)) {
+      e <- min(n, s + batch - 1L)
+      xb <- xw[s:e, , drop = FALSE]
+      d2 <- (xb * xb)$sum(dim = 2L, keepdim = TRUE) - 2 * torch::torch_mm(xb, u$xt_t) + u$r2
+      x64 <- xb$to(dtype = torch::torch_float64())
+      for (grp in u$groups) {
+        sub <- if (isTRUE(grp$all)) d2 else d2[, grp$cols, drop = FALSE]
+        nn  <- grp$cols[as.integer(torch::torch_argmin(sub, dim = 2L)) + index_base]
+        out[s:e, grp$g] <- as.numeric(((x64 - u$x64[nn, , drop = FALSE])^2)$sum(dim = 2L)$sqrt()) /
+          grp$avg_dist
+      }
+    }
+  }
+  out
 }
 
 .predict_gdal_opts <- function(datatype, blocky) {
@@ -1564,8 +1621,7 @@ print.dsm_prediction <- function(x, ...) {
       if (length(env$di) > 0L) {
         ws <- strip$size(3L)
         xc <- strip$view(c(C, -1L))[, (cs[, 1] - 1L) * ws + cs[, 2], drop = FALSE]$t()
-        D <- matrix(vapply(env$di, function(ref) .predict_di(ref, xc, env$index_base),
-                           numeric(length(i))), nrow = length(i))
+        D <- .predict_di_all(env$di, xc, env$index_base, env$n_di)
         env$gc_hook()
       }
       tm[["di"]] <- tm[["di"]] + secs(td)
