@@ -336,8 +336,9 @@ print.dsm_final <- function(x, ...) {
     cat("\n  ", cid, " -- every hyperparameter of the selected CNN:\n", sep = "")
     for (i in seq_len(nrow(h))) {
       cat(sprintf("    %-16s %-22s %-7s %s\n", h$parameter[i], h$value[i],
-                  if (isTRUE(h$searched[i])) "tuned" else "fixed",
-                  if (isTRUE(h$searched[i])) paste0("(tried: ", h$values_tried[i], ")") else ""))
+                  if (!isTRUE(h$used[i])) "n/a" else if (isTRUE(h$searched[i])) "tuned" else "fixed",
+                  if (!isTRUE(h$used[i])) "(not used by this network)"
+                  else if (isTRUE(h$searched[i])) paste0("(tried: ", h$values_tried[i], ")") else ""))
     }
     s <- x$config_summary[x$config_summary$config_id == cid, , drop = FALSE]
     if (nrow(s) == 1L && is.finite(s$ccc_mean)) {
@@ -937,6 +938,22 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
   as.character(v)
 }
 
+# A PARAMETER THE NETWORK DOES NOT USE WAS NOT CHOSEN. A single-branch
+# network has no gate, so its gate_type is whatever the grid forces
+# (no_gate_concat) and its gate dropout multiplies nothing; without an SE block
+# the SE bottleneck ratio is never built. Declaring those "tuned" because the
+# grid's other configs varied them -- as the first version of this table did
+# for the deployed SOC model, a single 15x15 branch -- claims a choice nobody
+# made. Returns NA when the parameter is used, the reason when it is not.
+.final_param_unused <- function(p, cfg_row) {
+  one_branch <- length(cfg_row$window_sizes[[1]]) < 2L
+  if (p %in% c("gate_type", "gate_dropout") && one_branch) return("one branch, no gate")
+  if (identical(p, "se_reduction") && !isTRUE(as.logical(cfg_row$use_se_block))) {
+    return("no SE block")
+  }
+  NA_character_
+}
+
 .final_hyper_table <- function(selected, grid, training) {
   params <- setdiff(names(grid), "config_id")
   rows <- list()
@@ -946,18 +963,22 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
       col   <- grid[[p]]
       tried <- unique(vapply(seq_along(col), function(k) .final_fmt_value(col[k], p), character(1)))
       if (is.numeric(col)) tried <- tried[order(as.numeric(unique(col)))]
+      unused  <- .final_param_unused(p, selected[i, , drop = FALSE])
+      meaning <- unname(.final_param_meaning[p]) %||% NA_character_
+      if (!is.na(unused)) meaning <- paste0(meaning, " -- NOT USED by this network (", unused, ")")
       rows[[length(rows) + 1L]] <- tibble::tibble(
         config_id = cid, group = .final_param_group(p), parameter = p,
         value = .final_fmt_value(selected[[p]][i], p),
-        searched = length(tried) > 1L && !identical(p, "n_params"),
+        used = is.na(unused),
+        searched = is.na(unused) && length(tried) > 1L && !identical(p, "n_params"),
         values_tried = paste(tried, collapse = ", "),
-        meaning = unname(.final_param_meaning[p]) %||% NA_character_)
+        meaning = meaning)
     }
     for (p in names(training)) {
       rows[[length(rows) + 1L]] <- tibble::tibble(
         config_id = cid, group = "final refit", parameter = p,
         value = paste(format(training[[p]], trim = TRUE), collapse = ", "),
-        searched = FALSE, values_tried = NA_character_,
+        used = TRUE, searched = FALSE, values_tried = NA_character_,
         meaning = "the refit's training schedule (set, not searched)")
     }
   }
@@ -1009,6 +1030,7 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
            "|---|---|---|---|---|---|")
     for (i in seq_len(nrow(h))) {
       by <- if (identical(h$group[i], "final refit")) "set for the refit"
+            else if (!isTRUE(h$used[i])) "not used by this network"
             else if (isTRUE(h$searched[i])) "**the search**" else "fixed in the grid"
       L <- c(L, sprintf("| %s | `%s` | %s | %s | %s | %s |", h$group[i], h$parameter[i], h$value[i],
                         by, ifelse(is.na(h$values_tried[i]), "", h$values_tried[i]), h$meaning[i]))

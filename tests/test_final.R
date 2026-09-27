@@ -160,6 +160,11 @@ ok["the_one_the_search_varied_is_marked_tuned"] <-
   identical(as.character(h$values_tried[h$parameter == "embedding_dim"][1]), "8, 16")
 ok["the_ones_it_did_not_are_marked_fixed"] <-
   !any(as.logical(h$searched[h$parameter %in% c("conv_channels", "base_lr", "batch_size")]))
+# The fixture's configs are single-branch without SE: the gate and the SE
+# ratio are not used, and must not be declared as chosen.
+ok["what_the_network_does_not_use_is_declared_unused"] <-
+  !any(as.logical(h$used[h$parameter %in% c("gate_type", "gate_dropout", "se_reduction")])) &&
+  !any(as.logical(h$searched[h$parameter %in% c("gate_type", "gate_dropout", "se_reduction")]))
 ok["the_refit_schedule_is_declared_too"] <-
   identical(as.character(h$value[h$parameter == "n_epochs"][1]), "3")
 rep_txt <- readLines(fin$report_file, encoding = "UTF-8")
