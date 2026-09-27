@@ -112,7 +112,7 @@ rf_spec <- function() {
     input = "table",
     description = "Random Forest on the tabular view (ranger, or randomForest).",
 
-    fit = function(x, y, cfg, ...) {
+    fit = function(x, y, cfg, n_cores = NULL, ...) {
       backend <- .rf_backend()
       # [[ ]] behind a names() check, never cfg$mtry: on a tibble, $ on a
       # missing column returns NULL *and* warns ("Unknown or uninitialised
@@ -132,7 +132,12 @@ rf_spec <- function() {
           num.trees     = as.integer(cfg$n_trees),
           mtry          = mtry,
           min.node.size = as.integer(cfg$min_node_size),
-          num.threads   = 0L,          # 0 = every core ranger can see
+          # n_cores has one meaning across the framework (resolve_cores()):
+          # NULL is the physical cores minus one. This was 0 -- every logical
+          # core ranger can see, 32 threads on this machine's 16 cores -- so
+          # the forest and the network answered the same question two ways.
+          # A caller who wants every logical core asks for it.
+          num.threads   = resolve_cores(n_cores, what = "ranger"),
           # The forest is refit per fold and per seed and never reloaded, so
           # keeping the training data inside it would multiply the run's peak
           # memory by the number of units for no gain.
@@ -404,8 +409,13 @@ cnn_spec <- function() {
            call. = FALSE)
     },
 
-    default_grid = function(tune_length, seed, x = NULL, y = NULL) {
-      make_tune_grid(tune_length = tune_length, seed = seed)
+    # `windows` is what the loaded store holds and `n_train` the smallest
+    # fold's training set; dsm_train() passes both, so a default grid never
+    # asks for a window the store cannot serve or a batch no fold can fill.
+    default_grid = function(tune_length, seed, x = NULL, y = NULL,
+                            windows = NULL, n_train = NULL) {
+      make_tune_grid(tune_length = tune_length, seed = seed, windows = windows,
+                     n_train = n_train)
     },
 
     count_params = function(object) {

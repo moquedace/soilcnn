@@ -63,6 +63,13 @@
 #'   A generator that needs neither still has to accept them -- an argument it
 #'   ignores costs nothing, and a signature that varies per model is a
 #'   signature the runner cannot call.
+#'
+#'   A PATCH model's generator may also take `windows`, the patch sizes the
+#'   loaded store holds, and `n_train`, the training points of the smallest
+#'   fold. dsm_train() passes each one the generator declares, so a default
+#'   grid never asks for a window the store does not have -- the CNN's grid
+#'   used to draw 3/9/15, the SOC example's, from any store -- or for a batch
+#'   no fold can fill.
 #' @param count_params function(object) returning the number of free
 #'   parameters, used as the complexity axis in one_se(). NULL means the model
 #'   cannot report it and one_se() falls back to its other rule.

@@ -201,6 +201,48 @@ ok["cnn_wrote_checkpoints"] <-
 ok["plan_on_disk_is_the_plan_given"] <- identical(
   readRDS(file.path(run_dir, "fold_plan.rds"))$folds, plan$folds)
 
+# =============================================================================
+# 3b. Nothing but a budget: the grid, the inverse and the threads come from
+#     the store, the plan and the machine
+#
+# This store holds window 3 only. Before the default grid took the store's
+# windows it drew 3/9/15 -- the SOC example's -- and this call stopped with
+# "This grid needs window(s) 9, 15". Its folds train on 16 and 32 points, so
+# every batch size of the old grid (128/256/512) would have taken NO gradient
+# step. And with no transform given, the inverse must be the store's: the
+# manifest says log1p, so each prediction must be expm1 of what the network
+# output. clamp is opened for that check -- clamped at zero, a network whose
+# outputs are all negative would give 0 under either inverse and prove
+# nothing.
+# =============================================================================
+
+# Two threads first, so that finding one afterwards means n_cores set it --
+# the runs above already left the session at one.
+invisible(suppressMessages(set_torch_threads(2L)))
+fit_def <- suppressMessages(dsm_train(
+  data, model = "cnn", resampling = plan, tune_length = 2L,
+  n_seeds = 1L, n_cores = 1L,
+  output_dir = out_root, run_id = "api_cnn_default",
+  n_epochs = 2L, patience = 2L, print_every = 100L, augment = FALSE,
+  clamp = c(-Inf, Inf), verbose = FALSE))
+
+cmp_def <- fit_def$comparison
+ok["a_default_grid_trains_on_a_store_of_one_window"] <-
+  nrow(cmp_def) == 2L * plan$n_folds && all(cmp_def$status == "success")
+ok["the_default_grid_asked_only_for_the_stores_window"] <-
+  all(as.character(cmp_def$window_sizes) == "3")
+n_train_min <- min(vapply(plan$folds, function(f) length(f$train), integer(1)))
+ok["the_default_grid_batches_fit_the_smallest_fold"] <-
+  all(floor(n_train_min / cmp_def$batch_size) >= 4)
+ok["n_cores_set_torchs_threads"] <- torch::torch_get_num_threads() == 1L
+
+pred_def <- safe_read_csv2(file.path(out_root, "api_cnn_default", "predictions",
+                                     paste0(cmp_def$unit_id[1], "_pred_all.csv")))
+ok["with_no_transform_given_the_stores_inverse_is_applied"] <-
+  nrow(pred_def) > 0L &&
+  isTRUE(all.equal(pred_def$pred, expm1(pred_def$pred_transform))) &&
+  !isTRUE(all.equal(pred_def$pred, pred_def$pred_transform))
+
 # A batch no fold can fill is refused before the first unit, and named.
 big <- grid
 big$batch_size <- 64L

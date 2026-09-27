@@ -28,6 +28,13 @@
   #   3×3   ≈ 0.75 km  (local neighbourhood)
   #   9×9   ≈ 2.25 km  (hillslope / soil–landscape position)
   #   15×15 ≈ 3.75 km  (local landscape / catchment context)
+  #
+  # THESE SIX ARE THE SOC EXAMPLE'S, NOT A DEFAULT. dsm_train() never draws
+  # from them: it passes the windows the loaded store holds, and
+  # .window_options() turns those into every single window and every pair --
+  # which for a store of 3, 9 and 15 is exactly this list, in this order, so
+  # a seed draws the same grid either way. They stay here for make_tune_grid()
+  # called on its own, without a store to ask.
   window_sizes = list(
     c(3L),
     c(9L),
@@ -205,14 +212,39 @@
 #'       base_lr      = c(1e-4, 3e-4),
 #'       window_sizes = list(c(7L), c(5L, 7L))
 #'     )
+#' @param windows      The patch sizes the store holds (`data$store$window_sizes`).
+#'   The window options become every single window and every pair of them --
+#'   a dual-branch model takes two. NULL keeps the SOC example's 3/9/15 set;
+#'   dsm_train() always passes the store's.
+#' @param n_train      Training points in the smallest fold. Batch sizes that
+#'   would give an epoch fewer than four gradient steps are left out; if none
+#'   is left, the largest power of two that gives four is used. NULL keeps the
+#'   full set. dsm_train() passes it from the plan.
 #'
 #' @return A tibble with one row per configuration.
 #'   window_sizes and conv_channels are stored as list-columns.
-make_tune_grid <- function(tune_length = 20L, seed = NULL, fixed = list()) {
+make_tune_grid <- function(tune_length = 20L, seed = NULL, fixed = list(),
+                           windows = NULL, n_train = NULL) {
   if (!is.null(seed)) set.seed(seed)
 
   space        <- .cnn_param_space
   list_params  <- c("window_sizes", "conv_channels")
+  if (!is.null(windows)) {
+    space$window_sizes <- .window_options(windows)
+    # A restriction that asks for a window the store does not hold is refused
+    # HERE, where the fix is one argument, and not by the loader, once the run
+    # is under way.
+    if (!is.null(fixed$window_sizes)) {
+      have  <- sort(unique(as.integer(windows)))
+      gone  <- setdiff(sort(unique(unlist(fixed$window_sizes))), have)
+      if (length(gone) > 0L) {
+        stop("fixed$window_sizes asks for window(s) ", paste(gone, collapse = ", "),
+             ", which the store does not hold (it has ",
+             paste(have, collapse = ", "), ").", call. = FALSE)
+      }
+    }
+  }
+  if (!is.null(n_train)) space$batch_size <- .batch_options(space$batch_size, n_train)
   for (nm in names(fixed)) {
     v <- fixed[[nm]]
     space[[nm]] <- if (nm %in% list_params) {
@@ -313,6 +345,55 @@ make_manual_tune_grid <- function(...) {
 }
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
+
+# The window options a store can serve: every window alone, then every pair,
+# smaller first -- dual_branch_cnn() takes at most two, a small one and a
+# large one. Singles ascending, then pairs in lexicographic order, because
+# that is the order the SOC list was written in: for 3, 9, 15 this returns
+# that list exactly, so a grid drawn under a seed before this function
+# existed is the grid drawn under the same seed now.
+#
+# Every pair, including two windows of nearly the same size: whether a second
+# branch at a similar scale earns its parameters is what the search is for,
+# not something to decide by leaving it out.
+.window_options <- function(windows) {
+  w <- suppressWarnings(as.integer(windows))
+  if (length(w) == 0L || anyNA(w) || any(w != windows) || any(w < 1L) ||
+      any(w %% 2L != 1L)) {
+    stop("windows must be odd whole numbers (a patch has one centre pixel); ",
+         "got ", paste(windows, collapse = ", "), ".", call. = FALSE)
+  }
+  w <- sort(unique(w))
+  singles <- lapply(w, function(z) z)
+  pairs <- if (length(w) >= 2L) {
+    cmb <- utils::combn(w, 2L)
+    lapply(seq_len(ncol(cmb)), function(j) cmb[, j])
+  } else list()
+  c(singles, pairs)
+}
+
+# Batch sizes an epoch can use. The training loader drops the incomplete last
+# batch, so an epoch takes floor(n_train / batch) gradient steps -- and a
+# batch larger than the fold trains nothing at all (see
+# .make_loaders_from_cache()).
+#
+# FOUR STEPS, AND WHY FOUR. warmup, the LR plateau and early stopping all
+# count in epochs; an epoch of one update turns "patience = 60" into sixty
+# updates, a schedule that means something else. Four is the fewest the SOC
+# grid ever used -- 512 on its ~2,100 training points -- so on that data
+# nothing is left out, and a grid drawn under a seed is the grid it was.
+#
+# When no option gives four, the largest power of two that does, and never
+# below two: BatchNorm needs two rows to have a variance.
+.batch_options <- function(choices, n_train, min_steps = 4L) {
+  if (!is.numeric(n_train) || length(n_train) != 1L || is.na(n_train) || n_train < 2) {
+    stop("n_train must be one number >= 2 (the training points of the ",
+         "smallest fold); got ", paste(n_train, collapse = ", "), ".", call. = FALSE)
+  }
+  keep <- choices[floor(n_train / choices) >= min_steps]
+  if (length(keep) > 0L) return(keep)
+  as.integer(max(2, 2^floor(log2(max(2, n_train / min_steps)))))
+}
 
 # A padding the geometry cannot honour collapses to the one it will actually
 # get. Each 3x3 convolution without padding removes one pixel per side, so a

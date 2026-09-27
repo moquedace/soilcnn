@@ -389,24 +389,34 @@ resolve_resampling <- function(spec, data, test_ids = NULL, windows = NULL,
 #' @param model      A registered model name ("cnn", "rf", "mlp", or anything
 #'   registered with register_model()), or a model_spec.
 #' @param resampling A resample_spec, or a fold_plan to use as given.
-#' @param tune_grid  An explicit grid. NULL asks the model for one.
+#' @param tune_grid  An explicit grid. NULL asks the model for one -- for the
+#'   CNN, drawn over the windows the loaded store holds: every window alone
+#'   and every pair.
 #' @param tune_length How many configurations to try when `tune_grid` is NULL.
 #'   The same meaning as caret's: a budget, not a lattice.
 #' @param n_seeds    Repetitions per (config, fold). One gives a ranking with
 #'   no error bar, which is a ranking of luck as often as of skill.
-#' @param transform  Inverse of the transform the target carries, e.g. expm1.
+#' @param transform  NULL (the default) uses the inverse of the transform the
+#'   store was built under, which dsm_load() read (`data$transform`). A
+#'   function is the inverse to use instead, and is refused if it disagrees
+#'   with the store's.
 #' @param features   For tabular models: "centre", "window_mean", or both.
+#' @param device     A torch device. NULL builds one with setup_torch_device().
+#' @param n_cores    Cores for training: torch's threads for the CNN and the
+#'   MLP, ranger's for the forest. NULL is the physical cores minus one (see
+#'   resolve_cores()) -- except that a `device` passed in keeps the threads it
+#'   was set up with unless n_cores is given too.
 #' @param test_ids   Sample ids forced into the test set.
 #' @param ...        Passed to the underlying runner (n_epochs, patience, ...).
 #' @return The runner's result, plus the plan and the data it used.
 dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
                       tune_grid = NULL, tune_length = 20L, n_seeds = 3L,
-                      transform = identity,
+                      transform = NULL,
                       features = c("centre", "window_mean"),
                       output_dir = "./outputs/tuning",
                       run_id = format(Sys.time(), "%Y%m%d_%H%M%S"),
-                      base_seed = 42L, device = NULL, test_ids = NULL,
-                      resume = TRUE, evaluate_test = FALSE,
+                      base_seed = 42L, device = NULL, n_cores = NULL,
+                      test_ids = NULL, resume = TRUE, evaluate_test = FALSE,
                       verbose = TRUE, ...) {
 
   # THE DOOR. Each of these used to fail later and worse: a wrong `data`
@@ -430,6 +440,11 @@ dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
          class(resampling)[1], ". caret-style strings such as \"cv\" are not ",
          "accepted here.", call. = FALSE)
   }
+  # The transform and the cores are checked at the door too: both cost a
+  # second here, and the run's first unit to get wrong.
+  transform <- .resolve_train_transform(transform, data, verbose = verbose)
+  if (!is.null(n_cores)) n_cores <- suppressMessages(resolve_cores(n_cores, what = "training"))
+
   if (identical(model$input, "patches")) {
     dots <- names(list(...))
     internal <- c("cfg", "n_channels", "loaders", "points_valid", "transform",
@@ -465,7 +480,10 @@ dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
         stop("Model '", model$name, "' has no default grid; pass tune_grid.",
              call. = FALSE)
       }
-      tune_grid <- model$default_grid(tune_length, base_seed)
+      n_train_min <- min(vapply(plan$folds, function(f) length(f$train), integer(1)))
+      tune_grid <- .draw_default_grid(model, tune_length, base_seed,
+                                      data$store$window_sizes, n_train_min,
+                                      verbose)
     }
     # The grid may ask for windows the caller did not load. Said here, where
     # the fix is one argument, rather than inside the loader.
@@ -478,7 +496,13 @@ dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
            ".\n  Reload with dsm_load(..., windows = c(",
            paste(need, collapse = ", "), ")).", call. = FALSE)
     }
-    if (is.null(device)) device <- setup_torch_device()
+    # The threads belong to the session, not to the device: a device passed
+    # in keeps whatever its caller set, unless n_cores says otherwise.
+    if (is.null(device)) {
+      device <- setup_torch_device(n_threads = n_cores)
+    } else if (!is.null(n_cores)) {
+      set_torch_threads(n_cores)
+    }
     res <- run_cnn_resample(
       tune_grid = tune_grid, store = data$store, points = data$points,
       type_table = data$type_table, plan = plan, transform = transform,
@@ -486,13 +510,16 @@ dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
       base_seed = base_seed, n_seeds = n_seeds, resume = resume,
       evaluate_test = evaluate_test, ...)
   } else {
+    # A torch model on the table path (the MLP) gets its threads the same way;
+    # the forest reads n_cores itself, through the runner's `...`.
+    if (!is.null(n_cores) && isNamespaceLoaded("torch")) set_torch_threads(n_cores)
     res <- run_table_resample(
       model = model, tune_grid = tune_grid, store = data$store,
       points = data$points, type_table = data$type_table, plan = plan,
       features = features, transform = transform, output_dir = output_dir,
       run_id = run_id, base_seed = base_seed, n_seeds = n_seeds,
       tune_length = tune_length, device = device, resume = resume,
-      evaluate_test = evaluate_test, ...)
+      evaluate_test = evaluate_test, n_cores = n_cores, ...)
   }
 
   res$model <- model$name
@@ -500,6 +527,80 @@ dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
   class(res) <- c("dsm_fit", class(res))
   if (verbose) print(res)
   res
+}
+
+# THE INVERSE TRAVELS WITH THE DATA. dsm_train() took `transform = identity`,
+# and stage 03 passed expm1 by hand -- so a log1p store trained through the
+# front door without that argument would have reported every "native" metric
+# in log space: well-formed, plausible and wrong. NULL now means the store's
+# own inverse. A function given explicitly is checked against it on a few
+# values and refused if the two disagree; an equivalent written differently
+# (function(z) exp(z) - 1) passes. With no transform recorded -- a store built
+# by hand -- there is nothing to check against: NULL means identity, and the
+# message says so.
+.resolve_train_transform <- function(transform, data, verbose = TRUE) {
+  rec <- data$transform
+  if (is.null(transform)) {
+    if (is.null(rec)) {
+      if (verbose) {
+        message("The store records no target transform: metrics are computed ",
+                "on the target as stored.")
+      }
+      return(identity)
+    }
+    return(rec$inverse)
+  }
+  if (!is.function(transform)) {
+    stop("`transform` must be NULL (the store's own inverse) or a function -- ",
+         "the inverse of the target transform, such as expm1. Got a ",
+         class(transform)[1], ".", call. = FALSE)
+  }
+  if (is.null(rec)) return(transform)
+  probe <- c(0, 0.5, 1, 2.5, 5)
+  want  <- rec$inverse(probe)
+  got   <- suppressWarnings(tryCatch(as.numeric(transform(probe)),
+                                     error = function(e) rep(NA_real_, length(probe))))
+  if (length(got) != length(want) || !isTRUE(all.equal(got, want))) {
+    stop("`transform` disagrees with the store. It was built under \"", rec$name,
+         "\", whose inverse gives ", paste(signif(want, 4), collapse = ", "),
+         " at ", paste(probe, collapse = ", "), "; the function passed gives ",
+         paste(signif(got, 4), collapse = ", "), ".\n  Leave transform = NULL ",
+         "to use the store's own: another inverse puts every native-unit metric ",
+         "in the wrong space.", call. = FALSE)
+  }
+  transform
+}
+
+# A default grid drawn over what the store and the plan can serve. The
+# windows and the smallest fold go to the generator when it declares them (see
+# default_grid in R/model_registry.R); a generator that does not is called as
+# before. What was drawn is said, because a default nobody sees is a default
+# nobody can question.
+.draw_default_grid <- function(model, tune_length, seed, windows, n_train = NULL,
+                               verbose = TRUE) {
+  takes <- names(formals(model$default_grid))
+  args  <- list(tune_length, seed)
+  if ("windows" %in% takes) args$windows <- windows
+  if ("n_train" %in% takes && !is.null(n_train)) args$n_train <- n_train
+  grid <- do.call(model$default_grid, args)
+  if (verbose) {
+    said <- sprintf("%d config(s)", nrow(grid))
+    if ("windows" %in% takes) {
+      said <- c(said, paste0("over the store's windows ", paste(windows, collapse = ", ")))
+    }
+    if ("window_sizes" %in% names(grid)) {
+      drawn <- vapply(unique(grid$window_sizes), paste, character(1), collapse = "+")
+      said <- c(said, paste0("window options drawn: ", paste(drawn, collapse = ", ")))
+    }
+    if ("batch_size" %in% names(grid)) {
+      said <- c(said, paste0("batch sizes: ", paste(sort(unique(grid$batch_size)), collapse = ", "),
+                             if ("n_train" %in% takes && !is.null(n_train))
+                               sprintf(" (smallest fold trains on %s points)",
+                                       format(n_train, big.mark = ",")) else ""))
+    }
+    message("Default grid: ", paste(said, collapse = " | "))
+  }
+  grid
 }
 
 #' @export

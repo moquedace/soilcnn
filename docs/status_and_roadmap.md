@@ -166,7 +166,7 @@ to maps, and what exists today:
 |---|---|---|
 | points + raster folder → patch store, at the windows the user declares | `dsm_prepare()` | **done 2026-09-26** — proven on the SOC data to build the identical store (P1, 19/19); 01 calls it, 02 is folded in |
 | folds, buffer, tuning, selection | `dsm_load()`, `*_cv()`, `dsm_train()`, `one_se()` | **done** |
-| a tuning grid drawn from the windows in the store | inside `dsm_train()` | the window space is fixed at 3/9/15 |
+| a tuning grid drawn from the windows in the store | inside `dsm_train()` | **done 2026-09-27** — every window the store holds and every pair; batch sizes that give the smallest fold >= 4 steps an epoch; the inverse read from the store; `n_cores`. The thread count the examples pass (30) awaits `_t1_threads_benchmark.R` |
 | refit the chosen config under N seeds | `dsm_final()` | only `examples/.../04` |
 | median, mean and interval maps, with the calibration source as an argument | `dsm_predict()` | only `examples/.../05` |
 
@@ -211,8 +211,9 @@ would hit it:
   in sight at the top of the script that needs it.
 
 - `DESCRIPTION`, `NAMESPACE` (roxygen), moving `examples/` to `inst/` or a
-  vignette, and `setup_torch_device(n_threads = 30)` becoming a default that
-  reads the machine.
+  vignette. (`setup_torch_device()` and `dsm_train(n_cores = NULL)` already
+  read the machine; the examples' hand-typed 30 is replaced by what T1
+  measures.)
 - The seven `docs/*.md` files that predate the last month (see the audit's
   drift list).
 

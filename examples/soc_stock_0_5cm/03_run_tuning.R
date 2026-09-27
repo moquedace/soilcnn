@@ -417,9 +417,13 @@ message("Channels: ", n_channels, " | Points: ", nrow(store$meta))
 #   5. Appends to comparison table (ranked by VALIDATION CCC then validation MAE;
 #      test metrics are recorded for diagnostics only, never used for selection)
 #
-# transform = expm1: back-transform from log1p space to native ton/ha.
-#   Applied to predictions before computing CCC, MAE, etc.
-#   The model trains in log1p space; metrics are always in native units.
+# The back-transform is the STORE'S, not typed here. dsm_load() read "log1p"
+# from the store's manifest, and dsm_train() applies its inverse -- expm1 --
+# to every prediction before CCC, MAE, etc.: the model trains in log1p space,
+# the metrics are always in native ton/ha. This line used to pass expm1 by
+# hand; a store rebuilt with transform = "none" would then have been
+# back-transformed anyway, and dsm_train() now refuses an inverse that
+# disagrees with the store.
 
 # To RESUME an interrupted run (crash, power cut): fill
 # resume_run_id with the exact run_id of the directory under outputs/tuning/
@@ -470,7 +474,6 @@ results <- do.call(
       model      = "cnn",
       resampling = plan,
       tune_grid  = tune_grid,
-      transform  = expm1,
       output_dir = output_tuning_dir,
       device     = device,
       run_id     = run_id,

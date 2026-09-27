@@ -239,9 +239,13 @@ fit <- dsm_train(
   model       = "cnn",
   resampling  = spatial_cv(k = 5, block_size = "auto", buffer = "auto"),
   tune_length = 30,            # a budget, like caret's
-  n_seeds     = 3,             # a claim without repetitions has no error bar
-  transform   = expm1          # the target was trained on log1p
+  n_seeds     = 3              # a claim without repetitions has no error bar
 )
+# What it did not have to be told, and read instead:
+#   the grid's windows    every window the store holds, alone and in pairs
+#   the batch sizes       those that give the smallest fold >= 4 steps an epoch
+#   the inverse           the store's (log1p -> expm1); one that disagrees is refused
+#   the cores             n_cores = NULL is the physical cores minus one
 
 fit$by_config                            # mean ± sd, one row per config
 print_noise_floor(seed_noise_floor(fit$comparison))
@@ -250,7 +254,9 @@ print_one_se(one_se(fit$by_config))      # the simplest config within 1 SE
 
 `dsm_load()` opens the store, reads the points and predictor types, aligns
 them, reads the raster resolution — and **refuses** if the store was built
-under a different predictor set, window set, target or resolution.
+under a different predictor set, window set, target or resolution. A store
+written by `dsm_prepare()` carries its own tables and recipe, so
+`dsm_load(store)` needs nothing else.
 
 ### One line decides who trains and who scores
 

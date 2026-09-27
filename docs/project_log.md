@@ -3933,3 +3933,64 @@ recusa, como rede de segurança para qualquer outro caminho.
 
 **Verificação.** Em `tests/test_api_run.R`, um lote de 64 com a menor dobra de
 16 pontos é recusado antes de treinar, e nenhum modelo é gravado.
+
+
+## 2026-09-27 — Passo 2: o `dsm_train()` lê do store o que vinha do exemplo do SOC
+
+`dsm_train(data, tune_length = 30)` é a chamada de um usuário novo, e três
+padrões dela vinham do SOC, não dos dados:
+
+| o quê | antes | agora |
+|---|---|---|
+| janelas da grade | 3/9/15, de qualquer store: um store de 5 e 11 parava com "this grid needs 3, 9, 15" | todas as janelas do store, sozinhas e em pares (o ramo duplo usa duas) |
+| tamanhos de lote | 128/256/512, fosse qual fosse a dobra | os que dão **≥ 4 passos por época** na menor dobra |
+| a inversa do alvo | `identity`: um store log1p treinado sem `transform = expm1` dava toda métrica "nativa" em escala log | a do store; uma função passada é conferida e recusada se discorda |
+| núcleos | o que o device tivesse; os exemplos digitavam 30, e o RF usava todos os 32 lógicos | `n_cores`, com um só significado: NULL = físicos − 1 |
+
+**Detalhes que importam:**
+
+- **Janelas.** Primeiro as janelas sozinhas, em ordem crescente, depois os
+  pares em ordem lexicográfica. Para 3/9/15 isso dá **exatamente** a lista que
+  o SOC escreveu à mão, na mesma ordem. Por isso a mesma semente sorteia a
+  mesma grade de antes (o teste confere).
+- **Quatro passos, e por que quatro.** O warmup, o platô de LR e a parada
+  antecipada contam em épocas. Uma época de uma atualização transforma
+  `patience = 60` em sessenta atualizações, um cronograma que quer dizer outra
+  coisa. Quatro é o mínimo que a grade do SOC já usava (512 em ~2.100 pontos),
+  então no SOC nada sai. Se nenhuma opção dá quatro, fica a maior potência de
+  2 que dá, nunca abaixo de 2 (o BatchNorm precisa de duas linhas).
+- **A inversa.** A função passada é conferida em cinco valores contra a do
+  store. Uma equivalente escrita de outro jeito (`function(z) exp(z) - 1`)
+  passa. O `03` deixou de digitar `expm1`.
+- **Threads.** Pertencem à sessão R, não ao device. Um device passado mantém as
+  threads com que foi criado, a menos que `n_cores` também seja dado.
+  `set_torch_threads()` saiu de dentro do `setup_torch_device()` para isso.
+- **O RF** agora usa `n_cores` (antes, `num.threads = 0`: todos os 32 lógicos).
+  Não medi se isso muda o tempo dele. O resultado não deveria mudar, porque o
+  ranger semeia cada árvore, mas isso também não medi.
+
+**O que não mudou.** Nenhuma grade do SOC muda: o `03` passa a grade
+explícita, e mesmo a padrão, com 3/9/15 e ~2.100 pontos, sai igual. Nenhuma
+chamada dos exemplos muda de resultado, porque todas passavam `expm1`, que
+concorda com o log1p do store.
+
+**Alternativas descartadas.**
+
+- Exigir `windows` no `make_tune_grid()`: quebraria as chamadas diretas. Sem
+  `windows` fica o conjunto do SOC, e se o store não tiver essas janelas o
+  `dsm_train()` para na hora, dizendo como corrigir.
+- Mínimo de um passo por época: evitaria o zero (a correção anterior), mas não
+  o cronograma sem sentido.
+
+**Verificação.**
+
+- `tests/test_train_defaults.R`, novo, rápido e sem treino. Cobre as opções de
+  janela, a grade do SOC reproduzida sob a mesma semente, a grade de um store
+  5/11, os lotes (com o SOC intacto), o carregador que recusa, a inversa em
+  seis casos, e `n_cores` recusado na porta.
+- `tests/test_api_run.R`, seção 3b. A grade padrão treina num store de uma
+  janela, pede só a janela 3, usa lotes que cabem na menor dobra, e deixa o
+  torch em 1 thread depois de `n_cores = 1`. As previsões gravadas são
+  exatamente `expm1` da saída da rede. O `clamp` fica aberto nesse teste,
+  senão uma rede com saídas todas negativas daria 0 com qualquer inversa, e o
+  teste passaria no vazio.

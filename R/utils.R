@@ -199,17 +199,21 @@ resolve_cores <- function(n_cores = NULL, what = "this step") {
 
 # ── Torch / device setup ──────────────────────────────────────────────────────
 
-#' Configure torch threads and select compute device.
+#' Set torch's thread pools.
 #'
-#' @param n_threads   Number of intra-op threads; NULL for the physical cores
-#'   minus one (see resolve_cores()).
-#' @param use_cuda    Use GPU if available.
-#' @return A torch_device object.
-setup_torch_device <- function(n_threads = NULL, use_cuda = TRUE) {
-  # FROM THE MACHINE, NOT FROM A LITERAL. The default was 8 and every example
-  # script overrode it with 30 -- the author's workstation -- so a user on a
-  # laptop would have oversubscribed and a user on a bigger box would have
-  # idled. NULL reads the physical core count and leaves one for the OS.
+#' Split out of setup_torch_device() so that a caller who already holds a
+#' device can change the threads without building a second one --
+#' dsm_train(device = d, n_cores = 8) is that caller. The threads belong to
+#' the R session, not to a device: whatever set them last is what every later
+#' torch call gets.
+#'
+#' The interop pool can be sized once per session, before torch first runs
+#' work in parallel; later calls leave it as it is and say so once.
+#'
+#' @param n_threads NULL for the physical cores minus one (see
+#'   resolve_cores()), or a whole number >= 1.
+#' @return The number of threads, invisibly.
+set_torch_threads <- function(n_threads = NULL) {
   n_threads <- resolve_cores(n_threads, what = "torch")
   Sys.setenv(
     OMP_NUM_THREADS = as.character(n_threads),
@@ -235,6 +239,21 @@ setup_torch_device <- function(n_threads = NULL, use_cuda = TRUE) {
       }
     )
   }
+  invisible(n_threads)
+}
+
+#' Configure torch threads and select compute device.
+#'
+#' @param n_threads   Number of intra-op threads; NULL for the physical cores
+#'   minus one (see resolve_cores()).
+#' @param use_cuda    Use GPU if available.
+#' @return A torch_device object.
+setup_torch_device <- function(n_threads = NULL, use_cuda = TRUE) {
+  # FROM THE MACHINE, NOT FROM A LITERAL. The default was 8 and every example
+  # script overrode it with 30 -- the author's workstation -- so a user on a
+  # laptop would have oversubscribed and a user on a bigger box would have
+  # idled. NULL reads the physical core count and leaves one for the OS.
+  n_threads <- set_torch_threads(n_threads)
   device <- if (use_cuda && torch::cuda_is_available()) {
     torch::torch_device("cuda")
   } else {
