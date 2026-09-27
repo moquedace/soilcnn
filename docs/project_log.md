@@ -3842,3 +3842,72 @@ recusada — os rasters ficam como estão.
   banda. Se o P1 falhar, a mensagem agora avisa para **não** rodar o `01`: ele
   chama o `dsm_prepare()` com `overwrite = TRUE` e substituiria o store que o
   P1 usa como referência.
+
+
+## 2026-09-27 — P1 da passada única: PASS 19/19, e o gargalo agora é o HD
+
+### O resultado
+
+- **19 de 19.** Os patches saíram idênticos bit a bit, e a tabela de pontos
+  idêntica valor a valor. O centro lido na passada é a mesma célula que o
+  `terra::extract()` devolvia.
+- **Tempo total de 92,8 para 68,4 min** (−24,4 min, −26%). A fase serial
+  sumiu: sobram 0,2 min fora da extração.
+- A extração em si passou de 60,6 para 68,2 min. O modelo abaixo atribui ~2
+  min aos 388 pontos a mais que ela agora lê (378 GB contra 367). Os outros
+  ~5 min são a diferença entre o que o modelo prevê para a corrida antiga
+  (66,2) e o que ela mediu (60,6), e ficam sem explicação. Talvez o cache do
+  sistema, aquecido pela fase serial que vinha antes.
+- **`has_na` não marca canal nenhum.** Os 13 pontos com problema de preditor
+  são nodata na pilha inteira. A primeira correção (99e3a91) teria marcado
+  os 174 canais não constantes, cada um com os mesmos 13 NA, e não apontaria
+  nenhum. Era exatamente o defeito que a segunda correção tirou, agora visto
+  nos dados e não só suposto. O `channel_risk.csv` sai idêntico ao antigo,
+  inclusive nas contagens.
+- Nenhum ponto do SOC ficou perto da borda nem fora do raster. A leitura 1 × 1
+  só de centro não foi exercitada aqui, só no teste.
+
+### Onde está o tempo agora: no HD, não na CPU
+
+O D: é **um HD SATA de 12 TB**. Os 181 rasters somam 1.052 GB comprimidos
+(11,6 GB por banda contínua). O C: é NVMe, mas tem 493 GB livres, e os
+rasters não cabem.
+
+O `tools/extraction_io_model.py` calcula, banda por banda, os bytes
+comprimidos das linhas que o plano de leitura toca, a partir dos cabeçalhos
+dos TIFFs, sem ler um pixel. Ajustei dois modelos aos 13 lotes de 15 bandas
+que o log do P1 cronometrou:
+
+| modelo | o tempo do lote é proporcional a | R² |
+|---|---|---|
+| disco | a **soma** dos bytes do lote (um disco dividido) | **0,973** |
+| CPU | o **maior** do lote (o núcleo mais lento) | 0,242 |
+
+A vazão fica em ~99 MB/s somando os 15 workers. O último lote tinha uma banda
+só (`wtd_annual`, 4,5 GB) e levou ~0,5 min, ou seja **~150 MB/s com um leitor
+sozinho** (entre 125 e 190 MB/s, pela resolução do log). Quinze leitores no
+mesmo HD rendem menos que um: a cabeça do disco pula entre quinze arquivos.
+
+### O que isso muda, e o que fica para depois
+
+- **Mais núcleos não aceleram a extração.** Menos provavelmente aceleram.
+  Quantos, só medindo.
+- **Ler só as linhas de que os patches precisam.** Hoje uma leitura cobre da
+  primeira à última linha dos pontos do seu grupo de colunas, e as linhas do
+  meio são lidas à toa. Cortando os grupos também por linha, o modelo prevê
+  378 → 233 GB no dev (68 → ~44 min) e 944 → 763 GB nos 41 mil pontos
+  (164 → ~133 min). Isso vale se a vazão se mantiver, o que não é garantido:
+  pedaços menores e separados custam mais buscas num HD.
+- **Descartado — ordenar as bandas por tamanho nos lotes.** Ajudaria se o
+  limite fosse a CPU. Com o disco no limite, o lote custa a soma dos bytes, e
+  a ordem não muda a soma. A medição evitou uma otimização errada.
+- **Descartado — copiar os rasters para o NVMe:** 1.052 GB não cabem em 493.
+- **Tiles:** recusado, é decisão sobre os dados de origem.
+- **A extração completa** (41.385 pontos), com o código de hoje: ~2,7 h
+  (944 GB lidos).
+- **Nos mapas (passo 5) isto pesa mais.** Prever um mapa lê cada raster na área
+  inteira. O leitor do `dsm_predict()` tem que ler cada bloco uma vez só e
+  aplicar todos os seeds nele, e o número de leitores simultâneos tem que ser
+  medido neste HD. Um benchmark de leitores simultâneos serve às duas coisas.
+  Fica para o passo 5, e o resultado volta para o `dsm_prepare()` antes da
+  extração completa.
