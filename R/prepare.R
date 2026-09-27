@@ -470,17 +470,22 @@ dsm_prepare <- function(points, target, raster_dir, windows,
   #                  map (glaciers are 0 at every profile and 1 over ice); its
   #                  weights never get a gradient and stay at random init.
   #   near_constant  the same, smaller.
-  #   has_na         NA at the points -- counted over EVERY extracted row,
-  #                  after the QC rules and before any row is dropped.
-  # Stage 01 counted it on the rows that survived QC, and QC drops every row
-  # with a non-finite predictor, so has_na could not fire: it reported 0 for
-  # every channel on every run. It is the channel that knocks points out that
-  # this column exists to name, and those points are exactly the dropped ones.
+  #   has_na         NA at points where OTHER channels have data.
+  #
+  # has_na, twice corrected. Stage 01 counted it after the QC had dropped
+  # every row with an NA, so it could never fire. The first correction counted
+  # every extracted row -- which would have flagged EVERY channel for every
+  # point in the ocean, where the whole stack is nodata, and named nothing.
+  # A point that is NA everywhere says nothing about any channel; the blame
+  # report below draws the same line with its n_sole_cause. So the count is
+  # over the points that have data in at least one channel.
+  na_mat    <- !is.finite(as.matrix(df[, qc_all$predictor]))
+  with_data <- rowSums(na_mat) < ncol(na_mat)
+  n_na_part <- colSums(na_mat[with_data, , drop = FALSE])
   channel_risk <- types %>%
     dplyr::mutate(
-      n_na_at_points = purrr::map_int(predictor,
-                                      ~ sum(!is.finite(df[[.x]]))),
-      pct_na = round(100 * n_na_at_points / nrow(df), 3),
+      n_na_at_points = as.integer(n_na_part[predictor]),
+      pct_na = round(100 * n_na_at_points / max(1L, sum(with_data)), 3),
       type   = dplyr::case_when(is_dummy ~ "dummy",
                                 is_percentage ~ "percentage",
                                 TRUE ~ "continuous"),
@@ -888,6 +893,16 @@ print.dsm_store <- function(x, ...) {
     } else {
       say("  Add them to `drop`, or keep them deliberately.")
     }
+  }
+  n_na_ch <- sum(flagged$risk == "has_na")
+  if (n_na_ch > 0L) {
+    # Not "add them to drop", as for the constant channels: whether a channel
+    # is worth the points it costs is a judgement about the variable, so the
+    # report gives the count that judgement needs and names the option.
+    say("\n  ", n_na_ch, " has_na channel(s): NA at points where other channels ",
+        "have data. The QC drops every such point (n_na_at_points), and the map")
+    say("  will have a hole wherever the channel is nodata. A channel that costs ",
+        "many points is a candidate for `drop`.")
   }
   invisible(flagged)
 }

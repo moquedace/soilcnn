@@ -25,6 +25,8 @@
 #   * target_config.csv gains fields (the transform, the dummy rule, the NA
 #     floors as rules) -- compared on the fields both have
 #   * the store gains files: recipe.rds and copies of the four tables it needs
+#   * channel_risk.csv, in has_na only: stage 01 counted NA after the QC had
+#     dropped every row with one, so has_na could never fire (p1_11)
 #   * extracted_at, of course
 #
 # Everything else must be identical: the patches bit for bit, the tables value
@@ -255,9 +257,31 @@ ledger_check(L, "p1_09", "predictor_type_table.csv",
 ledger_check(L, "p1_10", "qc_table.csv",
              same_csv(file.path(old_meta, "qc_table.csv"),
                       file.path(st$metadata_dir, "qc_table.csv")))
-ledger_check(L, "p1_11", "channel_risk.csv",
-             same_csv(file.path(old_meta, "channel_risk.csv"),
-                      file.path(st$metadata_dir, "channel_risk.csv")))
+# The one table EXPECTED to differ, and only in has_na. Stage 01 counted NA
+# after the QC had dropped every row with one, so its count was 0 for every
+# channel; dsm_prepare() counts over every point that has data in at least
+# one channel (R/prepare.R, step 9). So: the columns that describe a channel
+# identical, constant and near_constant exactly where they were, has_na only
+# where stage 01 said nothing -- and the channels it now names, reported.
+ledger_check(L, "p1_11", "channel_risk.csv: identical but for has_na, which 01 could not fire", {
+  a  <- norm(safe_read_csv2(file.path(old_meta, "channel_risk.csv")))
+  b  <- norm(safe_read_csv2(file.path(st$metadata_dir, "channel_risk.csv")))
+  ra <- dplyr::coalesce(as.character(a$risk), "")
+  rb <- dplyr::coalesce(as.character(b$risk), "")
+  cols <- c("predictor", "type", "n_unique", "min_value", "max_value")
+  same_shape <- identical(dim(a), dim(b)) && identical(names(a), names(b))
+  same_cols  <- same_shape && identical(a[cols], b[cols])
+  same_const <- same_shape && identical(ra == "constant", rb == "constant") &&
+    identical(ra == "near_constant", rb == "near_constant")
+  only_new   <- same_shape && all(ra[rb == "has_na"] == "") && !any(ra == "has_na") &&
+    all(a$n_na_at_points == 0L)
+  named <- if (same_shape) b$predictor[rb == "has_na"] else character(0)
+  list(ok = same_cols && same_const && only_new,
+       measured = sprintf("%d x %d | descriptive columns identical: %s | constant / near_constant unchanged: %s | has_na now names %d channel(s)%s",
+                          nrow(b), ncol(b), same_cols, same_const, length(named),
+                          if (length(named)) paste0(": ", paste(utils::head(named, 5), collapse = ", "),
+                                                    if (length(named) > 5L) ", ..." else "") else ""))
+})
 ledger_check(L, "p1_12", "channel_invalidation.csv (the window rule's blame)",
              same_csv(file.path(old_meta, "patches", "channel_invalidation.csv"),
                       file.path(st$metadata_dir, "patches", "channel_invalidation.csv")))

@@ -3754,3 +3754,29 @@ guarda: depois que o `01` novo rodar, o store em disco é do próprio
 **Não é preciso rodar o `01` de novo agora**: o store em disco é idêntico ao
 que ele produziria. O do P1 é uma cópia do mesmo store, com a receita dentro,
 e pode ser apagado.
+
+
+## 2026-09-26 — `has_na`, corrigido pela segunda vez
+
+A primeira correção (contar NA sobre todas as linhas extraídas, não só as que
+sobraram do QC) tinha um defeito: um ponto no oceano, onde a pilha inteira é
+nodata, contaria como NA em **todos** os canais, e o risco marcaria todos —
+sem apontar nenhum. Um ponto sem dado em canal nenhum não diz nada sobre canal
+nenhum; o relatório de culpa da regra da janela já separa isso com o
+`n_sole_cause`. Agora a contagem, e o percentual, são sobre os pontos que têm
+dado em **pelo menos um** canal.
+
+O relatório do console também passa a explicar o `has_na`: cada ponto onde o
+canal é NA é um ponto que o QC descarta, e o mapa terá um buraco onde o canal
+for nodata. Não diz "descarte-o", como diz para os canais constantes: se o
+canal vale os pontos que custa é um julgamento sobre a variável, e o relatório
+dá a contagem de que esse julgamento precisa.
+
+**Verificação.** `tests/test_prepare.R` ganhou um ponto fora do raster (p14,
+coluna 46 de 40): 14 pontos extraídos, 2 problemas de preditor, 10 depois do
+QC — e **nenhum** canal marcado por causa dele (a temperatura continua com 1
+NA, em 13 pontos com dado). No P1, o `p1_11` agora aceita o
+`channel_risk.csv` diferente **só** no `has_na` — as colunas que descrevem o
+canal idênticas, `constant` e `near_constant` exatamente onde estavam,
+`has_na` só onde o `01` não dizia nada — e informa quais canais ele passou a
+apontar.

@@ -86,10 +86,10 @@ writeLines("not a raster", file.path(rdir, "notes.txt"))
 # Each point exists for one path. x, y are cell centres.
 pts_rc <- data.frame(
   profile_id = c("p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p1", "p10",
-                 "p11", "p12", "p13"),
-  r   = c(5, 6, 10, 20,  2, 15, 12, 14, 25, 18, 26,  8, 16),
-  c   = c(5, 30, 10, 20, 15, 39, 25, 12,  8, 33, 38, 18,  1),
-  soc = c(10, 20, 30, 40, 50, 60,  0, NA, 70, 5.5, 100, 12, 33))
+                 "p11", "p12", "p13", "p14"),
+  r   = c(5, 6, 10, 20,  2, 15, 12, 14, 25, 18, 26,  8, 16, 10),
+  c   = c(5, 30, 10, 20, 15, 39, 25, 12,  8, 33, 38, 18,  1, 46),
+  soc = c(10, 20, 30, 40, 50, 60,  0, NA, 70, 5.5, 100, 12, 33, 25))
 #   p3   centre on a temperature sentinel     -> dropped by the point QC
 #   p4   a sentinel inside its 5x5 window     -> kept by the QC, lost to the window rule
 #   p5 / p6 / p13  within 2 cells of the edge -> kept in the table, not in the store
@@ -98,6 +98,8 @@ pts_rc <- data.frame(
 #   p8   target NA                            -> dropped
 #   9th  repeats profile p1                   -> the first p1 is kept
 #   p11  its window reaches pct_clay > 100    -> clamped in the patch
+#   p14  outside the raster (column 46 of 40) -> NA in every channel, dropped
+#        by the QC -- and it must flag no channel as has_na
 pts <- data.frame(profile_id = pts_rc$profile_id, x = pts_rc$c - 0.5,
                   y = (n_r + 0.5) - pts_rc$r, soc = pts_rc$soc)
 
@@ -137,8 +139,8 @@ ok["the_target_is_carried_in_both_spaces"] <-
   isTRUE(all.equal(pt$target_native, pt$soc))
 qs <- safe_read_csv2(file.path(st$metadata_dir, "qc_summary.csv"))
 ok["qc_summary_counts_before_the_deduplication_as_stage_01_did"] <-
-  qs$n_rows_extracted == 13 && qs$n_target_problem == 2 &&
-  qs$n_predictor_problem == 1 && qs$n_rows_after_qc == 10
+  qs$n_rows_extracted == 14 && qs$n_target_problem == 2 &&
+  qs$n_predictor_problem == 2 && qs$n_rows_after_qc == 10
 
 # ── 3. the types ─────────────────────────────────────────────────────────────
 tyd <- setNames(ty$is_dummy, ty$predictor)
@@ -154,11 +156,17 @@ cr <- safe_read_csv2(file.path(st$metadata_dir, "channel_risk.csv"))
 ok["a_channel_constant_at_the_points_is_flagged"] <-
   identical(cr$risk[cr$predictor == "const_glacier"], "constant")
 # p3 sits on a temperature sentinel, so that channel is NA at one of the 13
-# extracted points -- the point QC then drops. Stage 01 counted after the drop
-# and reported 0; the column exists to name the channel that knocked it out.
+# points with data (p14 has none) -- the point QC then drops it. Stage 01
+# counted after the drop and reported 0; the column exists to name the
+# channel that knocked it out.
 ok["a_channel_that_is_na_at_a_point_is_flagged_has_na"] <-
   identical(cr$risk[cr$predictor == "surface_temperature_celsius"], "has_na") &&
-  cr$n_na_at_points[cr$predictor == "surface_temperature_celsius"] == 1
+  cr$n_na_at_points[cr$predictor == "surface_temperature_celsius"] == 1 &&
+  abs(cr$pct_na[cr$predictor == "surface_temperature_celsius"] - 100 / 13) < 1e-3
+# p14 is NA in EVERY channel. Counted, it would flag all five -- as it would
+# every point in the ocean -- and name nothing.
+ok["a_point_with_no_data_anywhere_flags_no_channel"] <-
+  all(cr$n_na_at_points[cr$predictor != "surface_temperature_celsius"] == 0L)
 
 # ── 4. the store: edge check, window rule, geometry ──────────────────────────
 ok["store_keeps_only_points_with_a_whole_valid_window"] <-
@@ -354,7 +362,7 @@ ok["a_store_without_a_recipe_still_needs_its_tables"] <- {
 
 unlink(base, recursive = TRUE)
 
-cat(sprintf("  fixture                  : 13 points -> 9 after QC -> 5 in the store (windows 3, 5)\n"))
+cat(sprintf("  fixture                  : 14 points -> 9 after QC -> 5 in the store (windows 3, 5)\n"))
 cat(sprintf("  patch vs raster formula  : exact, both windows\n"))
 cat(sprintf("  n_cores = 2 vs 1         : identical arrays\n"))
 
