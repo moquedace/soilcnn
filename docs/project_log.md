@@ -4890,3 +4890,69 @@ lida e por pixel, e o pico de RAM de cada worker contra a estimativa. Imprime o
 tempo estimado do global para cada arranjo. As checagens exigem que o pico não
 passe 25% da estimativa e que a soma caiba no orçamento. Se o modelo de RAM
 estiver errado na largura inteira, o T3 para antes do global.
+
+
+## 2026-09-27 — T3, primeira rodada: 2/4; o cálculo satura em ~20 mil px/s, e a memória explodiu no leitor
+
+**T3 (commit 811beae)**: três faixas vizinhas de largura inteira perto de
+47°N, com ~54% de pixels válidos, todas as bandas e as duas fontes.
+
+| arranjo pedido | rodou como | px válidos/s (relógio) | s por px válido (worker) | s por linha lida | leitura / rede / DI | pico por worker |
+|---|---|---|---|---|---|---|
+| a: 3 × 5 threads | **2 × 5** (RAM) | **18.609** | 9,4e-5 | 0,70 | 11 / 61 / 25% | 26,5 GB |
+| b: 1 × 15 | 1 × 15 | 17.168 | 4,9e-5 | 0,43 | 12 / 59 / 24% | 31,6 GB |
+| c: 5 × 3 | **3 × 3** (RAM) | 15.269 | 1,5e-4 | 0,73 | 8 / 65 / 25% | 24,1 GB |
+
+A sondagem passou de novo (4,1e-7) e todas as unidades terminaram. **As duas
+checagens de memória falharam**: picos de 24–32 GB contra 12,4 GB
+estimados.
+
+### O que os números dizem
+
+- **O cálculo satura em ~20 mil px/s, qualquer que seja a divisão.** 2 × 5,
+  1 × 15 e 3 × 3 threads deram 21,3, 20,4 e 20,0 mil px/s de cálculo puro.
+  Passando de ~10 threads, quem manda é a banda de memória da máquina, não os
+  núcleos. Não adianta mais worker; adianta menos conta por pixel.
+- **O DI leva 25% do tempo, e era calculado duas vezes.** As referências de
+  blocos (3.092 perfis) e de kNNDM (3.137) compartilham 3.092 perfis.
+- **O global, nesse ritmo: ~36 h.** Estimativa de 448 linhas perto de 47°N.
+
+### A memória: três causas no leitor e no plano
+
+1. **O leitor de linhas inteiras.** Uma banda de um passo de largura inteira
+   tem ~5 milhões de células, e o leitor fazia cinco cópias dela (float64,
+   escalada, mascarada, convertida, com borda): ~300 MB por banda, 181 bandas
+   por passo, sem chamar o coletor por ~30 s. As coletas leves do torch
+   promoviam o que estava vivo, e acumulava.
+
+   **Agora:** um tensor float32, escalado e mascarado no lugar, e uma coleta
+   depois de cada banda. É também como o treino escalava os patches (no
+   dtype do tensor), e os valores float32 do raster convertem exatamente.
+2. **O primeiro passo lia halo e linhas como um bloco só,** e depois clonava
+   o halo e copiava as linhas de dentro dele: ~11 GB vivos juntos. **Agora:**
+   duas leituras disjuntas, sem descomprimir nenhuma linha duas vezes.
+3. **O modelo de RAM** não contava o clone do próximo halo (~1,6 GB a 250 m)
+   nem os vetores por pixel do passo no R (~2,4 GB num passo de terra).
+   **Agora conta.** O plano também escolhia o passo para os workers pedidos e
+   depois cortava os workers. **Agora** acha quantos cabem, depois o maior
+   passo para esse número, e avisa quando sobram núcleos.
+
+### O DI numa multiplicação só
+
+As distâncias vão para a **união** dos perfis das referências, uma vez, e
+cada referência pega o seu vizinho mais próximo entre as suas colunas: mesmo
+vizinho, mesma distância, mesmo DI. Referências que a união não comporta
+(outro peso, linhas diferentes do mesmo perfil) ficam com matriz própria.
+
+### O que roda de novo
+
+O `predict.R` mudou no leitor, no DI e no plano, então é preciso rodar de
+novo, nesta ordem:
+
+1. **`test_predict.R`:** as fontes com referências diferentes passam pelo
+   caminho de subconjunto da união.
+2. **P4:** a escala float32 contra o `05` em double, e a união com prefixo e
+   inteiro nas fontes reais.
+3. **T3, segunda rodada**, em faixas novas (o cache do Windows pode guardar
+   as da primeira): **2 workers × 7 threads** (o que a RAM permite, usando
+   todos os núcleos) contra 1 × 15.
