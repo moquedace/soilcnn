@@ -4759,3 +4759,72 @@ idênticas.
   vários GB. O P4 imprime agora o pico medido ao lado do estimado, para o
   pedaço e para a sondagem, que sempre rodam de novo. O mapa inteiro de 20 km
   é retomado, e o pico dele é o que foi registrado na rodada antiga.
+
+
+## 2026-09-27 — P4, segunda rodada: 9/10; a sondagem desistia; o coletor do R
+
+O PC reiniciou por atualização logo depois das rodadas. O que ficou no disco
+diz o seguinte.
+
+- **O `test_predict.R` rodou até o fim** (~70 s pelo histórico do RStudio;
+  ele só apaga a pasta temporária no final, e ela não sobrou). **O veredito
+  se perdeu com o console**: tem que rodar de novo.
+- **O P4 terminou às 05:55**, antes do reinício. O `p4_checks.csv` é a
+  última coisa que ele grava.
+
+### O resultado do P4
+
+| checagem | resultado |
+|---|---|
+| p4_01 – p4_06 | como na rodada anterior (máscara idêntica, bandas a ≤ 2e-5, S e q do `04`) |
+| p4_07 DI × `aoa_di()`, 2.000 pixels | di_block 7,0e-8 · di_knndm 7,5e-8 |
+| p4_08 AOA × DI | blocos: DI ≤ 0,700, 84,7% do mapa dentro · kNNDM: DI ≤ 0,945, 94,2% |
+| p4_09 pedaço patch a patch × inteiro convolucional | mediana 5,4e-7 · DI 0 — **o motor convolucional é exato na rede real implantada** |
+| p4_10 sondagem a 250 m | **falhou**: não rodou |
+
+### Por que a sondagem desistiu
+
+O final guardou previsões para **3.599** dos **3.728** perfis do store. O
+buffer do refit tira 129 perto do teste e da validação, e esses 129 não têm
+com o que ser comparados. A sondagem escolhia o grupo mais denso entre
+**todos** os perfis, achava um sem previsão e declarava "não aplicável". Agora
+ela lê as previsões de todas as seeds uma vez e sorteia só entre os perfis que
+têm uma. O `test_predict.R` tira 9 perfis do arquivo de uma seed e exige que a
+sondagem passe sem eles.
+
+### O coletor do R, lido no código do torch
+
+O pedaço patch a patch chegou a **17 GB** num worker, mesmo com a coleta leve
+por seed. O código do torch (`src/lantern/src/Allocator.cpp`) explica:
+
+- **A cada `torch.threshold_call_gc` MB alocados, o torch chama uma coleta
+  LEVE do R** (`gc(full = FALSE)`). Ela só alcança a geração mais nova. Todo
+  tensor ainda em uso quando ela roda (a seed em cálculo) é promovido, e morre
+  depois onde só uma coleta completa enxerga.
+- **O limiar só vale se for ajustado antes de o torch carregar.** Eu o
+  ajustava no worker depois do `load_all.R`, que já cria módulos torch: nunca
+  valeu.
+- **O torch guarda blocos liberados para reuso,** até o tamanho do limiar.
+
+**A correção:**
+
+- `torch.threshold_call_gc = 1000` antes do `load_all.R`;
+- uma coleta leve depois de cada lote, ramo e seed (milissegundos);
+- uma **completa a cada 2 s**. O lixo cresce no ritmo da conta (~1 GB/s por
+  worker), então um relógio o limita tão bem quanto uma contagem de bytes,
+  sem modelar cada camada.
+
+O modelo de RAM passou a contar os 3 GB que isso deixa.
+
+**A medir na próxima rodada.** Os mapas de 20 km do P4 agora levam o commit
+no nome: um commit novo mapeia de novo, e o pico impresso é o do código atual.
+O mapa retomado guardava o pico da versão anterior.
+
+### Um primeiro número real da leitura a 250 m
+
+O mapa mínimo da parte B (1 linha × 16 colunas) leu as 15 linhas da janela
+dos 181 rasters em **5,6 s**: ~0,37 s por linha inteira. Para as 63.721
+linhas seriam **~6,6 h com um leitor**. É um teto: leituras de 15 linhas pagam
+181 buscas no HD por poucas linhas, e o mapa global lê passos de 32 linhas
+nos três workers ao mesmo tempo. A sondagem da próxima rodada mede com mais
+linhas.
