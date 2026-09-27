@@ -4692,3 +4692,70 @@ O `dsm_final()` agora grava no resumo o **caminho** da rodada de tuning
 (`tuning_dir`), e não só o nome. É daí que o `dsm_predict()` tira a
 calibração padrão. Para as rodadas do `04`, que só têm o nome, a calibração é
 passada explicitamente.
+
+
+## 2026-09-27 — Suíte 29/29; o P4 parte A refaz o mapa do `05`; dois DI, porque as referências diferem
+
+### A suíte
+
+**29/29 em 5,9 min.**
+
+- **`test_fcn.R`, 32 checagens.** O motor convolucional difere de
+  `model(patches)` em no máximo **4,5e-8** nas 10 arquiteturas.
+- **`test_predict.R`, 27 checagens.** A cadeia inteira numa grade de
+  40 × 56, com 1.517 pixels válidos:
+  - a sondagem reproduziu as previsões gravadas de 48 perfis × 2 seeds com
+    diferença relativa máxima de **5,0e-8**;
+  - a pior banda de ensemble ficou em **6,5e-8** da conta feita à mão;
+  - o pior DI ficou em **5,5e-8** do `aoa_di()`.
+
+### P4, parte A: a grade de 20 km contra o `05`
+
+O mesmo modelo implantado (final_20260918_150311, cfg_003, 10 seeds) nos
+mesmos rasters de 20 km:
+
+| checagem | resultado |
+|---|---|
+| p4_03 máscara de válidos | **idêntica**, 358.537 pixels, 0 diferem |
+| p4_04 as seis bandas de ensemble | mediana 1,0e-6 · média 5,3e-7 · sd 5,4e-6 · mad 1,9e-5 · mín 1,2e-6 · máx 1,5e-6 |
+| p4_05 média com smearing | S = 1,346057, **o mesmo do `04`**; pior 1,0e-6 |
+| p4_06 intervalo constante de 90% | q = 39,621760, **o mesmo do `04`**; pior 2,1e-5 (limite inferior, perto de 0) |
+
+**O tempo:** o `05` levou **30,5 min**. O `dsm_predict()` mapeou em
+**0,8 min** (1,0 min contando calibração e partida dos workers): 7.735 pixels
+válidos por segundo contra 196, com 3 workers × 5 threads.
+
+**Dentro das unidades:**
+
+- a rede leva a maior parte: 3,6 a 13 s por unidade de 112 × 2.004;
+- a leitura leva 1,5 a 4,6 s, com 181 leituras pequenas por passo, dominadas
+  por custo fixo;
+- o DI leva até 3,3 s;
+- bandas e escrita, menos de 1 s.
+
+**O p4_02 falhou, e a execução parou no p4_07, por erro meu no script do P4,
+não no mapa.** Com duas fontes, o mapa gravou **dois** DI, `di_block` e
+`di_knndm`, e o script esperava um `di` só. As referências diferem: o plano
+por blocos tem 3.092 pontos, porque o buffer tira 45 perfis de todos os folds;
+o kNNDM tem 3.137. É o comportamento certo. O DI de cada fonte é medido contra
+os perfis do plano dela, e é com esse DI que o seu intervalo nível + DI foi
+calibrado e o seu limiar de AOA foi derivado. Os dois diferem pouco (médias
+0,56639 e 0,56644). O teste sintético não pegou isso porque usava duas fontes
+idênticas.
+
+### Correções
+
+- **O `calibration.csv` agora diz qual banda de DI cada fonte usa**
+  (`di_band`), e o P4 lê esse nome em vez de supor. O `test_predict.R` ganhou
+  o caso de duas fontes com referências diferentes: um plano que deixa um
+  perfil de fora de todos os folds precisa sair com uma banda de DI própria.
+- **Memória:** cada worker chegou a **8 a 13 GB**, contra 6,1 GB estimados.
+  O R só libera um tensor quando o coletor roda, e o coletor não vê o tamanho
+  do tensor, então os mapas de atributos das 10 seeds se acumulavam. Agora há
+  uma coleta menor (`gc(full = FALSE)`, milissegundos) depois de cada seed e
+  do DI.
+
+  **Isso importa antes do global:** a 250 m o buffer de uma faixa sozinho tem
+  vários GB. O P4 imprime agora o pico medido ao lado do estimado, para o
+  pedaço e para a sondagem, que sempre rodam de novo. O mapa inteiro de 20 km
+  é retomado, e o pico dele é o que foi registrado na rodada antiga.
