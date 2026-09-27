@@ -4294,3 +4294,73 @@ registros): a declaração sai igual à que o `dsm_final()` escreveu.
 modelo saiu é a de dev, com `tune_length = 3`, então a "busca" comparou três
 configurações. A tabela vai dizer quais valores foram de fato comparados, e
 isso é o que ela existe para dizer.
+
+
+## 2026-09-27 — Passo 4 começa: o intervalo "nível + DI", e o custo real de um mapa a 250 m
+
+### O intervalo com escala ajustada
+
+`conformal_scaled_calibrate()` / `conformal_scaled_interval()`, em
+`R/conformal.R`:
+
+- **Ajuste da escala:** metade dos pontos de calibração ajusta
+  σ = a + b·nível + c·DI por mínimos quadrados sobre |resíduo|.
+- **Calibração do q:** a outra metade calibra q sobre |resíduo|/σ, com a
+  correção (n+1).
+- **O intervalo:** predição ± q·σ.
+
+A separação em metades é o que mantém a garantia de cobertura (split conformal
+com escore ponderado localmente: Papadopoulos et al. 2008; Lei et al. 2018,
+§5.2). Se o ajuste e o quantil usassem os mesmos pontos, o ajuste absorveria
+os resíduos que o quantil deveria medir. A escala tem um piso de 5% da mediana
+de |resíduo|: um ajuste linear pode ir a zero na borda das covariáveis, e um
+intervalo de largura zero afirmaria uma certeza que os dados nunca deram.
+
+**Testes** (`test_conformal.R`, 11 novos): num conjunto em que o erro cresce
+com o nível **e** com o DI, por construção:
+
+- as duas escalas ajustadas cobrem 90% ± 3% no total;
+- nível + DI deixa a cobertura uniforme nos dois eixos, com menos de metade da
+  variação da constante;
+- só nível deixa o eixo do DI desigual;
+- a garantia vale em média com n = 60 (30 para ajustar, 30 para calibrar);
+- a escala nunca cai abaixo do piso;
+- três usos errados são recusados.
+
+### A referência do DI virou função
+
+`aoa_reference()` e `aoa_di()`, em `R/aoa.R`, trazem a construção que morava
+dentro do `07`: o pixel central de cada ponto que treinou ou validou, com QC e
+a escala **do modelo**, e o fold em que foi deixado de fora. O DI de validação
+cruzada de cada ponto (distância ao vizinho mais próximo fora do seu fold) é
+o DI com que vem cada resíduo de calibração. O mapa, a AOA e o intervalo
+passam a medir contra a mesma referência: duas cópias de "o que o modelo viu"
+seriam o único jeito de este intervalo perder a garantia sem erro algum,
+calibrado com um DI e aplicado com outro. O `test_aoa.R` ganhou 4 checagens:
+um ponto da referência tem DI 0, o DI de CV é o do limiar, o teste fica fora e
+uma escala permutada é recusada.
+
+### U1: qual intervalo o mapa leva
+
+`_u1_conformal_level_di.R` calibra os três intervalos de 90% (constante, só
+nível, nível + DI) nos resíduos da CV do cfg_003 e os mede nos 591 pontos de
+teste. Mostra a cobertura no total, por quinto do nível, por quinto do DI e
+dentro/fora da AOA, com a largura ao lado. Um intervalo que cobre por ser
+enorme não melhorou nada. Resultado: pendente.
+
+### O custo real de um mapa a 250 m
+
+A rodada de dev do `05` (grade de ~20 km, 358 mil pixels válidos) prevê a
+**164 pixels válidos por segundo**, com 10 seeds. A leitura foi desprezível
+(23 s contra 2.184 s de inferência). A 250 m, com ~22% da grade válida, seriam
+~2,3 bilhões de pixels: **~4 meses de máquina**. O custo não é o disco: a
+rede recalcula as convoluções de cada patch 15×15 do zero para cada pixel, e
+patches vizinhos compartilham 14 de 15 colunas.
+
+Rodar a rede como **totalmente convolucional** (as convoluções uma vez sobre a
+faixa inteira; depois, por pixel, o pooling e a cabeça) cortaria isso em
+~100×, para ~1–2 dias. Mas isso só é **exato** quando o ramo usa padding
+`valid` e não tem bloco SE. O zero-padding de cada patch e o SE por patch não
+são invariantes à translação. O cfg_003 implantado (um ramo 15×15,
+`valid_large`, sem SE) é exato. Isso é uma decisão, não um detalhe, e fica
+para o usuário.

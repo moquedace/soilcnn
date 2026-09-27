@@ -271,3 +271,92 @@ print.di_reference <- function(x, ...) {
   invisible(x)
 }
 
+# ── A fitted model's reference, built once for the map, the AOA and the interval ─
+#
+# Stage 07 built this inline. The level-and-dissimilarity interval needs the
+# SAME construction twice -- the calibration points' DI and every map pixel's
+# -- and two copies of "what the model saw" would drift the first time either
+# changed, which is the one way this interval can lose its guarantee without a
+# single error: calibrated on one DI, applied with another.
+
+#' The dissimilarity reference of a fitted model.
+#'
+#' The centre pixel of every point that trained or validated in the tuning plan,
+#' QC'd and scaled with the MODEL's scaling (stage 07's construction). Each
+#' point's fold is the one it was held out in -- or, for a point that never
+#' validated, the first it trained in -- so its cross-validated DI is the
+#' distance to the nearest point OUTSIDE its fold: the dissimilarity the model
+#' that predicted it during cross-validation actually faced. That is the DI a
+#' calibration residual comes with.
+#'
+#' @param points     Point table aligned to the store (align_points_to_meta()).
+#' @param predictors Channel names, in the model's order.
+#' @param qc_table   QC rules, in the same order.
+#' @param scaling    The fitted model's predictor_scaling, in the same order.
+#' @param plan       The tuning run's fold plan.
+#' @return An `aoa_reference`: the DI reference, the AOA threshold, and each
+#'   used point's fold and cross-validated DI.
+aoa_reference <- function(points, predictors, qc_table, scaling, plan) {
+  stopifnot(inherits(plan, "fold_plan"))
+  if (!identical(as.character(scaling$predictor), as.character(predictors)) ||
+      !identical(as.character(qc_table$predictor), as.character(predictors))) {
+    stop("scaling, qc_table and predictors must list the same channels in the ",
+         "same order: the DI is a distance in a space whose axes are the ",
+         "channels, and a permuted axis gives a finite, wrong answer.", call. = FALSE)
+  }
+  train_mat <- as.matrix(points[, predictors, drop = FALSE])
+  storage.mode(train_mat) <- "double"
+  for (i in seq_along(predictors)) {
+    train_mat[, i] <- qc_band_values(train_mat[, i], qc_table[i, ])
+  }
+  train_mat <- scale_patches_matrix(train_mat, scaling)
+
+  # The validation fold first: it is the fold a point was HELD OUT in, which is
+  # exactly the "not in its own fold" the threshold is defined against. Written
+  # with explicit indices -- `fold_of[idx][cond] <- j` assigns to a copy.
+  fold_of <- integer(nrow(points))
+  for (j in seq_along(plan$folds)) fold_of[plan$folds[[j]]$validation] <- j
+  for (j in seq_along(plan$folds)) {
+    idx  <- plan$folds[[j]]$train
+    todo <- idx[fold_of[idx] == 0L]
+    if (length(todo)) fold_of[todo] <- j
+  }
+  used <- sort(unique(unlist(lapply(plan$folds, function(f) c(f$train, f$validation)))))
+  used <- used[fold_of[used] > 0L]
+  used <- used[is.finite(rowSums(train_mat[used, , drop = FALSE]))]
+  if (length(used) < 2L) {
+    stop("Fewer than 2 usable training rows after QC: nothing to measure a ",
+         "dissimilarity against.", call. = FALSE)
+  }
+  ref <- di_reference(train_mat[used, , drop = FALSE])
+  th  <- aoa_threshold(ref, fold_of[used])
+  structure(list(
+    ref = ref, threshold = th,
+    cv = tibble::tibble(sample_id = points$sample_id[used], fold = fold_of[used],
+                        cv_di = as.numeric(attr(th, "cv_di"))),
+    predictors = as.character(predictors), qc_table = qc_table, scaling = scaling),
+    class = "aoa_reference")
+}
+
+#' The DI of new rows of RAW predictor values, QC'd and scaled as the reference was.
+#'
+#' @param aref   From aoa_reference().
+#' @param values Matrix or data frame of raw values, columns in the model's order.
+#' @return The DI of each row; NA where a channel is missing after QC.
+aoa_di <- function(aref, values) {
+  stopifnot(inherits(aref, "aoa_reference"))
+  m <- as.matrix(values)
+  if (ncol(m) != length(aref$predictors)) {
+    stop("values has ", ncol(m), " column(s); the reference has ",
+         length(aref$predictors), " channels.", call. = FALSE)
+  }
+  storage.mode(m) <- "double"
+  for (i in seq_along(aref$predictors)) {
+    m[, i] <- qc_band_values(m[, i], aref$qc_table[i, ])
+  }
+  m <- scale_patches_matrix(m, aref$scaling)
+  keep <- is.finite(rowSums(m))
+  di <- rep(NA_real_, nrow(m))
+  if (any(keep)) di[keep] <- dissimilarity_index(aref$ref, m[keep, , drop = FALSE])
+  di
+}

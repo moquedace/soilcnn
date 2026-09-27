@@ -45,6 +45,7 @@ root <- (function() {
 })()
 source(file.path(root, "tests", "helper.R"))
 source(file.path(root, "R", "utils.R"))
+source(file.path(root, "R", "resample.R"))     # with_local_seed(), for the split
 source(file.path(root, "R", "conformal.R"))
 
 ok <- logical(0)
@@ -230,6 +231,74 @@ ok["cv_refuses_a_single_fold"] <- inherits(
 ok["cv_needs_its_columns"] <- inherits(
   try(conformal_cv(dplyr::select(cv_tbl, -obs)), silent = TRUE), "try-error")
 
+# ── 6. a fitted scale: the level and the dissimilarity ───────────────────────
+#
+# The error grows with the stock AND with the distance from the training data,
+# by construction -- the two things the map's interval is meant to follow. A
+# constant width covers on average and badly at both ends of either axis; a
+# scale fitted on the level alone evens out one axis; level + DI evens out
+# both. Every one of them must keep the marginal guarantee, because the scale
+# is fitted on one half of the calibration points and q is taken on the other.
+set.seed(505)
+make_ld <- function(n) {
+  level <- runif(n, 5, 150)          # the predicted stock, t/ha
+  di    <- rexp(n, rate = 3)         # mostly near the training data, a long tail
+  obs   <- level + rnorm(n, 0, 2 + 0.15 * level + 25 * di)
+  tibble(obs = obs, pred = level, level = level, di = di)
+}
+cal_ld <- make_ld(2000L); new_ld <- make_ld(20000L)
+
+cs_const <- conformal_calibrate(cal_ld$obs, cal_ld$pred, alpha = 0.1)
+cs_level <- conformal_scaled_calibrate(cal_ld$obs, cal_ld$pred, cal_ld[, "level"], alpha = 0.1)
+cs_ldi   <- conformal_scaled_calibrate(cal_ld$obs, cal_ld$pred, cal_ld[, c("level", "di")],
+                                       alpha = 0.1)
+iv_c  <- conformal_interval(cs_const, new_ld$pred)
+iv_l  <- conformal_scaled_interval(cs_level, new_ld$pred, new_ld[, "level"])
+iv_ld <- conformal_scaled_interval(cs_ldi, new_ld$pred, new_ld[, c("level", "di")])
+cover_by <- function(iv, g) tapply(new_ld$obs >= iv$lower & new_ld$obs <= iv$upper, g, mean)
+fifths   <- function(v) cut(v, stats::quantile(v, 0:5 / 5), include.lowest = TRUE)
+spread   <- function(v) max(v) - min(v)
+by_di <- fifths(new_ld$di); by_lv <- fifths(new_ld$level)
+
+ok["a_fitted_scale_keeps_the_marginal_coverage"] <-
+  abs(picp(new_ld$obs, iv_l$lower, iv_l$upper)$picp - 0.9) < 0.03 &&
+  abs(picp(new_ld$obs, iv_ld$lower, iv_ld$upper)$picp - 0.9) < 0.03
+ok["the_scale_is_fitted_on_one_half_and_q_taken_on_the_other"] <-
+  cs_ldi$n_fit == 1000L && cs_ldi$n == 1000L
+ok["the_fit_finds_both_covariates"] <- cs_ldi$coef[["level"]] > 0 && cs_ldi$coef[["di"]] > 0
+ok["level_and_di_even_out_coverage_along_the_di"] <-
+  spread(cover_by(iv_ld, by_di)) < 0.5 * spread(cover_by(iv_c, by_di))
+ok["and_along_the_level"] <-
+  spread(cover_by(iv_ld, by_lv)) < 0.5 * spread(cover_by(iv_c, by_lv))
+ok["the_level_alone_leaves_the_di_uneven"] <-
+  spread(cover_by(iv_l, by_di)) > spread(cover_by(iv_ld, by_di))
+
+# The guarantee is a finite-sample one: at n = 60 (30 to fit, 30 to calibrate)
+# the coverage averaged over many draws must still reach the nominal level.
+cov_small <- replicate(200L, {
+  cal <- make_ld(60L); new <- make_ld(500L)
+  cs <- conformal_scaled_calibrate(cal$obs, cal$pred, cal[, c("level", "di")], alpha = 0.1)
+  iv <- conformal_scaled_interval(cs, new$pred, new[, c("level", "di")])
+  mean(new$obs >= iv$lower & new$obs <= iv$upper)
+})
+ok["the_guarantee_holds_on_average_at_a_small_n"] <- mean(cov_small) >= 0.9 - 0.01
+
+edge_points <- data.frame(level = c(-1e6, 0), di = c(-1e6, 0))
+ok["the_scale_never_goes_below_its_floor"] <-
+  all(.conformal_scale(cs_ldi$coef, cs_ldi$floor, edge_points) >= cs_ldi$floor)
+ok["too_few_points_for_a_fitted_scale_are_refused"] <- inherits(
+  try(conformal_scaled_calibrate(cal_ld$obs[1:10], cal_ld$pred[1:10], cal_ld[1:10, "level"]),
+      silent = TRUE), "try-error")
+ok["the_constant_interval_refuses_a_fitted_scale"] <- inherits(
+  try(conformal_interval(cs_ldi, new_ld$pred), silent = TRUE), "try-error")
+ok["a_map_without_the_di_is_refused"] <- inherits(
+  try(conformal_scaled_interval(cs_ldi, new_ld$pred, new_ld[, "level"]), silent = TRUE),
+  "try-error")
+
+cat(sprintf("  coverage by DI fifth     : constant %s | level %s | level+DI %s\n",
+            paste(sprintf("%.2f", cover_by(iv_c, by_di)), collapse = "/"),
+            paste(sprintf("%.2f", cover_by(iv_l, by_di)), collapse = "/"),
+            paste(sprintf("%.2f", cover_by(iv_ld, by_di)), collapse = "/")))
 cat(sprintf("  coverage over %d reps    : %.4f (theorem says %.4f)\n",
             reps, mean(cov_rate), expected))
 cat(sprintf("  skewed error             : %.4f\n", mean(cov_skew)))

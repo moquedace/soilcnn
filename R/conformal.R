@@ -117,6 +117,10 @@ conformal_calibrate <- function(obs, pred, alpha = 0.1, difficulty = NULL) {
 conformal_interval <- function(cal, pred, difficulty = NULL,
                                lower_limit = -Inf) {
   stopifnot(inherits(cal, "conformal_cal"))
+  if (inherits(cal, "conformal_scaled")) {
+    stop("This calibration has a FITTED scale: use conformal_scaled_interval() ",
+         "with the covariates it was fitted on.", call. = FALSE)
+  }
   if (cal$normalised && is.null(difficulty)) {
     stop("This calibration is normalised, so it needs a difficulty score for ",
          "each prediction -- the same kind used to calibrate it.", call. = FALSE)
@@ -296,6 +300,151 @@ conformal_cv <- function(pred_obs, alpha = 0.1, difficulty = NULL,
   picp_report(all_rows$obs, all_rows$lower, all_rows$upper,
               group = if (!is.null(group)) all_rows$group else NULL,
               alpha = alpha)
+}
+
+# ── A width that follows the level and the dissimilarity ──────────────────────
+#
+# WHY THE CONSTANT INTERVAL IS NOT ENOUGH HERE.
+#
+# Measured on this project's test set (2026-09-26): the constant 90% interval,
+# 79 t/ha wide everywhere, covered 94% of the lowest fifth of predictions and
+# 77% of the highest. The error of a right-skewed stock grows with the stock,
+# so one width is too wide where the soil holds little carbon and too narrow
+# where it holds much -- right on average, wrong everywhere in particular.
+#
+# THE REMEDY, AND WHY IT KEEPS THE GUARANTEE.
+#
+# Regress |residual| on covariates that should predict how wrong the model is
+# -- the predicted LEVEL, and the dissimilarity index (R/aoa.R), which says how
+# far a point is from anything the model trained on -- and let the interval be
+# q x that fitted scale. The fit is done on ONE half of the calibration points
+# and q is taken on the OTHER. That separation is the whole point: the
+# locally-weighted score |r| / scale is then exchangeable across the
+# calibration half and a new point, so split conformal's finite-sample
+# coverage holds exactly (Papadopoulos, Gammerman & Vovk 2008; Lei, G'Sell,
+# Rinaldo, Tibshirani & Wasserman 2018, section 5.2). Fitted and calibrated on
+# the same points, the fit would absorb the residuals the quantile measures,
+# and the interval would come out narrow in exactly the way nobody checks.
+#
+# The earlier measurement (level only, fitted on half the calibration set):
+# |r| ~ 8.59 + 0.258 x level gave 89/92/88/83/88% by fifth of the prediction,
+# against the constant interval's 94/94/92/82/77. The dissimilarity index is
+# the second covariate because it is the one thing a map pixel and a
+# calibration point can be measured on the same way -- the seed spread is not
+# (see stage 04's note: the calibration seeds are not the map's seeds).
+#
+# WHAT IT STILL DOES NOT FIX. Coverage is guaranteed over points exchangeable
+# with the calibration set. Outside the area of applicability they are not,
+# and no width is honest there -- that is what the AOA mask is for.
+
+#' Calibrate an interval whose width is a fitted scale.
+#'
+#' @param obs,pred   Calibration observations and predictions, NATIVE units.
+#' @param covariates A data frame of scale covariates, one row per point, e.g.
+#'   data.frame(level = pred, di = di). The scale is a + b1 x1 + b2 x2 + ...,
+#'   fitted by least squares on |obs - pred|.
+#' @param alpha      Miscoverage rate: 0.1 asks for 90%.
+#' @param fit_frac   Share of the points the scale is fitted on; the rest
+#'   calibrate q. One half each is the textbook split.
+#' @param floor_frac The scale is never below this share of the median
+#'   |residual| of the fitting half. A linear fit can go to zero or below at
+#'   the edge of the covariates' range, and a zero-width interval there would
+#'   claim a certainty the data never gave.
+#' @param seed       Seed of the split.
+#' @return A `conformal_scaled` (also a `conformal_cal`).
+conformal_scaled_calibrate <- function(obs, pred, covariates, alpha = 0.1,
+                                       fit_frac = 0.5, floor_frac = 0.05,
+                                       seed = 42L) {
+  covariates <- as.data.frame(covariates)
+  if (length(obs) != length(pred) || nrow(covariates) != length(obs)) {
+    stop("obs, pred and covariates must describe the same points: ",
+         length(obs), ", ", length(pred), " and ", nrow(covariates), " rows.",
+         call. = FALSE)
+  }
+  if (is.null(names(covariates)) || any(!nzchar(names(covariates)))) {
+    stop("covariates needs named columns -- the names are how the map's ",
+         "covariates are matched to the fitted coefficients.", call. = FALSE)
+  }
+  if (!is.numeric(fit_frac) || fit_frac <= 0 || fit_frac >= 1) {
+    stop("fit_frac must be in (0, 1).", call. = FALSE)
+  }
+  x_ok <- Reduce(`&`, lapply(covariates, function(v) is.finite(as.numeric(v))))
+  keep <- is.finite(obs) & is.finite(pred) & x_ok
+  o <- as.numeric(obs)[keep]
+  p <- as.numeric(pred)[keep]
+  X <- covariates[keep, , drop = FALSE]
+  n <- length(o)
+  if (n < 20L) {
+    stop("Only ", n, " usable calibration point(s): the scale needs some to be ",
+         "fitted on and the quantile needs others to be taken on.", call. = FALSE)
+  }
+
+  idx_fit <- with_local_seed(seed, sort(sample.int(n, max(2L, floor(fit_frac * n)))))
+  idx_cal <- setdiff(seq_len(n), idx_fit)
+  res <- abs(o - p)
+  d <- data.frame(abs_res = res[idx_fit], X[idx_fit, , drop = FALSE])
+  fit <- stats::lm(abs_res ~ ., data = d)
+  coef <- stats::coef(fit)
+  coef[!is.finite(coef)] <- 0          # a covariate constant on the fit half
+  floor <- floor_frac * stats::median(res[idx_fit])
+  if (!is.finite(floor) || floor <= 0) floor <- .Machine$double.eps
+
+  sc <- .conformal_scale(coef, floor, X[idx_cal, , drop = FALSE])
+  cal <- conformal_calibrate(o[idx_cal], p[idx_cal], alpha = alpha, difficulty = sc)
+
+  structure(c(unclass(cal), list(
+    coef = coef, floor = floor, terms = names(X),
+    n_fit = length(idx_fit), r2_fit = summary(fit)$r.squared,
+    fit_frac = fit_frac, floor_frac = floor_frac, seed = seed)),
+    class = c("conformal_scaled", "conformal_cal"))
+}
+
+# The fitted scale, for new points. Computed from the coefficients and not
+# with predict.lm(): the map applies it to billions of pixels, and a
+# multiply-add needs no model frame.
+.conformal_scale <- function(coef, floor, covariates) {
+  terms <- names(coef)[-1L]
+  gone <- setdiff(terms, names(covariates))
+  if (length(gone) > 0L) {
+    stop("The scale was fitted on ", paste(terms, collapse = ", "),
+         "; these points lack ", paste(gone, collapse = ", "), ".", call. = FALSE)
+  }
+  X <- as.matrix(as.data.frame(covariates)[, terms, drop = FALSE])
+  pmax(as.numeric(coef[1L] + X %*% coef[terms]), floor)
+}
+
+#' Turn predictions into intervals with a fitted scale.
+#'
+#' @param cal        From conformal_scaled_calibrate().
+#' @param pred       Predictions, native units.
+#' @param covariates The same covariates the scale was fitted on, for these
+#'   predictions -- the level, and the dissimilarity index computed the same
+#'   way as the calibration points' was.
+#' @param lower_limit Floor of the lower bound (0 for a stock).
+conformal_scaled_interval <- function(cal, pred, covariates, lower_limit = -Inf) {
+  stopifnot(inherits(cal, "conformal_scaled"))
+  half <- cal$q * .conformal_scale(cal$coef, cal$floor, covariates)
+  tibble::tibble(
+    pred  = as.numeric(pred),
+    lower = pmax(as.numeric(pred) - half, lower_limit),
+    upper = as.numeric(pred) + half,
+    width = pmin(as.numeric(pred) + half, Inf) - pmax(as.numeric(pred) - half, lower_limit))
+}
+
+#' @export
+print.conformal_scaled <- function(x, ...) {
+  cat("\n<conformal_scaled> ", sprintf("%.0f%% intervals", 100 * (1 - x$alpha)),
+      ", width = q x fitted scale\n", sep = "")
+  terms <- names(x$coef)[-1L]
+  cat(sprintf("  scale              : %.4f%s  (floor %.4f; R2 on the fit half %.3f)\n",
+              x$coef[1L],
+              paste(sprintf(" %+.4f x %s", x$coef[terms], terms), collapse = ""),
+              x$floor, x$r2_fit))
+  cat(sprintf("  points             : %d fitted the scale, %d calibrated q\n",
+              x$n_fit, x$n))
+  cat(sprintf("  rank used          : %d of %d  (the (n+1) correction)\n", x$k, x$n))
+  cat(sprintf("  q                  : %.4f x scale\n", x$q))
+  invisible(x)
 }
 
 # ── Where the calibration residuals should come from ──────────────────────────

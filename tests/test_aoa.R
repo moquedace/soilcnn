@@ -200,6 +200,32 @@ ok["print_aoa_does_not_throw"] <- !inherits(
     print_aoa(dissimilarity_index(ref, big), th_n, "probe points")),
     error = function(e) e), "error")
 
+# ── the reference of a fitted model, built once (aoa_reference) ──────────────
+#
+# The map's DI, the AOA and the level-and-DI interval all measure against the
+# same reference; built by one function, a calibration point and a map pixel
+# cannot end up measured against two different ones.
+source(file.path(root, "R", "preprocess.R"))
+set.seed(606)
+n_r <- 120L
+preds_r <- paste0("v", 1:4)
+pts_r <- tibble::tibble(sample_id = seq_len(n_r), profile_id = seq_len(n_r),
+                        x = stats::runif(n_r), y = stats::runif(n_r))
+for (pr in preds_r) pts_r[[pr]] <- stats::rnorm(n_r, 50, 10)
+plan_r <- random_folds(pts_r, k = 3L, test_frac = 0.2, seed = 1L)
+qc_r   <- make_qc_table(preds_r)
+sc_r   <- tibble::tibble(predictor = preds_r, center = 50, scale = 10)
+aref   <- aoa_reference(pts_r, preds_r, qc_r, sc_r, plan_r)
+test_pos <- plan_r$folds[[1]]$test
+ok["the_reference_leaves_the_test_set_out"] <-
+  length(test_pos) > 0L && !any(aref$cv$sample_id %in% pts_r$sample_id[test_pos])
+ok["a_point_of_the_reference_has_di_zero"] <-
+  all(aoa_di(aref, as.matrix(pts_r[aref$cv$sample_id[1:5], preds_r])) < 1e-6)
+ok["the_cv_di_is_the_one_the_threshold_uses"] <-
+  identical(aref$cv$cv_di, as.numeric(attr(aref$threshold, "cv_di")))
+ok["a_permuted_scaling_is_refused"] <- inherits(
+  try(aoa_reference(pts_r, preds_r, qc_r, sc_r[4:1, ], plan_r), silent = TRUE), "try-error")
+
 cat(sprintf("  avg pairwise distance    : %.3f (theory sqrt(2p) = %.3f)\n",
             ref$avg_dist, sqrt(2 * P)))
 cat(sprintf("  AOA threshold            : %.3f | training points inside: %.0f%%\n",
