@@ -446,7 +446,7 @@ dsm_predict <- function(final, data, rasters = NULL, qc_table = NULL, extent = N
   done <- file.exists(.predict_done_path(job$units_dir, units$unit_id))
   todo <- units[!done, , drop = FALSE]
   if (any(done)) say("\nResuming: ", sum(done), " of ", nrow(units), " unit(s) already mapped, kept as they are.")
-  run_info <- list(n_workers = 0L, peak_gb = NA_real_, minutes = NA_real_)
+  run_info <- list(n_workers = 0L, restarts = 0L, peak_gb = NA_real_, minutes = NA_real_)
   if (nrow(todo) > 0L) {
     say(sprintf("\nMapping %d unit(s) with %d worker(s)...", nrow(todo),
                 min(work$n_workers, nrow(todo))))
@@ -487,6 +487,7 @@ dsm_predict <- function(final, data, rasters = NULL, qc_table = NULL, extent = N
     rows = paste(grid$rows, collapse = "-"), cols = paste(grid$cols, collapse = "-"),
     n_cells = n_cells, n_valid = n_valid, n_units = nrow(units), unit_rows = work$unit_rows,
     step_rows = work$step_rows, chunk_cols = chunk_cols, n_workers = run_info$n_workers,
+    worker_restarts = run_info$restarts, recycle_gb = job$recycle_gb,
     threads_per_worker = tpw, engine = paste(engine_used, collapse = ";"),
     calibration = paste(sprintf("%s=%s", names(sources), sources), collapse = ";"),
     alpha = paste(alpha, collapse = ";"), n_bands = nrow(band_tbl),
@@ -522,8 +523,11 @@ print.dsm_prediction <- function(x, ...) {
   cat(sprintf("  valid      : %s of %s cell(s) (%.1f%%)\n", format(m$n_valid, big.mark = ","),
               format(m$n_cells, big.mark = ","), 100 * m$n_valid / max(1, m$n_cells)))
   cat("  engine     : ", paste(sprintf("%dx%d %s", x$windows, x$windows, x$engine), collapse = ", "), "\n", sep = "")
-  cat(sprintf("  work       : %d unit(s) x %d row(s) | %s valid px/s per worker | %.1f min this call\n",
-              m$n_units, m$unit_rows, format(round(m$valid_px_per_s), big.mark = ","), x$minutes))
+  cat(sprintf("  work       : %d unit(s) x %d row(s) | %s valid px/s per worker | %.1f min this call%s\n",
+              m$n_units, m$unit_rows, format(round(m$valid_px_per_s), big.mark = ","), x$minutes,
+              if (isTRUE(m$worker_restarts > 0)) {
+                sprintf(" | %d worker restart(s) over %.1f GB", m$worker_restarts, m$recycle_gb)
+              } else ""))
   cat("  probe      : ", x$probe$status,
       if (!is.null(x$probe$max_rel_diff) && is.finite(x$probe$max_rel_diff))
         sprintf(" (%d profile(s), max relative difference %.2e)", x$probe$n, x$probe$max_rel_diff)
@@ -1144,6 +1148,25 @@ print.dsm_prediction <- function(x, ...) {
        per_worker_gb = gb(step_rows), budget_gb = budget %||% NA_real_)
 }
 
+# WHEN A WORKER GIVES ITS MEMORY BACK.
+#
+# mimalloc, under libtorch on Windows, keeps what it frees (see
+# .predict_window()), so a worker's working set can only grow, and the global
+# map runs a worker through ~250 units. The window takes the large tensors
+# out of that, but not every allocation a step makes, and a slow climb over
+# two days would end the run where no test could see it coming. So a worker
+# whose working set, after the full collection that ends a unit, is above its
+# share of the RAM budget -- with no budget, 25% above the RAM model's
+# estimate -- exits, and the run starts a fresh one in its place
+# (.predict_run_units()). A restart costs seconds; a unit of the global map,
+# minutes. Never below the estimate itself: a worker estimated above its share
+# (the plan warned) would otherwise restart after every unit.
+.predict_recycle_gb <- function(work) {
+  est <- 1.25 * work$per_worker_gb
+  share <- work$budget_gb / max(1L, work$n_workers)
+  if (is.finite(share)) max(work$per_worker_gb, min(est, share)) else est
+}
+
 .predict_units <- function(rows, cols, unit_rows) {
   starts <- seq(rows[1], rows[2], by = unit_rows)
   tibble::tibble(unit_id = sprintf("u%05d", seq_along(starts)), r0 = as.integer(starts),
@@ -1184,6 +1207,9 @@ print.dsm_prediction <- function(x, ...) {
        threads = tpw, gdal_cache_mb = 512L, blocky = work$blocky,
        gc_threshold_mb = 1000L, gc_every_s = 1,
        units_dir = file.path(run_dir, "units"), probe_cells = NULL,
+       # A worker whose working set is above this after a unit exits, and the
+       # run starts a fresh one in its place (see .predict_recycle_gb()).
+       recycle_gb = getOption("dsm.predict.recycle_gb", .predict_recycle_gb(work)),
        # options(dsm.predict.trace_mem = TRUE): every unit records the worker's
        # CURRENT working set after each phase of each step (see .predict_unit).
        trace_mem = isTRUE(getOption("dsm.predict.trace_mem", FALSE)))
@@ -1193,7 +1219,9 @@ print.dsm_prediction <- function(x, ...) {
 
 # The workers: as dsm_final()'s, each its own R process with its thread count
 # set before torch loads, claiming units by dir.create() (atomic: made or
-# found made). A unit's numbers depend on the unit and not on the worker.
+# found made). A unit's numbers depend on the unit and not on the worker --
+# which is what lets a worker that gave its memory back be replaced by a
+# fresh one mid-run (see .predict_recycle_gb()).
 .predict_run_units <- function(job, units, n_workers, run_dir, tag, say, progress = TRUE) {
   if (!requireNamespace("callr", quietly = TRUE)) {
     stop("dsm_predict() maps in worker processes and needs the callr package. ",
@@ -1214,7 +1242,13 @@ print.dsm_prediction <- function(x, ...) {
   cells <- as.numeric(units$r1 - units$r0 + 1L) * (units$c1 - units$c0 + 1L)
 
   t0 <- Sys.time()
-  procs <- lapply(seq_len(n_workers), function(w) {
+  # A slot's workers in turn: its first, then each fresh one that took the
+  # place of one that gave its memory back, logged apart.
+  log_of <- function(w, gen) {
+    file.path(logs_dir, sprintf("%s_worker_%02d%s.log", tag, w,
+                                if (gen > 1L) sprintf("_%02d", gen) else ""))
+  }
+  start <- function(w, gen) {
     callr::r_bg(
       .predict_worker_entry,
       args = list(job = c(job, list(worker = w)), root = root),
@@ -1229,15 +1263,20 @@ print.dsm_prediction <- function(x, ...) {
               ONEDNN_PRIMITIVE_CACHE_CAPACITY = "64",
               # A diagnosis can add to the workers' environment (T4 does).
               getOption("dsm.predict.worker_env", character(0))),
-      stdout = file.path(logs_dir, sprintf("%s_worker_%02d.log", tag, w)), stderr = "2>&1",
-      supervise = TRUE)
-  })
+      stdout = log_of(w, gen), stderr = "2>&1", supervise = TRUE)
+  }
+  gen <- rep(1L, n_workers)
+  procs <- lapply(seq_len(n_workers), start, gen = 1L)
   # An interrupted map must not leave workers writing into its units: the next
   # call deletes the claims and would hand the same units out again.
   on.exit(for (p in procs) if (p$is_alive()) p$kill(), add = TRUE)
 
   seen <- rep(FALSE, nrow(units))
   valid_done <- 0
+  res <- vector("list", n_workers)
+  over <- rep(FALSE, n_workers)
+  peaks <- numeric(0)
+  restarts <- 0L
   repeat {
     alive <- vapply(procs, function(p) p$is_alive(), logical(1))
     now <- file.exists(done_paths)
@@ -1257,19 +1296,35 @@ print.dsm_prediction <- function(x, ...) {
                     format(round(valid_done / max(el, 1e-9)), big.mark = ","), eta))
       }
     }
-    if (!any(alive)) break
+    for (w in which(!alive & !over)) {
+      r <- tryCatch(procs[[w]]$get_result(), error = function(e) e)
+      if (!inherits(r, "error")) peaks <- c(peaks, as.numeric(r$peak_gb %||% NA_real_))
+      # Units no worker has claimed: a worker that stopped on an error is not
+      # restarted, and one that gave its memory back only while any are left.
+      unclaimed <- !file.exists(done_paths) & !dir.exists(file.path(claims_dir, units$unit_id))
+      if (!inherits(r, "error") && isTRUE(r$recycled) && any(unclaimed)) {
+        say(sprintf("  worker %d gave its memory back (%.1f GB after a unit, above %.1f GB): a fresh one takes its place.",
+                    w, r$rss_gb, job$recycle_gb))
+        gen[w] <- gen[w] + 1L
+        restarts <- restarts + 1L
+        procs[[w]] <- start(w, gen[w])
+      } else {
+        res[[w]] <- r
+        over[w] <- TRUE
+      }
+    }
+    if (all(over)) break
     Sys.sleep(if (progress) 5 else 1)
   }
-  res  <- lapply(procs, function(p) tryCatch(p$get_result(), error = function(e) e))
   errs <- vapply(res, function(r) inherits(r, "error"), logical(1))
   for (w in which(errs)) {
     say("  worker ", w, " stopped with an error: ", conditionMessage(res[[w]]),
-        "\n    log: ", file.path(logs_dir, sprintf("%s_worker_%02d.log", tag, w)))
+        "\n    log: ", log_of(w, gen[w]))
   }
-  peaks <- vapply(res[!errs], function(r) as.numeric(r$peak_gb %||% NA_real_), numeric(1))
+  peaks <- peaks[is.finite(peaks)]
   unlink(claims_dir, recursive = TRUE)
-  list(n_workers = n_workers,
-       peak_gb = if (any(is.finite(peaks))) max(peaks[is.finite(peaks)]) else NA_real_,
+  list(n_workers = n_workers, restarts = restarts,
+       peak_gb = if (length(peaks)) max(peaks) else NA_real_,
        minutes = as.numeric(difftime(Sys.time(), t0, units = "mins")))
 }
 
@@ -1317,6 +1372,13 @@ print.dsm_prediction <- function(x, ...) {
   }
 }
 
+# The worker's current working set, in GB: what it holds now, not its peak.
+.predict_rss_gb <- function() {
+  if (!requireNamespace("ps", quietly = TRUE)) return(NA_real_)
+  mi <- tryCatch(ps::ps_memory_info(ps::ps_handle()), error = function(e) NULL)
+  if (is.null(mi)) NA_real_ else as.numeric(mi[["rss"]]) / 1e9
+}
+
 .predict_worker <- function(job) {
   env <- .predict_worker_setup(job)
   on.exit(for (s in env$srcs) try(terra::readStop(s), silent = TRUE), add = TRUE)
@@ -1349,8 +1411,14 @@ print.dsm_prediction <- function(x, ...) {
                       rec$total_s, s[["read"]], s[["net"]], s[["di"]], s[["bands"]], s[["write"]]))
     }
     invisible(gc(verbose = FALSE))
+    rss <- .predict_rss_gb()
+    if (is.finite(rss) && is.finite(job$recycle_gb %||% NA_real_) && rss > job$recycle_gb) {
+      message(sprintf("  working set %.1f GB after %s, above %.1f GB: this worker exits, and a fresh one takes its place.",
+                      rss, uid, job$recycle_gb))
+      return(list(worker = job$worker, peak_gb = .final_peak_gb(), recycled = TRUE, rss_gb = rss))
+    }
   }
-  list(worker = job$worker, peak_gb = .final_peak_gb())
+  list(worker = job$worker, peak_gb = .final_peak_gb(), recycled = FALSE)
 }
 
 .predict_worker_setup <- function(job) {

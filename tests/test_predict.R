@@ -254,6 +254,17 @@ map_steps <- mp(run_id = "map_steps", unit_rows = 32L, probe = FALSE)
 ok["units_of_two_steps_give_identical_maps"] <- nrow(map_steps$units) == 2L &&
   all(vapply(bands_all, function(b) identical(rd(map_steps, b), snap[[b]]), logical(1)))
 
+# A worker whose working set is over its limit after a unit exits, and a fresh
+# one takes its place. Under a limit every worker is over, each unit gets a
+# process of its own -- two restarts for three units -- and the map is the
+# same.
+old_rc <- options(dsm.predict.recycle_gb = 0.001)
+map_rc <- mp(run_id = "map_recycled", probe = FALSE)
+options(old_rc)
+ok["a_worker_over_its_memory_gives_way_to_a_fresh_one"] <-
+  identical(as.integer(map_rc$manifest$worker_restarts), 2L) &&
+  all(vapply(bands_all, function(b) identical(rd(map_rc, b), snap[[b]]), logical(1)))
+
 # ── 4. a part of the map, by the other engine ─────────────────────────────────
 part <- mp(run_id = "map_part_patch", engine = "patch", probe = FALSE,
            extent = list(rows = c(9L, 30L), cols = c(6L, 44L)))
