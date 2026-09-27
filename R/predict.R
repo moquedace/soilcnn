@@ -1354,12 +1354,23 @@ print.dsm_prediction <- function(x, ...) {
   for (k in seq_len(env$n_ch)) {
     v <- terra::readValues(env$srcs[[k]], row = ra, nrows = rn, col = rc0, ncols = wn, mat = FALSE)
     if (env$has_rule[k]) v <- qc_band_values(v, env$rules[k, , drop = FALSE])
-    t <- torch::torch_tensor(v, dtype = torch::torch_float64())$view(c(rn, wn))
-    t <- (t - job$center[k]) / job$scale[k]
+    # FLOAT32 FROM HERE, AND IN PLACE. A band of a full-width step is ~5
+    # million cells, and the double tensor and the four copies this used to
+    # make of it (scaled, masked, cast, padded) were ~300 MB per band, 181
+    # times per step -- with torch's light collections promoting what was
+    # alive, T3 saw workers reach 24-32 GB. Now one float32 tensor, scaled and
+    # masked in place, and a collection after every band. float32 is also how
+    # training scaled its patches (scale_patches(), in the tensor's dtype);
+    # the raster's float32 values convert exactly.
+    t <- torch::torch_tensor(v, dtype = torch::torch_float32())$view(c(rn, wn))
+    rm(v)
+    t$sub_(job$center[k])$div_(job$scale[k])
     f <- torch::torch_isfinite(t)
     fok <- if (is.null(fok)) f else torch::torch_logical_and(fok, f)
-    t <- t$masked_fill(f$logical_not(), 0)$to(dtype = torch::torch_float32())
+    t$masked_fill_(f$logical_not(), 0)
     x[k, , ] <- if (any(pads > 0L)) torch::nnf_pad(t, pads) else t
+    rm(t, f)
+    env$gc_hook()
   }
   fin <- if (any(pads > 0L)) {
     torch::nnf_pad(fok$to(dtype = torch::torch_uint8()), pads)$to(dtype = torch::torch_bool())
@@ -1504,21 +1515,19 @@ print.dsm_prediction <- function(x, ...) {
 
     # ── the rows: read once, the halo kept ──────────────────────────────────
     tr <- Sys.time()
-    if (first) {
-      blk <- .predict_read_rows((o0 - h):(o1 + h), rc0, rc1, pad_l, pad_r, w_buf, env, job)
-      if (h > 0L) {
-        halo <- blk$x[, 1:(2L * h), , drop = FALSE]$clone()
-        fin_halo <- blk$fin[1:(2L * h), , drop = FALSE]$clone()
-      }
-      new <- blk$x[, (2L * h + 1L):(2L * h + gs), , drop = FALSE]
-      fin_new <- blk$fin[(2L * h + 1L):(2L * h + gs), , drop = FALSE]
-      rm(blk)
-      first <- FALSE
-    } else {
-      blk <- .predict_read_rows((o0 + h):(o1 + h), rc0, rc1, pad_l, pad_r, w_buf, env, job)
-      new <- blk$x; fin_new <- blk$fin
-      rm(blk)
+    # The first step reads its halo and its own rows as two reads -- disjoint
+    # rows, so no row is decompressed twice -- instead of one block cut in
+    # two afterwards: the block, its halo's clone and its rows' copy alive
+    # together were ~11 GB of a full-width worker's peak (T3).
+    if (first && h > 0L) {
+      hb <- .predict_read_rows((o0 - h):(o0 + h - 1L), rc0, rc1, pad_l, pad_r, w_buf, env, job)
+      halo <- hb$x; fin_halo <- hb$fin
+      rm(hb)
     }
+    first <- FALSE
+    blk <- .predict_read_rows((o0 + h):(o1 + h), rc0, rc1, pad_l, pad_r, w_buf, env, job)
+    new <- blk$x; fin_new <- blk$fin
+    rm(blk)
     tm[["read"]] <- tm[["read"]] + secs(tr)
 
     fin_full <- if (h > 0L) torch::torch_cat(list(fin_halo, fin_new), dim = 1L) else fin_new
