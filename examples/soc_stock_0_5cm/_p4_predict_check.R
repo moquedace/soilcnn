@@ -164,16 +164,24 @@ ledger_check(L, "p4_01", "the reference is the deployed model's map, on this gri
 map <- dsm_predict(final_dir, data, rasters = rt_coarse, qc_table = qc_path,
                    calibration = calibration, output_dir = maps_dir, run_id = "p4_20km")
 
+# THE DI BAND OF A SOURCE IS NAMED BY THE MAP, not assumed: sources whose fold
+# plans used different profiles have different references -- the block plan's
+# buffer leaves 45 profiles out of every fold, the kNNDM plan none -- and then
+# a DI band each (di_block, di_knndm). calibration.csv says which is whose.
+ct <- map$calibration
+cal <- readRDS(file.path(map$run_dir, "calibration.rds"))
+di_of <- function(s) ct$di_band[ct$source == s][1]
+di_bands <- unique(vapply(names(calibration), di_of, character(1)))
 want <- c("ensemble_median", "ensemble_mean", "ensemble_sd", "ensemble_mad", "ensemble_min",
-          "ensemble_max", "valid_mask", "di", paste0("aoa_", names(calibration)),
+          "ensemble_max", "valid_mask", di_bands, paste0("aoa_", names(calibration)),
           paste0("smeared_mean_", names(calibration)),
           paste0("pi90_constant_", c("lower", "upper"), "_block"),
           paste0("pi90_level_di_", c("lower", "upper"), "_block"))
 ledger_check(L, "p4_02", "dsm_predict() finished every unit and wrote every band",
-             all(want %in% map$bands$band) && all(file.exists(map$vrt)) &&
+             !anyNA(di_bands) && all(want %in% map$bands$band) && all(file.exists(map$vrt)) &&
                identical(map$probe$status, "not_applicable"),
-             sprintf("%d unit(s), %d band(s); probe %s (another grid)", nrow(map$units),
-                     nrow(map$bands), map$probe$status))
+             sprintf("%d unit(s), %d band(s), DI %s; probe %s (another grid)", nrow(map$units),
+                     nrow(map$bands), paste(di_bands, collapse = " + "), map$probe$status))
 
 v05 <- m05("valid_mask") == 1
 v   <- mine(map, "valid_mask") == 1
@@ -190,7 +198,6 @@ ledger_check(L, "p4_04", "the six ensemble bands are 05's to 1e-4 (relative)",
              all(worst < 1e-4),
              paste(sprintf("%s %.1e", sub("ensemble_", "", names(worst)), worst), collapse = " | "))
 
-ct <- map$calibration
 sm04 <- readRDS(file.path(final_dir, config_id, "smearing.rds"))
 s_block <- ct$smearing_s[ct$source == "block"][1]
 w_sm <- rel(mine(map, "smeared_mean_block")[v], m05("smeared_mean_ton_ha")[v])
@@ -208,8 +215,7 @@ ledger_check(L, "p4_06", "the constant 90% bounds are 05's, with stage 04's own 
              sprintf("q %.6f (04: %.6f) | worst lower %.1e, upper %.1e", q_block,
                      c04$constant$q, w_lo, w_up))
 
-cal <- readRDS(file.path(map$run_dir, "calibration.rds"))
-di_map <- mine(map, "di")
+di_map <- mine(map, di_of("block"))
 vcells <- which(v, arr.ind = TRUE)
 pick <- vcells[with_local_seed(42L, sample.int(nrow(vcells), min(2000L, nrow(vcells)))), , drop = FALSE]
 # In the reference's channel order, whatever order the table lists them in.
@@ -218,19 +224,25 @@ stk <- terra::rast(rt_coarse$raster_file[match(aref$predictors, rt_coarse$predic
 ex  <- terra::extract(stk, terra::cellFromRowCol(g20, pick[, 1], pick[, 2]))
 if (ncol(ex) == length(aref$predictors) + 1L) ex <- ex[, -1L, drop = FALSE]   # an ID column
 raw <- as.matrix(ex)
-di_ref <- aoa_di(aref, raw)
-w_di <- max(abs(di_map[pick] - di_ref))
-ledger_check(L, "p4_07", "the DI is aoa_di() at 2,000 pixels drawn at random",
-             all(is.finite(di_ref)) && w_di < 1e-5,
-             sprintf("%d pixel(s) | worst %.1e | DI median %.3f, q90 %.3f", nrow(pick), w_di,
+w_di <- vapply(names(calibration), function(s) {
+  d_ref <- aoa_di(cal$sources[[s]]$aref, raw)
+  if (!all(is.finite(d_ref))) return(Inf)
+  max(abs(mine(map, di_of(s))[pick] - d_ref))
+}, numeric(1))
+ledger_check(L, "p4_07", "every source's DI is aoa_di() at 2,000 pixels drawn at random",
+             all(w_di < 1e-5),
+             sprintf("%d pixel(s) | %s | block DI median %.3f, q90 %.3f", nrow(pick),
+                     paste(sprintf("%s worst %.1e", vapply(names(calibration), di_of, character(1)), w_di),
+                           collapse = ", "),
                      stats::median(di_map[v]), stats::quantile(di_map[v], 0.9)))
 
 aoa_ok <- vapply(names(calibration), function(s) {
-  a <- mine(map, paste0("aoa_", s))[v]
+  a  <- mine(map, paste0("aoa_", s))[v]
+  d  <- mine(map, di_of(s))[v]
   th <- cal$sources[[s]]$threshold
-  bad <- a != as.integer(di_map[v] <= th)
+  bad <- a != as.integer(d <= th)
   # A pixel within float32 rounding of the threshold may land either side.
-  !any(bad & abs(di_map[v] - th) > 1e-6)
+  !any(bad & abs(d - th) > 1e-6)
 }, logical(1))
 inside <- vapply(names(calibration), function(s)
   mean(mine(map, paste0("aoa_", s))[v] == 1), numeric(1))
@@ -251,7 +263,8 @@ part <- dsm_predict(final_dir, data, rasters = rt_coarse, qc_table = qc_path,
                     engine = "patch", probe = FALSE, bands = c("ensemble_median", "di", "valid_mask"),
                     output_dir = maps_dir, run_id = "p4_20km_part_patch", verbose = FALSE)
 pm <- mine(part, "ensemble_median"); wm <- mine(map, "ensemble_median")[rows[1]:rows[2], cols[1]:cols[2]]
-pdi <- mine(part, "di"); wdi <- di_map[rows[1]:rows[2], cols[1]:cols[2]]
+pdi <- mine(part, part$calibration$di_band[part$calibration$source == "block"][1])
+wdi <- di_map[rows[1]:rows[2], cols[1]:cols[2]]
 nv_part <- sum(is.finite(pm))
 ledger_check(L, "p4_09", "a part by the patch engine is that part of the fully convolutional whole",
              identical(dim(pm), dim(wm)) && identical(is.finite(pm), is.finite(wm)) && nv_part > 0L &&
@@ -277,6 +290,19 @@ if (file.exists(a07)) {
             "): its DI is not compared.")
   }
 }
+
+# (info) where the time goes, and the memory a worker really took
+ut <- map$units
+tot <- colSums(ut[, c("read_s", "net_s", "di_s", "bands_s", "write_s")])
+message(sprintf("(info) time inside the units: read %.0f%% | network %.0f%% | DI %.0f%% | bands %.0f%% | write %.0f%%",
+                100 * tot[["read_s"]] / sum(tot), 100 * tot[["net_s"]] / sum(tot),
+                100 * tot[["di_s"]] / sum(tot), 100 * tot[["bands_s"]] / sum(tot),
+                100 * tot[["write_s"]] / sum(tot)))
+# The whole map's peaks are those recorded when its units ran -- a resumed map
+# keeps them; the part is mapped anew on every run unless it finished before.
+message(sprintf("(info) peak RAM per worker: whole map %.1f GB (as recorded when its units ran) | part %.1f GB | estimate %.1f GB (step of %d rows)",
+                max(ut$peak_gb, na.rm = TRUE), max(part$units$peak_gb, na.rm = TRUE),
+                map$work$per_worker_gb, map$work$step_rows))
 
 # (info) the speed
 px05 <- pc05$n_valid[1] / (60 * pc05$runtime_min[1])
@@ -318,10 +344,13 @@ if (file.exists(pr_rec)) {
     "\n(info) the probe unit: %d row(s) of 181 rasters read in %.0f s (%.2f s per full row); ",
     "%s valid px through %d seed(s) + DI in %.0f s (%.2e s per px, %d thread(s)).\n",
     "       Global 250 m, roughly: %.1f h of reading on one reader, and %.1f h of network per ",
-    "worker for ~%.2g valid px -- the two overlap across workers."),
+    "worker for ~%.2g valid px -- the two overlap across workers.\n",
+    "       The probe's reads are ~2,000 columns wide: GDAL decompresses every full row, but R\n",
+    "       converts only those columns, so a full-width map converts more per row than this.\n",
+    "       Peak RAM of the probe's worker: %.1f GB."),
     rows_read, pp$seconds[["read"]], s_row, format(pp$n_valid, big.mark = ","),
     length(summ$seeds), pp$seconds[["net"]] + pp$seconds[["di"]], s_px, pp$threads %||% 5L,
-    n_rows_250 * s_row / 3600, valid_250 * s_px / 3600, valid_250))
+    n_rows_250 * s_row / 3600, valid_250 * s_px / 3600, valid_250, pp$peak_gb %||% NA_real_))
 }
 
 create_output_dirs(p4_dir)
