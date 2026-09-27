@@ -1,0 +1,305 @@
+# Unit test: dsm_predict() -- the map is the network's prediction at every
+# pixel, and every band is what its calibration says
+#
+# WHY THIS FILE EXISTS.
+#
+# dsm_predict() is written for a 250 m global grid: row bands read through a
+# buffer that keeps its halo, workers side by side, the fully convolutional
+# network over chunks cropped to their valid pixels, the DI in float32 with
+# the nearest profile's distance recomputed in double. Each of those is a
+# place a pixel can quietly get another pixel's number. So the whole chain --
+# dsm_prepare(), dsm_train(), dsm_final(), dsm_predict() -- is run on a small
+# grid, and every band at every pixel is compared with a computation that
+# shares none of the map's code:
+#
+#   valid_mask   the full-window rule, by hand
+#   ensemble_*   each seed's network on each pixel's own patches, by hand
+#   di, aoa      aoa_di() on the pixel's raw values
+#   intervals    conformal_*_interval() on the map's median and DI
+#   smeared      smear() on the map's median
+#
+# and then the properties the global run leans on: one worker and two give
+# identical maps, bit for bit; a part is the same numbers as that part of the
+# whole (and the patch engine gives what the convolutional one gives); a
+# resumed map recomputes no finished unit; a lost record is recomputed; and
+# what can only be wrong is refused -- including a raster table whose channels
+# are swapped, which only the probe can see.
+#
+# The fixture: a 40 x 56 grid at 0.1 degree, 5 bands (NA holes, a QC
+# sentinel, a clamped percentage, a dummy), 81 profiles in 9 sites 11+ cells
+# apart -- each site inside one 1-degree block, so the spatial folds cut
+# between sites and the 0.7-degree buffer drops nobody. One dual-branch config
+# (3 x 3 "same", 7 x 7 "valid": one branch per engine), 2 epochs.
+#
+# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tests/test_predict.R")
+# (trains and starts worker processes; ~2-4 min on CPU)
+
+suppressMessages({
+  library(torch)
+  library(tibble)
+  library(dplyr)
+  library(readr)
+})
+
+root <- (function() {
+  cand <- character(0)
+  a <- commandArgs(trailingOnly = FALSE)
+  f <- sub("^--file=", "", a[grep("^--file=", a)])
+  if (length(f)) cand <- c(cand, dirname(normalizePath(f[1], mustWork = FALSE)))
+  for (i in seq_len(sys.nframe())) {
+    of <- sys.frame(i)$ofile
+    if (!is.null(of) && is.character(of)) {
+      cand <- c(cand, dirname(normalizePath(of, mustWork = FALSE)))
+    }
+  }
+  cand <- c(cand, getwd())
+  for (d in cand) {
+    for (up in c(".", "..")) {
+      r <- normalizePath(file.path(d, up), winslash = "/", mustWork = FALSE)
+      if (file.exists(file.path(r, "R", "load_all.R"))) return(r)
+    }
+  }
+  stop("Project root not found.", call. = FALSE)
+})()
+source(file.path(root, "tests", "helper.R"))
+suppressMessages(source(file.path(root, "R", "load_all.R")))
+
+ok <- c()
+err <- function(expr) {
+  e <- tryCatch({ suppressMessages(expr); NULL }, error = function(e) conditionMessage(e))
+  if (is.null(e)) "" else e
+}
+
+# ── the fixture: rasters, profiles, a store, a tuning run, a final model ─────
+base <- file.path(tempdir(), "dlc_predict_test")
+unlink(base, recursive = TRUE)          # on the way IN: a leftover would be resumed
+rdir <- file.path(base, "rasters")
+dir.create(rdir, recursive = TRUE)
+
+set.seed(20260927)
+n_r <- 40L; n_c <- 56L; cs <- 0.1; x0 <- -50; y1 <- -10
+rc <- expand.grid(c = seq_len(n_c), r = seq_len(n_r))    # row-major, as terra stores
+cell <- function(r, c) (r - 1L) * n_c + c
+mk <- function(name, vals) {
+  r <- terra::rast(nrows = n_r, ncols = n_c, xmin = x0, xmax = x0 + n_c * cs,
+                   ymin = y1 - n_r * cs, ymax = y1, crs = "EPSG:4326")
+  terra::values(r) <- vals
+  terra::writeRaster(r, file.path(rdir, paste0(name, ".tif")), overwrite = TRUE,
+                     datatype = "FLT4S")
+}
+v_a <- sin(rc$r / 5) + cos(rc$c / 7) + stats::rnorm(nrow(rc), sd = 0.1)
+v_b <- (rc$r * rc$c) / 500 + stats::rnorm(nrow(rc), sd = 0.2)
+v_b[c(cell(12L, 15L), cell(25L, 32L), cell(25L, 33L), cell(26L, 32L), cell(26L, 33L))] <- NA
+v_pct <- pmin(104, pmax(-2, 50 + 55 * sin(rc$c / 9) + stats::rnorm(nrow(rc), sd = 5)))
+v_dum <- as.numeric((rc$r + 2L * rc$c) %% 3L == 0L)
+v_tmp <- 20 + rc$r / 10 + stats::rnorm(nrow(rc), sd = 0.3)
+v_tmp[c(cell(28L, 50L), cell(3L, 30L))] <- -9999
+mk("band_a", v_a); mk("band_b", v_b); mk("pct_cover", v_pct)
+mk("dummy_x", v_dum); mk("temp_c", v_tmp)
+
+site_rc <- expand.grid(sc = c(8L, 24L, 40L), sr = c(7L, 20L, 33L))
+prc <- do.call(rbind, lapply(seq_len(nrow(site_rc)), function(s)
+  expand.grid(c = site_rc$sc[s] + (-1L:1L), r = site_rc$sr[s] + (-1L:1L))))
+pts <- data.frame(profile_id = sprintf("p%03d", seq_len(nrow(prc))),
+                  x = x0 + (prc$c - 0.5) * cs, y = y1 - (prc$r - 0.5) * cs,
+                  soc = exp(2 + 0.5 * v_a[cell(prc$r, prc$c)] + stats::rnorm(nrow(prc), sd = 0.3)))
+
+st <- suppressMessages(dsm_prepare(
+  points = pts, target = "soc", raster_dir = rdir, windows = c(3, 7),
+  out_dir = file.path(base, "prep"), percentage = "^pct_",
+  na_below = c("temp_c$" = -100), transform = "log1p", target_min = 0,
+  n_cores = 1L, verbose = FALSE))
+data <- suppressMessages(dsm_load(st, verbose = FALSE))
+
+grid <- make_manual_tune_grid(
+  window_sizes = list(c(3L, 7L)), conv_channels = list(c(4L, 6L)), embedding_dim = 8L,
+  base_lr = 0.01, batch_size = 8L, dropout = 0.0, gate_type = "vector_featurewise",
+  use_residual = TRUE, use_se_block = FALSE, conv_padding = "valid_large",
+  embed_pool = "gap")
+fit <- suppressMessages(dsm_train(
+  data, model = "cnn",
+  resampling = spatial_cv(k = 2L, block_size = 1, buffer = "auto", test_frac = 0.2),
+  tune_grid = grid, n_seeds = 1L, output_dir = file.path(base, "out"), run_id = "tuning",
+  device = setup_torch_device(n_threads = 1L, use_cuda = FALSE),
+  n_epochs = 2L, patience = 2L, print_every = 100L, augment = FALSE, verbose = FALSE))
+cid <- grid$config_id[1]
+fin <- suppressMessages(dsm_final(
+  fit, config = cid, seeds = 2L, validation_frac = 0.34, threads_per_unit = 1L,
+  n_cores = 1L, training = list(n_epochs = 2L, patience = 2L, print_every = 100L,
+                                augment = FALSE),
+  output_dir = file.path(base, "out", "final_model"), run_id = "final", verbose = FALSE))
+
+map_args <- list(fin, data, calibration = c(block = fit$run_dir), n_cores = 1L,
+                 threads_per_worker = 1L, step_rows = 16L, unit_rows = 16L,
+                 chunk_cols = 20L, verbose = FALSE)
+mp <- function(...) suppressMessages(do.call(dsm_predict, utils::modifyList(map_args, list(...))))
+rd <- function(m, b) terra::as.matrix(terra::rast(m$vrt[[b]]), wide = TRUE)
+
+# ── 1. the map, two workers, the probe first ──────────────────────────────────
+map2 <- mp(n_cores = 2L, run_id = "map_two")
+bands_all <- c("ensemble_median", "ensemble_mean", "ensemble_sd", "ensemble_mad",
+               "ensemble_min", "ensemble_max", "smeared_mean_block",
+               "pi90_constant_lower_block", "pi90_constant_upper_block",
+               "pi90_level_di_lower_block", "pi90_level_di_upper_block", "di",
+               "aoa_block", "valid_mask")
+ok["every_band_is_written_with_its_mosaic"] <-
+  identical(map2$bands$band, bands_all) && all(file.exists(map2$vrt))
+ok["three_units_on_two_workers"] <- nrow(map2$units) == 3L && identical(map2$n_workers, 2L)
+ok["one_branch_per_engine"] <- identical(map2$engine, c("patch", "fcn"))
+ok["the_probe_reproduced_the_stored_predictions_at_the_profiles"] <-
+  identical(map2$probe$status, "pass") && map2$probe$n >= 9L && map2$probe$max_rel_diff < 1e-5
+snap <- stats::setNames(lapply(bands_all, function(b) rd(map2, b)), bands_all)
+
+# ── 2. every band at every pixel, against a computation that shares no code ──
+preds <- data$store$predictors
+C <- length(preds)
+rt <- safe_read_csv2(file.path(st$store_dir, "raster_table_used.csv"))
+qc <- safe_read_csv2(file.path(st$store_dir, "qc_table.csv"))
+qc <- qc[match(preds, qc$predictor), , drop = FALSE]
+sc <- safe_read_csv2(file.path(fin$run_dir, cid, "predictor_scaling.csv"))
+sc <- sc[match(preds, sc$predictor), , drop = FALSE]
+raw <- array(NA_real_, c(n_r, n_c, C))
+for (k in seq_len(C)) {
+  raw[, , k] <- terra::as.matrix(terra::rast(rt$raster_file[rt$predictor == preds[k]]), wide = TRUE)
+}
+scl <- raw
+for (k in seq_len(C)) {
+  scl[, , k] <- (matrix(qc_band_values(as.vector(raw[, , k]), qc[k, , drop = FALSE]), n_r, n_c) -
+                   sc$center[k]) / sc$scale[k]
+}
+fin_all <- apply(is.finite(scl), c(1L, 2L), all)
+h <- 3L
+valid_ref <- matrix(FALSE, n_r, n_c)
+for (r in (h + 1L):(n_r - h)) for (c in (h + 1L):(n_c - h)) {
+  valid_ref[r, c] <- all(fin_all[(r - h):(r + h), (c - h):(c + h)])
+}
+ok["the_valid_mask_is_the_full_window_rule"] <- all((snap$valid_mask == 1) == valid_ref)
+ok["the_holes_and_the_margin_mattered"] <- sum(valid_ref) < (n_r - 2L * h) * (n_c - 2L * h) &&
+  !valid_ref[12L, 15L] && !valid_ref[26L, 33L]
+
+cells <- which(valid_ref, arr.ind = TRUE)
+patch <- function(w) {
+  hw <- (w - 1L) %/% 2L
+  a <- array(0, dim = c(nrow(cells), C, w, w))
+  for (i in seq_len(nrow(cells))) {
+    rr <- cells[i, 1]; cc <- cells[i, 2]
+    a[i, , , ] <- aperm(scl[(rr - hw):(rr + hw), (cc - hw):(cc + hw), , drop = FALSE], c(3L, 1L, 2L))
+  }
+  torch::torch_tensor(a, dtype = torch::torch_float32())
+}
+p3 <- patch(3L); p7 <- patch(7L)
+cfg <- fin$selected[fin$selected$config_id == cid, , drop = FALSE]
+pt <- sapply(fin$seeds, function(s) {
+  m <- build_cnn_from_config(cfg, C)
+  m$load_state_dict(torch::torch_load(file.path(fin$run_dir, cid, "models", sprintf("seed%04d_best.pt", s))))
+  m$eval()
+  torch::with_no_grad(as.numeric(m(p3, p7)$squeeze(2L)))
+})
+nat <- pmax(expm1(pt), 0)
+ref_stats <- list(ensemble_median = matrixStats::rowMedians(nat), ensemble_mean = rowMeans(nat),
+                  ensemble_sd = matrixStats::rowSds(nat), ensemble_mad = matrixStats::rowMads(nat),
+                  ensemble_min = matrixStats::rowMins(nat), ensemble_max = matrixStats::rowMaxs(nat))
+rel <- function(a, b) max(abs(a - b) / (1 + abs(b)))
+worst_ens <- vapply(names(ref_stats), function(b) rel(snap[[b]][cells], ref_stats[[b]]), numeric(1))
+ok["every_ensemble_band_is_the_seeds_networks_at_every_pixel"] <- all(worst_ens < 1e-4)
+ok["outside_the_mask_every_value_band_is_na"] <-
+  all(vapply(setdiff(bands_all, "valid_mask"), function(b) all(is.na(snap[[b]][!valid_ref])), logical(1)))
+
+cal <- readRDS(file.path(map2$run_dir, "calibration.rds"))
+src <- cal$sources$block
+rawc <- t(vapply(seq_len(nrow(cells)), function(i) raw[cells[i, 1], cells[i, 2], ], numeric(C)))
+di_ref <- aoa_di(src$aref, rawc)
+med <- snap$ensemble_median[cells]
+di  <- snap$di[cells]
+ok["the_di_is_aoa_di_at_every_pixel"] <- max(abs(di - di_ref)) < 1e-5
+ok["the_aoa_is_the_di_against_the_threshold"] <-
+  identical(as.integer(snap$aoa_block[cells]), as.integer(di_ref <= src$threshold))
+iv  <- src$intervals$pi90
+ivc <- conformal_interval(iv$constant, med, lower_limit = 0)
+ivl <- conformal_scaled_interval(iv$level_di, med, data.frame(level = med, di = di), lower_limit = 0)
+ok["the_constant_interval_is_the_median_plus_minus_q"] <-
+  rel(snap$pi90_constant_lower_block[cells], ivc$lower) < 1e-5 &&
+  rel(snap$pi90_constant_upper_block[cells], ivc$upper) < 1e-5
+ok["the_level_di_interval_is_the_fitted_scale_at_every_pixel"] <-
+  rel(snap$pi90_level_di_lower_block[cells], ivl$lower) < 1e-5 &&
+  rel(snap$pi90_level_di_upper_block[cells], ivl$upper) < 1e-5
+ok["the_smeared_mean_is_duans_factor_on_the_median"] <-
+  rel(snap$smeared_mean_block[cells], smear(log1p(med), src$smearing, lower_limit = 0)) < 1e-5
+ok["the_record_says_what_each_band_is"] <-
+  file.exists(file.path(map2$run_dir, "bands.csv")) &&
+  file.exists(file.path(map2$run_dir, "calibration.csv")) &&
+  file.exists(file.path(map2$run_dir, "prediction_manifest.csv")) &&
+  all(nzchar(map2$bands$meaning))
+
+# ── 3. one worker and two: identical, bit for bit ─────────────────────────────
+map1 <- mp(run_id = "map_one", probe = FALSE)
+ok["one_worker_and_two_give_identical_maps"] <-
+  all(vapply(bands_all, function(b) identical(rd(map1, b), snap[[b]]), logical(1)))
+
+# ── 4. a part of the map, by the other engine ─────────────────────────────────
+part <- mp(run_id = "map_part_patch", engine = "patch", probe = FALSE,
+           extent = list(rows = c(9L, 30L), cols = c(6L, 44L)))
+pm <- rd(part, "ensemble_median"); wm <- snap$ensemble_median[9:30, 6:44]
+pd <- rd(part, "di"); wd <- snap$di[9:30, 6:44]
+ok["a_part_is_that_part_of_the_whole_and_the_engines_agree"] <-
+  identical(dim(pm), dim(wm)) && identical(is.na(pm), is.na(wm)) &&
+  max(abs(pm - wm) / (1 + abs(wm)), na.rm = TRUE) < 1e-5 &&
+  max(abs(pd - wd), na.rm = TRUE) < 1e-6 && identical(part$engine, c("patch", "patch"))
+
+# ── 5. resume ─────────────────────────────────────────────────────────────────
+u2 <- file.path(map2$run_dir, "units", "u00002", "done.rds")
+before <- readRDS(u2)$finished_at
+again <- mp(n_cores = 2L, run_id = "map_two", probe = FALSE)
+ok["a_resumed_map_recomputes_no_finished_unit"] <-
+  identical(readRDS(u2)$finished_at, before) && identical(again$n_workers, 0L) &&
+  identical(rd(again, "ensemble_median"), snap$ensemble_median)
+unlink(u2)
+redo <- mp(n_cores = 2L, run_id = "map_two", probe = FALSE)
+ok["a_unit_without_its_record_is_mapped_again_to_the_same_numbers"] <-
+  identical(redo$n_workers, 1L) && file.exists(u2) &&
+  all(vapply(bands_all, function(b) identical(rd(redo, b), snap[[b]]), logical(1)))
+
+# ── 6. what can only be wrong is refused ──────────────────────────────────────
+ok["a_resumed_map_with_other_settings_is_refused"] <-
+  grepl("different settings", err(mp(n_cores = 2L, run_id = "map_two", probe = FALSE, alpha = 0.2)))
+ok["a_calibration_source_needs_a_name"] <-
+  grepl("named character vector", err(mp(run_id = "x1", calibration = fit$run_dir)))
+ok["a_calibration_source_must_be_a_tuning_run"] <-
+  grepl("not a finished tuning run", err(mp(run_id = "x2", calibration = c(block = base))))
+ok["a_raster_table_missing_a_channel_is_refused"] <-
+  grepl("lacks", err(mp(run_id = "x3", rasters = rt[-1, , drop = FALSE])))
+ok["a_band_that_does_not_exist_is_refused"] <-
+  grepl("Unknown band", err(mp(run_id = "x4", bands = c("ensemble_median", "median_of_everything"))))
+ck <- file.path(fin$run_dir, cid, "models", "seed0043_best.pt")
+file.rename(ck, paste0(ck, ".away"))
+ok["a_missing_seed_checkpoint_is_refused"] <- grepl("checkpoint", err(mp(run_id = "x5")))
+file.rename(paste0(ck, ".away"), ck)
+
+# The probe is the only thing that can see this one: two continuous channels
+# swapped in the raster table -- every file exists, every shape matches, and
+# the map would be wrong everywhere.
+rt_sw <- rt
+i_a <- which(rt_sw$predictor == "band_a"); i_b <- which(rt_sw$predictor == "band_b")
+rt_sw$raster_file[c(i_a, i_b)] <- rt_sw$raster_file[c(i_b, i_a)]
+ok["the_probe_stops_a_map_whose_channels_are_swapped"] <-
+  grepl("probe failed", err(mp(run_id = "map_swapped", rasters = rt_sw)))
+ok["and_nothing_was_mapped"] <-
+  !any(file.exists(file.path(fin$run_dir, "maps", "map_swapped", "units",
+                             sprintf("u%05d", 1:3), "done.rds")))
+
+# ── 7. two sources over the same profiles share one DI ────────────────────────
+two <- mp(run_id = "map_sources", probe = FALSE, calibration = c(block = fit$run_dir, again = fit$run_dir),
+          bands = c("ensemble_median", "di", "aoa"), extent = list(rows = c(10L, 20L), cols = c(10L, 30L)))
+ok["sources_with_one_reference_share_one_di_band"] <-
+  identical(two$bands$band, c("ensemble_median", "di", "aoa_block", "aoa_again")) &&
+  identical(rd(two, "aoa_block"), rd(two, "aoa_again"))
+
+cat(sprintf("  fixture                  : %d x %d grid, %d channels, %d profiles, %d valid pixel(s)\n",
+            n_r, n_c, C, nrow(data$store$meta), sum(valid_ref)))
+cat(sprintf("  probe                    : %d profile(s), max relative difference %.2e\n",
+            map2$probe$n, map2$probe$max_rel_diff))
+cat(sprintf("  worst ensemble band      : %.2e (%s)\n", max(worst_ens), names(which.max(worst_ens))))
+cat(sprintf("  worst DI                 : %.2e\n", max(abs(di - di_ref))))
+
+unlink(base, recursive = TRUE)
+.report(ok, "test_predict")

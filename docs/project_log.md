@@ -4522,3 +4522,173 @@ O desenho de leitura para rasters em faixas de uma linha:
   seeds, média com smearing, SD, MAD, DI, AOA e os intervalos (constante e
   nível + DI) por fonte de calibração.
 - **P4:** igual ao `05` na grade de 20 km.
+
+
+## 2026-09-27 — `dsm_predict()`: o mapa, com o código pronto para uma grade global de 250 m
+
+O pedido: o código do pacote tem que receber um global de 250 m e ser
+eficiente em fazer isso acontecer, mesmo que demore. Os números que decidem o
+desenho:
+
+- **A grade:** 63.721 × 160.298 células.
+- **Os rasters:** 181, em TIFFs de faixas de **uma linha**, LZW, float32,
+  1.052 GB num HD SATA. Ler qualquer coluna de uma linha obriga o GDAL a
+  descomprimir a linha inteira.
+
+### O desenho
+
+**1. A unidade de trabalho é uma faixa de linhas na largura inteira.** Ela é
+lida em passos de `step_rows` linhas. As 2h linhas que o passo seguinte
+compartilha com este (o halo das janelas) **ficam na memória**, não são
+relidas. Dentro de uma unidade, cada linha de cada banda é descomprimida uma
+vez só; entre unidades, só as 2h linhas do halo se repetem (1 a 3% a 250 m).
+
+**2. A rede roda totalmente convolucional por blocos de colunas.** Cada bloco
+é recortado à caixa dos seus pixels válidos mais as janelas. Sobre o mar não
+sobra nada, e nada roda.
+
+**3. Workers lado a lado.** São processos callr, como no `dsm_final()`, com o
+número de threads fixado antes de o torch carregar. As unidades são reservadas
+com `dir.create()`, que é atômico. Uma unidade está pronta quando o seu
+registro é gravado, depois dos arquivos. Um mapa interrompido no segundo dia
+recomeça de onde parou. Um mapa retomado com outra configuração é recusado,
+porque misturaria unidades de dois mapas. As configurações só se travam quando
+a primeira unidade termina: uma chamada que parou antes disso não deixou nada
+com que a próxima possa se misturar.
+
+**4. Todas as bandas numa passada só,** em unidades nativas: cada seed
+destransformada e com o clamp da própria avaliação do refit.
+
+- `ensemble_median`, `_mean`, `_sd`, `_mad`, `_min`, `_max`;
+- `smeared_mean_<fonte>` (Duan, só log1p);
+- `pi90_constant_lower/upper_<fonte>`;
+- `pi90_level_di_lower/upper_<fonte>`;
+- `di`, `aoa_<fonte>` e `valid_mask`.
+
+As contas de intervalo e de smearing são as da própria biblioteca:
+`conformal_interval()`, `conformal_scaled_interval()` e `smear()`. O mapa
+aplica exatamente o que foi calibrado.
+
+**5. A fonte de calibração é argumento:**
+`calibration = c(block = <rodada>, knndm = <rodada>)`. Cada fonte tem o seu
+resíduo (achado pelos hiperparâmetros), a sua referência de DI, o seu limiar
+de AOA e o seu fator S. As bandas dependem só da mediana e do DI, então todas
+as fontes saem na mesma passada da rede. Fontes com a mesma referência
+compartilham uma banda de DI.
+
+**6. A saída:** um GeoTIFF por banda por unidade, com tiles de altura igual ao
+passo, e um VRT por banda. Ao lado ficam:
+
+- `bands.csv`: o que cada banda é, em uma frase;
+- `calibration.csv`: q, escala, limiar e S por fonte;
+- `units.csv` e `band_summary.csv`;
+- `prediction_manifest.csv`.
+
+**7. A sondagem, antes do mapa.** Quando os rasters são a grade de onde o
+store foi extraído, os perfis são pixels do mapa. Uma unidade em volta do grupo
+mais denso de perfis passa pela cadeia inteira: leitor, QC, escala, ordem dos
+canais, rede convolucional, inversa. A previsão de **cada seed em cada perfil**
+tem que ser a que o final gravou em `pred_all.csv`, com tolerância relativa de
+1e-3 (o ruído esperado é ~1e-6). Canais trocados, escala velha ou inversa
+errada não passam. Uma falha para o mapa antes de começar, e custa uma unidade.
+
+**Na grade de 20 km a sondagem não se aplica** (nenhum perfil é pixel dela), e
+o mapa diz isso.
+
+### O DI a 250 m
+
+O `07` usava o FNN. Em 181 dimensões, uma kd-tree vira força bruta por pixel,
+a ~1–2 GFLOPS por núcleo: **~30 h** para o globo. Aqui a busca do vizinho mais
+próximo é um produto de matrizes em float32 no torch (multi-thread, MKL):
+~1 h. A distância ao vizinho achado é depois **recalculada em double**, e dá o
+mesmo número do `aoa_di()` até o arredondamento dos valores escalados. O índice
+que o `torch_argmin` devolve (base 0 ou 1) é perguntado ao torch na partida de
+cada worker, não suposto: um erro de um ali parearia cada pixel com o perfil
+errado.
+
+### Uma mudança no motor convolucional
+
+No `flatten`, a camada linear agora é aplicada **nas janelas do mapa de
+atributos colhidas nos pixels válidos**, e não como uma convolução com o peso
+remodelado. Os números são os mesmos. A convolução pagaria a camada linear
+(a parte cara de um ramo flatten) em toda posição da faixa, inclusive no mar.
+As indexações de linhas agora usam `drop = FALSE`: um bloco com **um único**
+pixel válido (uma ilha) derrubaria uma dimensão no torch.
+
+### Alternativas descartadas
+
+- **Tiles 2-D como no `05`:** cada linha descomprimida uma vez por coluna de
+  tile.
+- **Reler o halo a cada passo:** +22% de descompressão com passos de 64
+  linhas.
+- **Deixar o cache de blocos do GDAL segurar as linhas:** a mesma memória, com
+  risco de o LRU entrar em thrash, que é o caso patológico de uma varredura
+  repetida maior que o cache.
+- **O buffer como um tensor único com cópia de fatias entre passos:** a
+  semântica de view/cópia da indexação no torch do R não é garantida, e uma
+  cópia perdida escreveria no lugar errado em silêncio. Cada passo agora
+  monta a própria faixa, e cada banda é atribuída inteira.
+- **Um processo com 15 threads:** o T1 e o T2 mediram que três lado a lado
+  rendem mais.
+- **Converter os rasters para tiles:** recusado antes. É decisão sobre os
+  dados de origem.
+
+### Estimativa para o globo (a medir)
+
+- **Leitura:** ~1.052 GB a 120–150 MB/s, ou seja **~2–2,5 h** de disco para
+  uma passada.
+- **Rede:** ~200 mil multiplicações por posição por seed × 10 seeds, nas
+  posições dos blocos com terra. Na ordem de **5–12 h** em 15 núcleos.
+- **DI:** ~1 h.
+
+Os workers sobrepõem leitura e rede. **Estimativa, não medida:** a parte B do
+P4 imprime o que a unidade da sondagem mediu nos rasters reais de 250 m
+(segundos por linha lida e por pixel válido) e a extrapolação a partir disso.
+
+### Verificação
+
+**`tests/test_predict.R` (lento).** Roda a cadeia inteira numa grade de
+40 × 56:
+
+- `dsm_prepare()` → `dsm_train()` → `dsm_final()` → `dsm_predict()`;
+- 5 bandas, com buracos NA, sentinela de QC, percentual e dummy;
+- 81 perfis em 9 sítios;
+- um ramo 3×3 `same` (patch a patch) e um 7×7 `valid` (convolucional).
+
+Cada banda em cada pixel é comparada com uma conta que não usa o código do
+mapa:
+
+- **máscara:** a regra da janela completa, à mão;
+- **ensemble:** a rede de cada seed nos patches de cada pixel, à mão;
+- **DI:** o `aoa_di()`;
+- **AOA:** o DI contra o limiar;
+- **intervalos e smearing:** as funções de calibração sobre a mediana e o DI
+  do mapa.
+
+Depois as propriedades de que a rodada global depende:
+
+- 1 worker e 2 dão mapas **idênticos bit a bit**;
+- um pedaço do mapa, pelo motor patch a patch, é aquele pedaço do inteiro;
+- retomar não recalcula nada;
+- um registro perdido é recalculado para os mesmos números;
+- configuração mudada, fonte sem nome, fonte que não é rodada, canal
+  faltando, banda inexistente e checkpoint faltando são recusados;
+- **canais trocados na tabela de rasters são pegos pela sondagem**, e nada é
+  mapeado.
+
+**`_p4_predict_check.R`**, com 10 checagens obrigatórias:
+
+- **A (20 km):** o mesmo modelo implantado que o `05` mapeou. Máscara idêntica
+  pixel a pixel; as seis bandas de ensemble a 1e-4; o smearing com o S do `04`;
+  o intervalo constante com o q do `04`; o DI igual ao `aoa_di()` em 2.000
+  pixels sorteados; a AOA por fonte; e um pedaço pelo motor patch a patch igual
+  ao inteiro convolucional, o que prova a exatidão do motor na rede **real**
+  implantada.
+- **B (250 m):** a sondagem passa nos rasters reais.
+
+Resultado: pendente.
+
+O `dsm_final()` agora grava no resumo o **caminho** da rodada de tuning
+(`tuning_dir`), e não só o nome. É daí que o `dsm_predict()` tira a
+calibração padrão. Para as rodadas do `04`, que só têm o nome, a calibração é
+passada explicitamente.
