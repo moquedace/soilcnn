@@ -431,8 +431,11 @@ dsm_prepare <- function(points, target, raster_dir, windows,
   say("\nPredictor types -- dummy: ", n_dummy, " | percentage: ", n_pct,
       " | continuous: ", n_cont)
   if (auto_dummy && n_dummy > 0L) {
+    dn <- types$predictor[types$is_dummy]
     say("  detected as dummy (0/1 at the points): ",
-        paste(types$predictor[types$is_dummy], collapse = ", "))
+        paste(utils::head(dn, 8L), collapse = ", "),
+        if (length(dn) > 8L) sprintf(" ... and %d more (predictor_type_table.csv)",
+                                     length(dn) - 8L) else "")
   }
 
   # ── 8. the tables ──────────────────────────────────────────────────────────
@@ -467,16 +470,17 @@ dsm_prepare <- function(points, target, raster_dir, windows,
   #                  map (glaciers are 0 at every profile and 1 over ice); its
   #                  weights never get a gradient and stay at random init.
   #   near_constant  the same, smaller.
-  #   has_na         NA at the points.
-  # Computed exactly as stage 01 did -- on the rows that survived QC, which is
-  # why has_na cannot fire here (rows with an NA were already dropped). Kept
-  # as it is so this function reproduces stage 01 byte for byte; the fix is
-  # recorded in docs/project_log.md and goes in a commit of its own.
+  #   has_na         NA at the points -- counted over EVERY extracted row,
+  #                  after the QC rules and before any row is dropped.
+  # Stage 01 counted it on the rows that survived QC, and QC drops every row
+  # with a non-finite predictor, so has_na could not fire: it reported 0 for
+  # every channel on every run. It is the channel that knocks points out that
+  # this column exists to name, and those points are exactly the dropped ones.
   channel_risk <- types %>%
     dplyr::mutate(
       n_na_at_points = purrr::map_int(predictor,
-                                      ~ sum(!is.finite(raw[[.x]]))),
-      pct_na = round(100 * n_na_at_points / nrow(raw), 3),
+                                      ~ sum(!is.finite(df[[.x]]))),
+      pct_na = round(100 * n_na_at_points / nrow(df), 3),
       type   = dplyr::case_when(is_dummy ~ "dummy",
                                 is_percentage ~ "percentage",
                                 TRUE ~ "continuous"),

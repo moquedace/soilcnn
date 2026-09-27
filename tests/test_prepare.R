@@ -153,6 +153,12 @@ ok["everything_else_is_continuous"] <-
 cr <- safe_read_csv2(file.path(st$metadata_dir, "channel_risk.csv"))
 ok["a_channel_constant_at_the_points_is_flagged"] <-
   identical(cr$risk[cr$predictor == "const_glacier"], "constant")
+# p3 sits on a temperature sentinel, so that channel is NA at one of the 13
+# extracted points -- the point QC then drops. Stage 01 counted after the drop
+# and reported 0; the column exists to name the channel that knocked it out.
+ok["a_channel_that_is_na_at_a_point_is_flagged_has_na"] <-
+  identical(cr$risk[cr$predictor == "surface_temperature_celsius"], "has_na") &&
+  cr$n_na_at_points[cr$predictor == "surface_temperature_celsius"] == 1
 
 # ── 4. the store: edge check, window rule, geometry ──────────────────────────
 ok["store_keeps_only_points_with_a_whole_valid_window"] <-
@@ -305,7 +311,8 @@ ok["an_even_window_is_refused"] <-
 ok["a_declared_dummy_that_is_also_a_percentage_is_refused"] <-
   grepl("both", err(dsm_prepare(pts, "soc", rdir, windows = 3,
                                 out_dir = file.path(base, "e3"),
-                                percentage = "^pct_", dummy = "pct_clay")))
+                                percentage = "^pct_", dummy = "pct_clay",
+                                verbose = FALSE)))
 ok["a_reserved_target_name_is_refused"] <- {
   p2 <- pts; names(p2)[names(p2) == "soc"] <- "sample_id"
   grepl("reserved", err(dsm_prepare(p2, "sample_id", rdir, windows = 3,
