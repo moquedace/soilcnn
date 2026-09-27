@@ -102,11 +102,14 @@ for (f in c(file.path(old_store, "patch_manifest.rds"),
 tconf  <- safe_read_csv2(file.path(old_meta, "target_config.csv"))
 man    <- readRDS(file.path(old_store, "patch_manifest.rds"))
 
-# A ONE-TIME PROOF. It passed on 2026-09-26, 19 of 19, and 01 then became a
-# caller of dsm_prepare(). Once 01 has run again, the store on disk IS
-# dsm_prepare()'s, and this script would compare the function with itself --
-# a pass that proves nothing. The old 01 wrote soc_gpkg_file into
-# target_config.csv and dsm_prepare() does not, which is how that is told.
+# A PROOF FOR AS LONG AS THE OLD STORE IS ON DISK. It passed on 2026-09-26,
+# 19 of 19, and 01 then became a caller of dsm_prepare(). It is run again
+# whenever the extraction changes -- the first change was reading the centre
+# values in the same pass as the patches, which retired terra::extract().
+# Once 01 has run again, the store on disk IS dsm_prepare()'s, and this script
+# would compare the function with itself -- a pass that proves nothing. The
+# old 01 wrote soc_gpkg_file into target_config.csv and dsm_prepare() does
+# not, which is how that is told.
 if (!"soc_gpkg_file" %in% names(tconf)) {
   stop("The store on disk was built by dsm_prepare(), not by the old 01 + 02.\n",
        "  P1 compared the two once, on 2026-09-26 (19/19, patches bit for bit),\n",
@@ -196,8 +199,9 @@ new_man <- readRDS(file.path(st$store_dir, "patch_manifest.rds"))
 
 ledger_check(L, "p1_01", "the new store was written and is complete",
              isTRUE(new_man$store_complete[1]),
-             sprintf("%d points | %.1f min at %d core(s)", new_man$n_points_valid[1],
-                     minutes, st$recipe$n_cores))
+             sprintf("%d points | %.1f min at %d core(s) | %s read(s) per band",
+                     new_man$n_points_valid[1], minutes, st$recipe$n_cores,
+                     format(st$recipe$n_reads_per_band, big.mark = ",")))
 
 ledger_check(L, "p1_02", "the same subsample (or none)", {
   a <- tconf$subsample[1]; b <- safe_read_csv2(file.path(st$metadata_dir, "target_config.csv"))$subsample[1]
@@ -334,10 +338,10 @@ ledger_check(L, "p1_19", "dsm_load of the old and of the new store agree", {
 v <- ledger_verdict(L, required, file.path(p1_dir, "p1_checks.csv"))
 
 if (v$pass) {
-  message("\ndsm_prepare() builds the store 01 and 02 built. 01 and 02 can now ",
-          "become callers of it.")
+  message("\ndsm_prepare() builds the store 01 and 02 built.")
   message("The new store at ", p1_dir, " can be deleted -- it is a copy.")
 } else {
-  message("\nDo NOT switch 01 and 02 to dsm_prepare() yet: the stores differ. ",
-          "The table above says where.")
+  message("\nThe stores differ -- the table above says where. Do NOT run 01 until ",
+          "that is understood: it calls dsm_prepare() with overwrite = TRUE, and ",
+          "would replace the store this script compares against.")
 }

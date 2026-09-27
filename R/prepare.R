@@ -117,8 +117,9 @@ target_transform_spec <- function(name) {
 #'   cap). Decides how many of the `n_cores` workers actually run.
 #' @param read_gap, read_max_cols How the points of a row chunk are grouped
 #'   into reads: windows closer than `read_gap` columns share a read, and no
-#'   read is wider than `read_max_cols`. Performance knobs only -- the store is
-#'   identical whatever they are, and the test suite proves it.
+#'   read is wider than `read_max_cols`. Performance knobs only -- the store
+#'   and the point table are identical whatever they are, and the test suite
+#'   proves it.
 #' @param overwrite  A store_dir that already holds a store is refused unless
 #'   TRUE, in which case that store's files are removed first.
 #' @return A `dsm_store`, which dsm_load() accepts directly.
@@ -291,26 +292,20 @@ dsm_prepare <- function(points, target, raster_dir, windows,
   }
   say("Predictor rasters to use: ", length(preds))
 
-  # ── 4. place the points on the rasters and read the centre values ─────────
+  # ── 4. place the points on the rasters ────────────────────────────────────
   if (is_sf) {
     pts <- sf::st_transform(pts, crs = sf::st_crs(terra::crs(stack, proj = TRUE)))
     xy  <- sf::st_coordinates(pts)
-    vec <- terra::vect(pts)
     tab <- sf::st_drop_geometry(pts)
   } else {
     xy <- as.matrix(pts[, coords])
     storage.mode(xy) <- "double"
     if (!is.null(crs)) {
-      vec <- terra::project(terra::vect(xy, crs = crs), terra::crs(stack))
-      xy  <- terra::crds(vec)
-    } else {
-      vec <- terra::vect(xy, crs = terra::crs(stack))
+      xy <- terra::crds(terra::project(terra::vect(xy, crs = crs), terra::crs(stack)))
     }
     tab <- as.data.frame(pts)
   }
-  pv <- terra::extract(stack, vec, ID = FALSE) %>%
-    tibble::as_tibble() %>%
-    dplyr::mutate(dplyr::across(dplyr::everything(), as.numeric))
+  xy <- xy[, 1:2, drop = FALSE]          # st_coordinates() may add Z or M
 
   pid <- if (!is.null(profile_id) && profile_id %in% names(tab)) {
     as.character(tab[[profile_id]])
@@ -320,28 +315,56 @@ dsm_prepare <- function(points, target, raster_dir, windows,
     as.character(seq_len(nrow(tab)))
   }
   tn <- as.numeric(tab[[target]])
-  df <- tibble::tibble(profile_id = pid, x = as.numeric(xy[, 1]),
-                       y = as.numeric(xy[, 2]))
-  df[[target]] <- tn
-  df <- dplyr::bind_cols(df, pv)
-  df$target_native    <- tn
-  df$target_transform <- tr$forward(tn)
 
-  # ── 5. QC at the points -- the SAME rules the patches get below ───────────
+  # ── 5. ONE PASS OVER THE RASTERS: every point's centre, every patch ───────
   #
-  # Stage 01 wrote these rules twice: once inline for the point values, once
-  # as qc_table.csv for stage 02 to apply to the patches. They agreed because
-  # someone kept them in step. Here one table drives both, through the same
-  # qc_band_values().
+  # Stage 01 read the centre values with terra::extract(), one file after
+  # another, to run the QC; stage 02 then read the patches. On these rasters
+  # -- one-row strips, LZW -- both decompress the same rows, and the first
+  # pass ran in series: about half an hour of the 93 minutes P1 measured.
+  #
+  # Here each band is read once, in parallel: the centre of EVERY point (for
+  # the QC and the types), and the patches of the points far enough from the
+  # edge. The QC, the types and the variance filter then run on those
+  # centres, and the arrays are cut down to the rows and channels that
+  # survive. What it costs: patches for points the QC then drops -- 9% of the
+  # SOC points. A centre is the same cell terra::extract() returned (the cell
+  # holding the point), and the QC rules below are the same qc_band_values()
+  # applied to the same read.
   pct_all <- .prep_match(percentage, preds, "percentage", say)
   qc_all  <- make_qc_table(
     predictors   = preds,
     na_below     = na_below,
     clamp_range  = if (is.null(percentage_limits)) character(0) else pct_all,
     clamp_limits = percentage_limits %||% c(0, 100))
-  for (i in seq_along(preds)) {
-    df[[preds[i]]] <- qc_band_values(df[[preds[i]]], qc_all[i, ])
-  }
+
+  ex <- .prep_extract_patches(
+    files         = rt$use$raster_file,
+    qc_table      = qc_all,
+    xy            = xy,
+    windows       = windows,
+    chunk_nrows   = chunk_nrows,
+    n_cores       = n_cores,
+    max_ram_gb    = max_ram_gb,
+    read_gap      = read_gap,
+    read_max_cols = read_max_cols,
+    cell_bytes    = rt$max_cell_bytes,
+    say           = say)
+
+  # ── 6. QC at the points ────────────────────────────────────────────────────
+  #
+  # The centres come back with the QC rules already applied, so there is no
+  # second set of rules to keep in step with the patches' -- stage 01 wrote
+  # them twice, inline and as qc_table.csv, and they agreed because someone
+  # kept them in step.
+  pv <- tibble::as_tibble(stats::setNames(as.data.frame(ex$centre), preds))
+  df <- tibble::tibble(profile_id = pid, x = as.numeric(xy[, 1]),
+                       y = as.numeric(xy[, 2]))
+  df[[target]] <- tn
+  df <- dplyr::bind_cols(df, pv)
+  df$target_native    <- tn
+  df$target_transform <- tr$forward(tn)
+  df$.row             <- seq_len(nrow(df))    # where each row's patches are
 
   bad_pred   <- rowSums(!is.finite(as.matrix(df[, preds]))) > 0L
   bad_target <- is.na(df$profile_id) | is.na(df$x) | is.na(df$y) |
@@ -369,12 +392,12 @@ dsm_prepare <- function(points, target, raster_dir, windows,
 
   raw <- df[!(bad_target | bad_pred), , drop = FALSE] %>%
     dplyr::select(profile_id, x, y, dplyr::all_of(target), target_native,
-                  target_transform, dplyr::all_of(preds)) %>%
+                  target_transform, dplyr::all_of(preds), .row) %>%
     dplyr::distinct(profile_id, .keep_all = TRUE)
   if (nrow(raw) == 0L) stop("No rows remained after QC.", call. = FALSE)
   say("Rows after QC: ", nrow(raw))
 
-  # ── 6. predictor types ─────────────────────────────────────────────────────
+  # ── 7. predictor types ─────────────────────────────────────────────────────
   types <- purrr::map_dfr(preds, function(nm) {
     v    <- raw[[nm]]
     vu   <- v[!is.na(v) & is.finite(v)]
@@ -407,12 +430,13 @@ dsm_prepare <- function(points, target, raster_dir, windows,
   # A DECLARATION WINS OVER THE DETECTION (see the header).
   types$is_dummy[types$is_percentage] <- FALSE
 
-  # ── 7. the row key, and channels that cannot be scaled ────────────────────
+  # ── 8. the row key, and channels that cannot be scaled ────────────────────
   #
   # THIS FUNCTION DECIDES NO ROLES. Which rows train, validate and test is
   # decided by a fold plan, from coordinates, in seconds -- a split carried
   # inside the store would cost a re-extraction to change.
-  split <- dplyr::mutate(raw, sample_id = dplyr::row_number())
+  split     <- dplyr::mutate(raw, sample_id = dplyr::row_number())
+  preds_all <- preds
 
   dummy_cols <- types$predictor[types$is_dummy]
   sds <- vapply(preds, function(nm) stats::sd(split[[nm]], na.rm = TRUE),
@@ -438,7 +462,7 @@ dsm_prepare <- function(points, target, raster_dir, windows,
                                      length(dn) - 8L) else "")
   }
 
-  # ── 8. the tables ──────────────────────────────────────────────────────────
+  # ── 9. the tables ──────────────────────────────────────────────────────────
   dataset_check <- tibble::tibble(
     target_col              = target,
     n_rows                  = nrow(split),
@@ -479,7 +503,7 @@ dsm_prepare <- function(points, target, raster_dir, windows,
   # A point that is NA everywhere says nothing about any channel; the blame
   # report below draws the same line with its n_sole_cause. So the count is
   # over the points that have data in at least one channel.
-  na_mat    <- !is.finite(as.matrix(df[, qc_all$predictor]))
+  na_mat    <- !is.finite(as.matrix(df[, preds_all]))
   with_data <- rowSums(na_mat) < ncol(na_mat)
   n_na_part <- colSums(na_mat[with_data, , drop = FALSE])
   channel_risk <- types %>%
@@ -540,21 +564,19 @@ dsm_prepare <- function(points, target, raster_dir, windows,
                   file.path(metadata_dir, "point_metadata.csv"))
   safe_write_csv2(target_config, file.path(metadata_dir, "target_config.csv"))
 
-  # ── 9. the patches ─────────────────────────────────────────────────────────
-  ex <- .prep_extract_patches(
-    files         = raster_used$raster_file,
-    qc_table      = qc_table,
-    xy            = as.matrix(point_table[, c("x", "y")]),
-    windows       = windows,
-    chunk_nrows   = chunk_nrows,
-    n_cores       = n_cores,
-    max_ram_gb    = max_ram_gb,
-    read_gap      = read_gap,
-    read_max_cols = read_max_cols,
-    cell_bytes    = rt$max_cell_bytes,
-    say           = say)
+  # ── 10. the rows and channels that survived ───────────────────────────────
+  #
+  # The pass read every point and every channel; the store keeps the rows of
+  # the point table, in its order, and the channels that survived. The blame
+  # matrix and the edge flags are cut here. The arrays are cut ONCE, at the
+  # write, with the window rule folded into the same index -- cutting them
+  # here as well would copy every window twice.
+  rows_final <- split$.row
+  ch_final   <- match(preds, preds_all)
+  blame   <- ex$blame[rows_final, ch_final, drop = FALSE]
+  edge_ok <- ex$edge_ok[rows_final]
 
-  # ── 10. who invalidated what ───────────────────────────────────────────────
+  # ── 11. who invalidated what ───────────────────────────────────────────────
   #
   # The full-window rule turns ONE non-finite pixel into a lost patch, so one
   # sparse-NA channel can empty a map -- it happened here: a test tile covered
@@ -564,8 +586,7 @@ dsm_prepare <- function(points, target, raster_dir, windows,
   # place where the whole stack is nodata (coast, water, raster edge), and
   # dropping a channel would recover nothing.
   n_points  <- nrow(point_table)
-  blame     <- ex$blame
-  valid     <- ex$edge_ok & rowSums(blame) == 0L
+  valid     <- edge_ok & rowSums(blame) == 0L
   n_valid   <- sum(valid)
   valid_idx <- which(valid)
   blame_report <- tibble::tibble(
@@ -584,7 +605,7 @@ dsm_prepare <- function(points, target, raster_dir, windows,
                      verbose)
   if (n_valid == 0L) stop("No point is valid after the window rule.", call. = FALSE)
 
-  # ── 11. persist, metadata first ────────────────────────────────────────────
+  # ── 12. persist, metadata first ────────────────────────────────────────────
   #
   # patch_meta.csv defines WHICH points survived, and every window file must
   # line up with it row for row; written first, a crash mid-write leaves a
@@ -598,12 +619,13 @@ dsm_prepare <- function(points, target, raster_dir, windows,
   safe_write_csv2(meta_valid, file.path(store_dir, "patch_meta.csv"))
 
   keys <- patch_window_key(windows)
+  src_idx <- rows_final[valid_idx]     # rows of the pass's arrays, in store order
   # A sample for visual inspection (99b), taken while the arrays are in memory.
   sample_idx <- with_local_seed(42L, sort(sample(n_valid, min(6L, n_valid))))
   safe_save_rds(
     list(meta       = meta_valid[sample_idx, ],
          windows    = stats::setNames(lapply(keys, function(k)
-           ex$patch_list[[k]][valid_idx[sample_idx], , , , drop = FALSE]), keys),
+           ex$patch_list[[k]][src_idx[sample_idx], ch_final, , , drop = FALSE]), keys),
          predictors = preds),
     file.path(store_dir, "patch_sample.rds"), compress = TRUE)
 
@@ -611,7 +633,7 @@ dsm_prepare <- function(points, target, raster_dir, windows,
   for (wi in order(windows, decreasing = TRUE)) {
     w   <- windows[wi]
     key <- keys[wi]
-    arr <- ex$patch_list[[key]][valid_idx, , , , drop = FALSE]
+    arr <- ex$patch_list[[key]][src_idx, ch_final, , , drop = FALSE]
     res <- save_patch_window(arr, store_dir, w)
     rm(arr)
     ex$patch_list[[key]] <- NULL
@@ -653,7 +675,7 @@ dsm_prepare <- function(points, target, raster_dir, windows,
   safe_write_csv2(manifest, file.path(metadata_dir, "patches", "patch_manifest.csv"))
   safe_write_csv2(saved,    file.path(metadata_dir, "patches", "patch_files.csv"))
 
-  # ── 12. the recipe, and the tables the store needs, INSIDE the store ──────
+  # ── 13. the recipe, and the tables the store needs, INSIDE the store ──────
   store_files <- list(points       = "points.csv",
                       type_table   = "predictor_type_table.csv",
                       qc_table     = "qc_table.csv",
@@ -940,6 +962,18 @@ print.dsm_store <- function(x, ...) {
 
 # ── the extraction ────────────────────────────────────────────────────────────
 #
+# ONE PASS, EVERY BAND READ ONCE: every point's centre, and the patches.
+#
+# The centre of every point is needed before anything else can happen -- the
+# QC, the types and the variance filter all run on the values at the points.
+# Stage 01 read them with terra::extract(), in series; this reads them here,
+# in the same pass, from the same windows, in parallel. A point far enough
+# from the edge gets its patches and its centre from one read; a point inside
+# the raster but too close to its edge for the largest window still needs a
+# centre (it stays in the point table, it only has no patch), so it gets a
+# 1 x 1 read of its own; a point outside the raster gets nothing and stays NA,
+# which the QC then drops -- terra::extract() returned NA for it too.
+#
 # READ ONLY WHAT THE PATCHES NEED.
 #
 # Stage 02 read, for every band and every chunk of 1,000 rows that held a
@@ -998,47 +1032,59 @@ print.dsm_store <- function(x, ...) {
   col_ids <- as.integer(terra::colFromCell(ref, cells))
 
   # The edge check, once, against every window -- so all windows share one
-  # surviving set of points. It also guarantees every read below lies inside
+  # surviving set of points. It also guarantees every patch read lies inside
   # the raster, so no read is ever clipped.
-  edge_ok <- !is.na(row_ids) & !is.na(col_ids)
+  inside  <- !is.na(row_ids) & !is.na(col_ids)
+  edge_ok <- inside
   for (w in windows) {
     ok <- patch_centre_in_bounds(row_ids, col_ids, n_rows, n_cols, w)
     ok[is.na(ok)] <- FALSE
     edge_ok <- edge_ok & ok
   }
-  say("\nAfter the edge check: ", sum(edge_ok), " / ", n_pts, "  (",
-      round(100 * (n_pts - sum(edge_ok)) / n_pts, 2),
-      "% too close to the raster edge for a ", max(windows), "x",
-      max(windows), " window)")
-  if (!any(edge_ok)) stop("No point survived the edge check.", call. = FALSE)
+  say(sprintf("\nEdge check: %d of %d point(s) far enough from the edge for a %dx%d patch; %d more inside the raster (centre only); %d outside it",
+              sum(edge_ok), n_pts, max(windows), max(windows),
+              sum(inside & !edge_ok), sum(!inside)))
+  if (!any(inside)) stop("No point falls inside the rasters.", call. = FALSE)
 
   # ── the reading plan: geometry, computed once, reused by every band ───────
+  #
+  # Two kinds of read. PATCH reads, for the points that get patches: their
+  # windows plus the half window. CENTRE reads, for the points too close to
+  # the edge: the cells themselves (half window 0). Both are grouped by
+  # column within a row chunk the same way.
   h <- (max(windows) - 1L) %/% 2L
   reads <- list()
   n_chunks <- 0L
   for (cs in seq(1L, n_rows, by = chunk_nrows)) {
     ce <- min(cs + chunk_nrows - 1L, n_rows)
-    in_chunk <- edge_ok & row_ids >= cs & row_ids <= ce
-    in_chunk[is.na(in_chunk)] <- FALSE
-    if (!any(in_chunk)) next
+    in_rows <- inside & row_ids >= cs & row_ids <= ce
+    in_rows[is.na(in_rows)] <- FALSE
+    if (!any(in_rows)) next
     n_chunks <- n_chunks + 1L
-    idx <- which(in_chunk)
-    idx <- idx[order(col_ids[idx])]
-    for (g in .prep_column_groups(col_ids[idx], h, read_gap, read_max_cols)) {
-      gi <- idx[g]
-      r0 <- min(row_ids[gi]) - h
-      r1 <- max(row_ids[gi]) + h
-      c0 <- min(col_ids[gi]) - h
-      c1 <- max(col_ids[gi]) + h
-      width <- c1 - c0 + 1L
-      lr <- row_ids[gi] - r0 + 1L
-      lc <- col_ids[gi] - c0 + 1L
-      reads[[length(reads) + 1L]] <- list(
-        idx = gi, row = r0, nrows = r1 - r0 + 1L, col = c0, ncols = width,
-        cell_mats = lapply(windows, function(w) patch_cell_index(lr, lc, width, w)))
+    for (kind in c("patch", "centre")) {
+      sel <- in_rows & (if (identical(kind, "patch")) edge_ok else !edge_ok)
+      if (!any(sel)) next
+      hh  <- if (identical(kind, "patch")) h else 0L
+      idx <- which(sel)
+      idx <- idx[order(col_ids[idx])]
+      for (g in .prep_column_groups(col_ids[idx], hh, read_gap, read_max_cols)) {
+        gi <- idx[g]
+        r0 <- min(row_ids[gi]) - hh
+        r1 <- max(row_ids[gi]) + hh
+        c0 <- min(col_ids[gi]) - hh
+        c1 <- max(col_ids[gi]) + hh
+        width <- c1 - c0 + 1L
+        lr <- row_ids[gi] - r0 + 1L
+        lc <- col_ids[gi] - c0 + 1L
+        reads[[length(reads) + 1L]] <- list(
+          idx = gi, row = r0, nrows = r1 - r0 + 1L, col = c0, ncols = width,
+          centre_cell = patch_cell_index(lr, lc, width, 1L)[, 1],
+          cell_mats = if (identical(kind, "patch"))
+            lapply(windows, function(w) patch_cell_index(lr, lc, width, w)) else NULL)
+      }
     }
   }
-  cells_read <- sum(vapply(reads, function(rd) as.numeric(rd$nrows) * rd$ncols, numeric(1)))
+  cells_read  <- sum(vapply(reads, function(rd) as.numeric(rd$nrows) * rd$ncols, numeric(1)))
   max_read_gb <- max(vapply(reads, function(rd) as.numeric(rd$nrows) * rd$ncols, numeric(1))) * 8 / 1e9
   say(sprintf("Reading plan: %s window read(s) per band over %d row chunk(s); %.3g%% of the raster's cells, largest read %.0f MB",
               format(length(reads), big.mark = ","), n_chunks,
@@ -1081,7 +1127,8 @@ print.dsm_store <- function(x, ...) {
   keys <- patch_window_key(windows)
   patch_list <- stats::setNames(
     lapply(windows, function(w) array(NA_real_, dim = c(n_pts, n_ch, w, w))), keys)
-  blame <- matrix(FALSE, nrow = n_pts, ncol = n_ch)
+  blame  <- matrix(FALSE, nrow = n_pts, ncol = n_ch)
+  centre <- matrix(NA_real_, nrow = n_pts, ncol = n_ch)
 
   job <- list(files = files, rules = as.data.frame(qc_table), reads = reads,
               windows = windows, n_points = n_pts, gdal_cache_mb = gdal_cache_mb)
@@ -1104,6 +1151,7 @@ print.dsm_store <- function(x, ...) {
                                job$n_points)
       for (wi in seq_along(windows)) patch_list[[keys[wi]]][, i, , ] <- res$arrays[[wi]]
       if (length(res$invalid) > 0L) blame[res$invalid, i] <- TRUE
+      centre[, i] <- res$centre
       if (i %% 20L == 0L) {
         say(sprintf("  %d / %d bands  (%.1f min)", i, n_ch,
                     as.numeric(difftime(Sys.time(), t0, units = "mins"))))
@@ -1129,6 +1177,7 @@ print.dsm_store <- function(x, ...) {
           patch_list[[keys[wi]]][, i, , ] <- res_list[[k]]$arrays[[wi]]
         }
         if (length(res_list[[k]]$invalid) > 0L) blame[res_list[[k]]$invalid, i] <- TRUE
+        centre[, i] <- res_list[[k]]$centre
       }
       rm(res_list)
       say(sprintf("  %d / %d bands  (%.1f min)", max(b), n_ch,
@@ -1139,6 +1188,7 @@ print.dsm_store <- function(x, ...) {
               as.numeric(difftime(Sys.time(), t0, units = "mins"))))
 
   list(patch_list = patch_list, blame = blame, edge_ok = edge_ok,
+       centre = centre, inside = inside,
        n_rows = n_rows_raw, n_cols = n_cols_raw, cell_size = terra::res(ref)[1],
        n_workers = n_workers, gdal_cache_mb = gdal_cache_mb,
        n_reads = length(reads))
@@ -1170,27 +1220,32 @@ print.dsm_store <- function(x, ...) {
   groups
 }
 
-# One band: open once, every planned window, QC, then each patch size.
-# Returns the arrays for every point (NA where a point is in no read) and the
-# points whose window this band left non-finite.
+# One band: open once, every planned window, QC, then the centre of every
+# point in the read and, for a patch read, each patch size. Returns the
+# arrays (NA where a point has no patch), the points whose window this band
+# left non-finite, and every point's centre (NA outside the raster).
 .prep_band_worker <- function(i, files, rules, reads, windows, n_points) {
   r    <- terra::rast(files[i])
   rule <- rules[i, , drop = FALSE]
   arrays  <- lapply(windows, function(w) array(NA_real_, dim = c(n_points, w, w)))
   invalid <- logical(n_points)
+  centre  <- rep(NA_real_, n_points)
   terra::readStart(r)
   on.exit(terra::readStop(r), add = TRUE)
   for (rd in reads) {
     v <- terra::readValues(r, row = rd$row, nrows = rd$nrows, col = rd$col,
                            ncols = rd$ncols, mat = FALSE)
     v <- qc_band_values(v, rule)
-    for (wi in seq_along(windows)) {
-      pb <- patch_band_assemble(v, rd$cell_mats[[wi]], windows[wi])
-      arrays[[wi]][rd$idx, , ] <- pb$array
-      if (!all(pb$valid)) invalid[rd$idx[!pb$valid]] <- TRUE
+    centre[rd$idx] <- v[rd$centre_cell]
+    if (!is.null(rd$cell_mats)) {
+      for (wi in seq_along(windows)) {
+        pb <- patch_band_assemble(v, rd$cell_mats[[wi]], windows[wi])
+        arrays[[wi]][rd$idx, , ] <- pb$array
+        if (!all(pb$valid)) invalid[rd$idx[!pb$valid]] <- TRUE
+      }
     }
   }
-  list(arrays = arrays, invalid = which(invalid))
+  list(arrays = arrays, invalid = which(invalid), centre = centre)
 }
 
 # In each worker, once: the plan, and a GDAL cache sized to hold a chunk's
@@ -1203,8 +1258,8 @@ print.dsm_store <- function(x, ...) {
 }
 
 # The GDAL cache size as terra reports it, or NA. Read back after setting it,
-# and printed: terra's documentation gives the unit, the installed package on
-# this machine does not, and a wrong unit would cost speed silently.
+# and printed: a wrong unit would cost speed silently. (It is MB -- the P1 run
+# of 2026-09-26 read back exactly the 683 it asked for.)
 .prep_gdal_cache <- function() {
   suppressWarnings(as.numeric(tryCatch(terra::gdalCache(), error = function(e) NA)))[1]
 }

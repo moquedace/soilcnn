@@ -10,6 +10,10 @@
 # below exists to exercise one path, and every assertion is checked against a
 # value computed independently from the raster's own formula.
 #
+# The centre values and the patches come from ONE pass over the rasters, so
+# the centres are checked here for every point the table keeps -- including
+# the ones too close to the edge for a patch, which get a read of their own.
+#
 # The fixture: a 30 x 40 grid in EPSG:4326, one cell per degree, windows 3 and
 # 5 (so rows 3-28 and columns 3-38 are far enough from the edge). Six rasters
 # and one text file that must be ignored:
@@ -142,6 +146,14 @@ ok["qc_summary_counts_before_the_deduplication_as_stage_01_did"] <-
   qs$n_rows_extracted == 14 && qs$n_target_problem == 2 &&
   qs$n_predictor_problem == 2 && qs$n_rows_after_qc == 10
 
+# Every centre the table keeps is the raster at its point -- p5, p6 and p13
+# too, which are too close to the edge for a patch and get a 1 x 1 read.
+kept_rc <- pts_rc[match(as.character(pt$profile_id), pts_rc$profile_id), ]
+ok["every_centre_is_the_raster_at_its_point_edge_points_included"] <-
+  isTRUE(all.equal(pt$cont_a, kept_rc$r * 100 + kept_rc$c)) &&
+  isTRUE(all.equal(pt$surface_temperature_celsius, 15 + 0.01 * (kept_rc$r * 100 + kept_rc$c))) &&
+  identical(as.numeric(pt$dummy_forest), as.numeric((kept_rc$r + kept_rc$c) %% 2))
+
 # ── 3. the types ─────────────────────────────────────────────────────────────
 tyd <- setNames(ty$is_dummy, ty$predictor)
 typ <- setNames(ty$is_percentage, ty$predictor)
@@ -227,6 +239,8 @@ ok["two_cores_give_the_identical_arrays"] <-
   identical(readRDS(file.path(st2$store_dir, "patches_w05.rds")), w5)
 ok["two_cores_give_the_identical_point_set"] <-
   isTRUE(all.equal(safe_read_csv2(file.path(st2$store_dir, "patch_meta.csv")), meta))
+ok["two_cores_give_the_identical_point_table"] <-
+  isTRUE(all.equal(safe_read_csv2(st2$points_file), pt))
 
 # ── 7b. how the raster is READ changes the time, never the result ────────────
 #
@@ -242,9 +256,13 @@ ok["one_read_per_point_gives_the_identical_arrays"] <-
   identical(readRDS(file.path(st_1pt$store_dir, "patches_w05.rds")), w5)
 ok["one_read_per_point_really_split_the_reads"] <-
   st_1pt$recipe$n_reads_per_band > st$recipe$n_reads_per_band
+# The centres come from the same reads, so the point table must not move either.
+ok["one_read_per_point_gives_the_identical_point_table"] <-
+  isTRUE(all.equal(safe_read_csv2(st_1pt$points_file), pt))
 st_rows <- prep("short_chunks", n_cores = 1L, chunk_nrows = 3L)
 ok["three_row_chunks_give_the_identical_arrays"] <-
-  identical(readRDS(file.path(st_rows$store_dir, "patches_w05.rds")), w5)
+  identical(readRDS(file.path(st_rows$store_dir, "patches_w05.rds")), w5) &&
+  isTRUE(all.equal(safe_read_csv2(st_rows$points_file), pt))
 
 # The grouping itself, on columns chosen to hit each rule. Half window 2, so a
 # point at column c needs columns c-2 .. c+2.

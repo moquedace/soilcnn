@@ -3780,3 +3780,65 @@ NA, em 13 pontos com dado). No P1, o `p1_11` agora aceita o
 canal idênticas, `constant` e `near_constant` exatamente onde estavam,
 `has_na` só onde o `01` não dizia nada — e informa quais canais ele passou a
 apontar.
+
+
+## 2026-09-26 — Uma passada só: os centros saem da mesma leitura dos patches
+
+### O que mudou
+
+O `dsm_prepare()` lia cada banda duas vezes. Primeiro o `terra::extract()`,
+em série, para os valores de centro de todos os pontos — sobre eles rodam o
+QC, a detecção de tipos e o filtro de variância. Depois a extração paralela,
+só dos patches dos pontos que sobreviveram. Nestes rasters (faixas de uma
+linha, LZW) as duas descomprimem as mesmas linhas, e a primeira, sozinha,
+levava ~30 dos 93 minutos do P1 — e levaria horas no conjunto completo de 41
+mil pontos.
+
+Agora cada banda é lida **uma vez, em paralelo**, e a leitura devolve as duas
+coisas:
+
+- **ponto longe da borda** → os patches e o centro saem da mesma janela;
+- **ponto dentro do raster, mas perto demais da borda** para a maior janela →
+  uma leitura 1 × 1 só do centro (o ponto fica na tabela de pontos, só não tem
+  patch — como antes);
+- **ponto fora do raster** → nada é lido, o centro fica NA e o QC o descarta
+  — o `terra::extract()` também devolvia NA.
+
+O QC, os tipos e o filtro de variância rodam sobre esses centros, e os arrays
+são cortados, **uma vez só, na gravação**, para as linhas da tabela de pontos
+e os canais que sobraram. (Cortar logo depois do QC e de novo na regra da
+janela copiaria cada janela duas vezes.)
+
+**O custo**: patches lidos para pontos que o QC depois descarta — 9% dos
+pontos do SOC. A memória dos arrays passa a ser dimensionada pelos pontos
+lidos, não pelos que sobram; o plano de RAM já contava assim.
+
+### Por que o resultado não pode mudar
+
+O centro é a mesma célula que o `terra::extract()` devolvia (a célula que
+contém o ponto, pelo `cellFromXY`, que é o que os patches do `02` já usavam),
+e passa pelo mesmo `qc_band_values()`, aplicado à mesma leitura. O P1 compara
+de novo com o store antigo, ainda em disco: a tabela de pontos, os tipos, o QC
+e os patches têm que sair idênticos.
+
+### A alternativa descartada
+
+Converter os rasters para TIFF em blocos (256 × 256): um patch de 15 × 15
+tocaria 1 a 4 blocos em vez de 15 linhas inteiras de 160 mil colunas. Seria a
+maior aceleração possível, mas é uma decisão sobre os dados de origem, e foi
+recusada — os rasters ficam como estão.
+
+### Como isto é verificado
+
+- **`tests/test_prepare.R`**: os centros agora são conferidos contra a fórmula
+  do raster para **todos** os pontos da tabela, inclusive os de borda (p5, p6,
+  p13), que ganham leitura própria; e a tabela de pontos tem que sair idêntica
+  com 2 núcleos, com uma leitura por ponto e com blocos de 3 linhas — não só
+  os patches.
+- Antes de pedir a execução, a lógica foi simulada em Python, índice por
+  índice, nos três planos de leitura do teste (2, 13 e 10 leituras por banda):
+  centros e patches idênticos, e todas as contagens conferidas.
+- **P1**, de novo contra o store antigo: o `p1_01` informa as leituras por
+  banda. Se o P1 falhar, a mensagem agora avisa para **não** rodar o `01`: ele
+  chama o `dsm_prepare()` com `overwrite = TRUE` e substituiria o store que o
+  P1 usa como referência.
