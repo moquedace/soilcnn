@@ -4364,3 +4364,60 @@ faixa inteira; depois, por pixel, o pooling e a cabeça) cortaria isso em
 são invariantes à translação. O cfg_003 implantado (um ramo 15×15,
 `valid_large`, sem SE) é exato. Isso é uma decisão, não um detalhe, e fica
 para o usuário.
+
+
+## 2026-09-27 — U1: o intervalo nível + DI é o melhor dos três; a calibração por kNNDM é o próximo passo
+
+**Suíte 27/27 em 5,1 min.** No `test_conformal.R` sintético, a cobertura por
+quinto do DI ficou:
+
+- constante: 97/96/93/89/73;
+- só nível: 99/97/94/88/71;
+- **nível + DI: 91/91/89/89/89.**
+
+É o que o método promete, num erro que cresce com os dois eixos.
+
+**U1 no SOC**, 591 pontos de teste, calibração nos 3.092 resíduos da CV por
+blocos do cfg_003:
+
+| intervalo 90% | cobertura | largura média | por quinto do nível | por quinto do DI |
+|---|---|---|---|---|
+| constante (±39,6) | 87,8% | 65,1 | 93/95/92/82/77 | 94/92/83/85/85 |
+| só nível | 86,6% | 64,7 | 84/92/88/83/86 | 89/91/84/85/85 |
+| **nível + DI** | 86,6% | **63,8** | **86/90/85/83/90** | 84/88/84/86/91 |
+
+- **A escala ajustada:** 2,60 + 0,258·nível + 20,0·DI (R² 0,08 na metade de
+  ajuste; |resíduo| é ruidoso por natureza) e q = 2,10.
+- **O ganho:** o nível + DI corta a desigualdade por nível de 18 para 7
+  pontos, com largura média menor.
+- **O DI no teste pouco aparece.** Só 7 pontos de teste ficam fora da AOA
+  (limiar 0,70), porque o teste é sorteado perto dos perfis, como o treino. No
+  mapa, a maioria dos pixels está longe de qualquer perfil: a escala sobe ~20
+  t/ha a cada 1,0 de DI, e é aí que o termo trabalha. A calibração por kNNDM é
+  o jeito de medir isso honestamente.
+- **Os três ficam ~2–3 pontos abaixo dos 90% no teste.** É a lacuna já
+  conhecida (o `04` media 87,8%): resíduos de CV por blocos descrevem prever
+  perto dos perfis e não são permutáveis com um bloco de teste. **Decisão:** o
+  `dsm_predict()` escreve os dois intervalos pedidos, constante e nível + DI,
+  com o nível + DI como banda principal.
+
+### U2: os resíduos do cfg_003 sob folds kNNDM
+
+O B1 mediu: um ponto de validação por blocos fica a ~16 km do treino, e o mapa
+prevê a ~824 km. O `_u2_knndm_residuals.R` faz a validação cruzada da config
+implantada, com seus hiperparâmetros exatos, sob o plano kNNDM que o desenho
+do C1 usou (mesmo teste congelado): 3 folds × 3 seeds, cronograma do `03`,
+~30 min. Antes de treinar, ele procura uma config idêntica na rodada kNNDM do
+C1.
+
+**Uma config de outra rodada é achada pelos hiperparâmetros, nunca pelo
+nome.** O `cfg_003` da rodada kNNDM do C1 é outra arquitetura (três campos de
+dropout diferentes). O `cv_residuals_for_config()` compara todos os
+hiperparâmetros, e uma rodada sem config idêntica não empresta resíduos de
+ninguém. O `test_final.R` ganhou 3 checagens disso (achada pelos
+hiperparâmetros; renomeada continua a mesma; um hiperparâmetro diferente não
+recebe nada).
+
+O U1 agora compara as duas fontes quando a rodada kNNDM existe, cada uma com a
+sua referência de DI e o seu limiar de AOA, construídos a partir do seu plano
+de folds.

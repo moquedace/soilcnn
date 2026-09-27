@@ -512,3 +512,61 @@ cv_residuals <- function(run_dir, config_id, role = "validation") {
                      pred = stats::median(.data$pred),
                      n_seeds = dplyr::n(), .groups = "drop")
 }
+
+# ── Residuals from ANOTHER run: the same configuration, found by what it is ───
+#
+# The calibration source is an argument (block folds or kNNDM folds decide
+# which job the interval is honest for -- see above), so the residuals often
+# come from a run other than the one the config was selected in. And there a
+# config_id means nothing: it is a label within ONE run. This project met it
+# on 2026-09-18 -- the deployed cfg_003 and the kNNDM design run's cfg_003
+# differ in three dropout fields. So the config is found by its
+# hyperparameters, every one of them, and a run without an identical config
+# gives no residuals at all rather than a neighbour's.
+
+# Every hyperparameter of a grid row, as one string. config_id is a label and
+# n_params a consequence, so neither enters.
+.config_signature <- function(cfg_row) {
+  keep <- sort(setdiff(names(cfg_row), c("config_id", "n_params")))
+  paste(vapply(keep, function(p) {
+    v <- cfg_row[[p]]
+    if (is.list(v)) v <- v[[1]]
+    paste0(p, "=", paste(format(v, digits = 15, trim = TRUE), collapse = "x"))
+  }, character(1)), collapse = "|")
+}
+
+#' Cross-validated residuals of a configuration, from any tuning run.
+#'
+#' @param run_dir  A tuning run directory (tune_grid.rds, predictions/).
+#' @param cfg_row  One row of a grid: the configuration, whatever it is called
+#'   in that run.
+#' @param required TRUE stops, saying why, when the run cannot serve the
+#'   configuration; FALSE says why and returns NULL.
+#' @return What cv_residuals() returns, with the run's own config_id attached
+#'   as attribute "config_id".
+cv_residuals_for_config <- function(run_dir, cfg_row, required = TRUE) {
+  fail <- function(reason) {
+    if (required) stop(reason, call. = FALSE)
+    message(reason)
+    NULL
+  }
+  grid_path <- file.path(run_dir, "tune_grid.rds")
+  if (!file.exists(grid_path)) return(fail(paste("No tune_grid.rds in", run_dir)))
+  grid <- readRDS(grid_path)
+  sig  <- .config_signature(cfg_row)
+  same <- vapply(seq_len(nrow(grid)), function(i)
+    identical(.config_signature(grid[i, , drop = FALSE]), sig), logical(1))
+  if (!any(same)) {
+    return(fail(paste0("No configuration in ", basename(run_dir), " has these ",
+                       "hyperparameters -- a config_id names a different architecture ",
+                       "in every run, so none is borrowed by name.")))
+  }
+  cid <- grid$config_id[which(same)[1]]
+  res <- cv_residuals(run_dir, cid)
+  if (is.null(res)) {
+    return(fail(paste0(basename(run_dir), " holds the configuration (as ", cid,
+                       ") but wrote no predictions for it.")))
+  }
+  attr(res, "config_id") <- cid
+  res
+}

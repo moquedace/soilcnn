@@ -226,6 +226,28 @@ ok["and_reports_the_same_test_results"] <-
   isTRUE(all.equal(rep04$config_summary$ccc_mean, fin$config_summary$ccc_mean)) &&
   isTRUE(all.equal(rep04$config_summary$mae_mean, fin$config_summary$mae_mean))
 
+# ── 8. calibration residuals of a configuration, found by what it is ─────────
+#
+# The interval's residuals may come from another run (block or kNNDM folds),
+# where a config_id is only a label: the configuration must be found by its
+# hyperparameters, and one that differs in any of them must get none.
+sel_row <- grid[grid$config_id == cid, , drop = FALSE]
+by_sig  <- suppressMessages(cv_residuals_for_config(fit$run_dir, sel_row))
+same_cols <- c("sample_id", "obs", "pred")
+ok["residuals_are_found_by_the_hyperparameters"] <-
+  identical(attr(by_sig, "config_id"), cid) &&
+  isTRUE(all.equal(as.data.frame(by_sig)[, same_cols],
+                   as.data.frame(cv_residuals(fit$run_dir, cid))[, same_cols]))
+renamed <- sel_row
+renamed$config_id <- "called_something_else"
+ok["a_renamed_config_is_the_same_config"] <-
+  identical(attr(suppressMessages(cv_residuals_for_config(fit$run_dir, renamed)), "config_id"), cid)
+changed <- sel_row
+changed$base_lr <- 0.123
+ok["a_config_with_other_hyperparameters_gets_none"] <-
+  is.null(suppressMessages(cv_residuals_for_config(fit$run_dir, changed, required = FALSE))) &&
+  grepl("No configuration", err(cv_residuals_for_config(fit$run_dir, changed)))
+
 unlink(base, recursive = TRUE)
 
 cat(sprintf("  fixture                  : %d points in %d sites | %d configs tuned\n",

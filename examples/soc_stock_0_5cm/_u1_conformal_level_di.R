@@ -35,8 +35,16 @@
 # reported beside it: an interval that covers by being enormous has not been
 # improved.
 #
-# WHAT IT DECIDES: which interval dsm_predict() writes as the 90% band. Not a
-# pass/fail -- the checks below only say the measurement is sound.
+# AND WHICH RESIDUALS. When _u2_knndm_residuals.R has run, the same config's
+# residuals under kNNDM folds -- validation at the distances the map predicts
+# at -- calibrate a second pair of intervals beside the block ones. Each
+# source is measured with its OWN DI reference and AOA threshold, built from
+# its own fold plan: a calibration residual's DI is the distance its own fold
+# model faced.
+#
+# WHAT IT DECIDES: which interval dsm_predict() writes as the 90% band, and
+# from which residuals. Not a pass/fail -- the checks below only say the
+# measurement is sound.
 #
 # COST: no rasters, no network. Under a minute.
 #
@@ -151,6 +159,43 @@ iv <- list(
   constant   = conformal_interval(cal_const, tst$pred, lower_limit = 0),
   level      = conformal_scaled_interval(cal_level, tst$pred, cov_tst_level, lower_limit = 0),
   `level+DI` = conformal_scaled_interval(cal_ldi, tst$pred, cov_tst_ldi, lower_limit = 0))
+aoa_of <- list(constant = aref$threshold, level = aref$threshold, `level+DI` = aref$threshold)
+
+# ── The kNNDM source, when _u2 has produced it ───────────────────────────────
+cfg_row <- summ$selected_cfgs[summ$selected_cfgs$config_id == config_id, , drop = FALSE]
+knndm_src <- NULL
+for (cand in file.path(tuning_base, c("soc_0_5cm_knndm_cfg003", "soc_0_5cm_design_knndm"))) {
+  if (dir.exists(cand) &&
+      !is.null(suppressMessages(cv_residuals_for_config(cand, cfg_row, required = FALSE)))) {
+    knndm_src <- cand
+    break
+  }
+}
+if (is.null(knndm_src)) {
+  message("\nkNNDM source: none on disk serves ", config_id,
+          " -- run _u2_knndm_residuals.R to compare the two sources.")
+} else {
+  aref_k <- aoa_reference(points, predictors, qc_table, scaling,
+                          readRDS(file.path(knndm_src, "fold_plan.rds")))
+  cal_k  <- dplyr::inner_join(cv_residuals_for_config(knndm_src, cfg_row),
+                              dplyr::select(aref_k$cv, sample_id, di = cv_di), by = "sample_id")
+  di_k   <- aoa_di(aref_k, as.matrix(points[match(tst$sample_id, points$sample_id), predictors]))
+  cov_k  <- data.frame(level = tst$pred, di = di_k)
+  kc_const <- conformal_calibrate(cal_k$obs, cal_k$pred, alpha = alpha)
+  kc_ldi   <- conformal_scaled_calibrate(cal_k$obs, cal_k$pred,
+                                         data.frame(level = cal_k$pred, di = cal_k$di),
+                                         alpha = alpha)
+  message(sprintf("\nkNNDM source: %s | %d residual(s) | AOA threshold (DI) %.4f",
+                  basename(knndm_src), nrow(cal_k), as.numeric(aref_k$threshold)))
+  message(sprintf("  kNNDM CV DI: median %.3f | q90 %.3f  (block: median %.3f | q90 %.3f)",
+                  stats::median(cal_k$di), stats::quantile(cal_k$di, 0.9),
+                  stats::median(cal$di), stats::quantile(cal$di, 0.9)))
+  print(kc_ldi)
+  iv[["constant, kNNDM"]] <- conformal_interval(kc_const, tst$pred, lower_limit = 0)
+  iv[["level+DI, kNNDM"]] <- conformal_scaled_interval(kc_ldi, tst$pred, cov_k, lower_limit = 0)
+  aoa_of[["constant, kNNDM"]] <- aref_k$threshold
+  aoa_of[["level+DI, kNNDM"]] <- aref_k$threshold
+}
 
 fifth <- function(v) {
   br <- unique(stats::quantile(v, 0:5 / 5, na.rm = TRUE))
@@ -158,10 +203,9 @@ fifth <- function(v) {
 }
 by_level <- fifth(tst$pred)
 by_di    <- fifth(tst$di)
-in_aoa   <- inside_aoa(tst$di, aref$threshold)
-
 rows <- list()
 for (nm in names(iv)) {
+  in_aoa <- inside_aoa(tst$di, aoa_of[[nm]])
   hit <- tst$obs >= iv[[nm]]$lower & tst$obs <= iv[[nm]]$upper
   rows[[nm]] <- tibble::tibble(
     interval = nm,
@@ -185,7 +229,7 @@ print(cal_ldi)
 message(sprintf("\n-- DI: calibration (cross-validated) vs test --\n  calibration: median %.3f | q90 %.3f\n  test       : median %.3f | q90 %.3f\n  test points outside the AOA: %d of %d",
                 stats::median(cal$di), stats::quantile(cal$di, 0.9),
                 stats::median(tst$di), stats::quantile(tst$di, 0.9),
-                sum(!in_aoa), length(in_aoa)))
+                sum(!inside_aoa(tst$di, aref$threshold)), nrow(tst)))
 
 message("\n-- The 90% interval on the test set (coverage in %, fifths low -> high) --")
 print_wide(dplyr::mutate(tab, coverage = round(100 * coverage, 1),
