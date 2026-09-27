@@ -41,8 +41,10 @@
 #
 # SETTINGS (environment variables, optional):
 #   soc_p5_extent    "xmin,xmax,ymin,ymax" in degrees; Brazil's mainland by default.
-#                    Run a small box first -- "-56,-50.5,-15,-13.8", ~10 min -- to
-#                    see the whole script work before the night's run.
+#                    Run a small box first -- "-56,-50.5,-15,-13.8" with
+#                    soc_p5_threads=15, ~10 min -- to see the whole script work
+#                    before the night's run: its 3 units then go to one worker,
+#                    so p5_04 has a process with three units to measure.
 #   soc_p5_threads   7 or 15 -- chosen from the free RAM when unset
 #
 # Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/examples/soc_stock_0_5cm/_p5_region_check.R")
