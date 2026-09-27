@@ -97,9 +97,16 @@ unit_rows    <- 32L
 # left: 2 workers x 7 threads -- what the RAM allows, with every core --
 # against 1 x 15.
 layouts <- tibble::tibble(layout = c("a", "b"), threads = c(7L, 15L), units = c(4L, 3L))
-# Rows the first run mapped (448, from the first profile's) may still be in
-# the file cache: this run maps the bands after them.
-offset_rows <- env_int("soc_t3_offset_rows", 448L, min = 0L)
+# Rows the earlier runs mapped may still be in the file cache: the first
+# mapped 448 from the first profile's, the second (commit dda346b) the 224
+# after those. This run maps the bands after both.
+#
+# THE SECOND RUN found the leak this one checks for: a worker's peak climbed
+# ~5 GB a unit (a: 15.9 -> 21.1 GB; b: 16.9 -> 21.9 -> 25.9), while the first
+# unit's peak sat on the estimate (15-17 GB against 16.2). oneDNN compiles and
+# keeps a primitive per input shape, and the strips were cropped to a new
+# shape at nearly every coastal chunk. t3_05 asks that the peak stop growing.
+offset_rows <- env_int("soc_t3_offset_rows", 672L, min = 0L)
 
 final_run_id <- latest_run_dir(final_base, prefix = "final_",
                                require_file = file.path("comparison", "final_run_summary.rds"),
@@ -151,7 +158,7 @@ for (i in seq_len(nrow(layouts))) {
 }
 message(strrep("=", 78), "\n")
 
-required <- sprintf("t3_%02d", 1:4)
+required <- sprintf("t3_%02d", 1:5)
 L <- check_ledger("T3")
 
 res <- list()
@@ -207,6 +214,21 @@ ledger_check(L, "t3_04", "the workers together stayed inside the RAM budget",
              all(is.na(tab$budget_gb) | tab$workers * tab$peak_gb <= tab$budget_gb),
              paste(sprintf("%s: %d x %.1f GB against %.1f", tab$layout, tab$workers, tab$peak_gb,
                            tab$budget_gb), collapse = " | "))
+# A unit record carries its worker's peak so far: along one worker's units it
+# may rise by the first steps' shapes, and then must stop -- the global run is
+# ~250 units a worker, and a climb of a GB a unit ends it.
+growth <- dplyr::bind_rows(lapply(names(maps), function(ly) {
+  u <- maps[[ly]]$units
+  dplyr::bind_rows(lapply(split(u, u$worker), function(w) {
+    w <- w[order(w$finished_at), , drop = FALSE]
+    tibble::tibble(layout = ly, worker = w$worker[1], units = nrow(w),
+                   first_gb = w$peak_gb[1], last_gb = w$peak_gb[nrow(w)])
+  }))
+}))
+ledger_check(L, "t3_05", "a worker's peak stops growing from unit to unit",
+             all(growth$units < 2L | growth$last_gb - growth$first_gb <= 1),
+             paste(sprintf("%s/w%d: %.1f -> %.1f GB over %d unit(s)", growth$layout, growth$worker,
+                           growth$first_gb, growth$last_gb, growth$units), collapse = " | "))
 
 # ── what the global run costs, per layout ────────────────────────────────────
 #
