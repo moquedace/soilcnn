@@ -960,6 +960,23 @@ run_cnn_resample <- function(tune_grid, store, points, type_table, plan,
                              ...) {
   stopifnot(inherits(plan, "fold_plan"))
 
+  # A batch larger than a fold's training set trains nothing (see
+  # .make_loaders_from_cache()). Found HERE, before the first unit, instead of
+  # once per unit, and named by config -- the fix is in the grid.
+  n_train_min <- min(vapply(plan$folds, function(f) length(f$train), integer(1)))
+  if ("batch_size" %in% names(tune_grid)) {
+    too_big <- tune_grid$batch_size > n_train_min
+    if (any(too_big)) {
+      stop("batch_size larger than the smallest fold's ", n_train_min,
+           " training point(s) in config(s) ",
+           paste(tune_grid$config_id[too_big], collapse = ", "), " (",
+           paste(unique(tune_grid$batch_size[too_big]), collapse = ", "),
+           "). Such a unit would take no gradient step and report an untrained ",
+           "network as a result. Use batch_size <= ", n_train_min, ".",
+           call. = FALSE)
+    }
+  }
+
   # A broken plan costs a second to find here and the whole run to find later.
   # meta is passed so the no-split-group property is PROVEN on this data,
   # not merely intended by the constructor that built the plan.
@@ -1088,6 +1105,23 @@ run_cnn_resample <- function(tune_grid, store, points, type_table, plan,
 
   train_ds <- make_ds("train")
   val_ds   <- make_ds("validation")
+
+  # A BATCH LARGER THAN THE TRAINING SET TRAINS NOTHING. The training loader
+  # drops its incomplete last batch (below), so with more rows per batch than
+  # the fold has, every epoch is ZERO gradient steps -- and the unit then
+  # "succeeds": the validation loss of the untrained network is finite, it
+  # becomes the best epoch, and the comparison table ranks a random network
+  # beside trained ones. run_cnn_resample() refuses such a grid before the
+  # first unit; this is the backstop for any other path here.
+  n_tr <- length(train_ds)
+  if (n_tr < bs_train) {
+    stop("Config ", cfg$config_id, ": batch_size ", bs_train, " is larger than ",
+         "this fold's ", n_tr, " training point(s). The training loader drops ",
+         "the incomplete last batch (BatchNorm cannot take a batch of one), so ",
+         "the unit would take no gradient step and report an untrained network ",
+         "as a result. Use batch_size <= ", n_tr, ", or let dsm_train() draw the ",
+         "grid: it sizes the batches to the smallest fold.", call. = FALSE)
+  }
   # The test role is OPTIONAL. A plan is allowed to carve no test set -- the
   # framework does not invent one nobody asked for -- and training must work
   # under that, evaluating and reporting only what exists.

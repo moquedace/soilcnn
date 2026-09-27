@@ -3911,3 +3911,25 @@ mesmo HD rendem menos que um: a cabeça do disco pula entre quinze arquivos.
   medido neste HD. Um benchmark de leitores simultâneos serve às duas coisas.
   Fica para o passo 5, e o resultado volta para o `dsm_prepare()` antes da
   extração completa.
+
+
+## 2026-09-27 — Um lote maior que a dobra não treinava nada, e a unidade passava
+
+Achado ao escrever a grade padrão do passo 2. O carregador de treino descarta
+o último lote incompleto (`drop_last = TRUE`, porque o BatchNorm não aceita um
+lote de uma amostra). Com um `batch_size` maior que o conjunto de treino da
+dobra, **toda época tinha zero passos de gradiente**. A perda de validação da
+rede não treinada é finita, então virava a "melhor época", e a unidade saía
+com status `success`. A tabela de comparação ranqueava uma rede aleatória ao
+lado das treinadas, sem erro nem aviso.
+
+No SOC isso nunca aconteceu (~2.100 pontos de treino por dobra, lotes de até
+512). Num conjunto pequeno aconteceria calado, e a grade padrão sorteava
+128/256/512 para qualquer conjunto.
+
+Agora o `run_cnn_resample()` recusa a grade **antes da primeira unidade**,
+dizendo quais configs e qual o tamanho da menor dobra. O carregador também
+recusa, como rede de segurança para qualquer outro caminho.
+
+**Verificação.** Em `tests/test_api_run.R`, um lote de 64 com a menor dobra de
+16 pontos é recusado antes de treinar, e nenhum modelo é gravado.

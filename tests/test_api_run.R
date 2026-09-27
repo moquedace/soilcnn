@@ -201,6 +201,21 @@ ok["cnn_wrote_checkpoints"] <-
 ok["plan_on_disk_is_the_plan_given"] <- identical(
   readRDS(file.path(run_dir, "fold_plan.rds"))$folds, plan$folds)
 
+# A batch no fold can fill is refused before the first unit, and named.
+big <- grid
+big$batch_size <- 64L
+msg_big <- tryCatch({
+  suppressMessages(dsm_train(
+    data, model = "cnn", resampling = plan, tune_grid = big, n_seeds = 1L,
+    output_dir = out_root, run_id = "api_cnn_big_batch",
+    device = setup_torch_device(n_threads = 1L, use_cuda = FALSE),
+    n_epochs = 2L, verbose = FALSE))
+  ""
+}, error = function(e) conditionMessage(e))
+ok["a_batch_no_fold_can_fill_is_refused_before_training"] <-
+  grepl("no gradient step", msg_big) && grepl(grid$config_id[1], msg_big) &&
+  !dir.exists(file.path(out_root, "api_cnn_big_batch", "models"))
+
 # =============================================================================
 # 4. dsm_train() on a tabular model -- the OTHER path, the SAME table
 # =============================================================================
