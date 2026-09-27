@@ -4262,3 +4262,35 @@ numeração. Os 80 arquivos R do projeto passam.
 chamada ao `dsm_final()` só depois do P3, e é uma decisão do usuário, porque
 um novo modelo final treinado com 5 threads por seed tem números diferentes
 (estatisticamente equivalentes) do implantado, treinado com 30.
+
+
+## 2026-09-27 — `dsm_final()` verificado: suíte 27/27, P3 7/7; e a declaração do modelo implantado
+
+**Suíte: 27/27 em 4,3 min.** O `test_final.R` passou 22/22 na primeira
+execução real do `dsm_final()`, com os processos filhos do `callr`, a reserva
+por `dir.create()` e a retomada. **2 processos de 1 thread e 1 processo de 1
+thread deram as seeds idênticas bit a bit.**
+
+**P3: 7/7.** A montagem do `dsm_final()` sobre os arquivos por seed da rodada
+implantada (`final_20260918_150311`, cfg_003, 10 seeds) reproduz o que o
+`04` gravou:
+
+- o ensemble;
+- os quantis conformais: 39,62 t/ha em 90% e 55,33 t/ha em 95%, idênticos;
+- o fator de smearing 1,346057, idêntico;
+- as métricas de teste das 10 seeds e o resumo, dentro de 1e-12.
+
+**A declaração do modelo implantado.** Ele foi ajustado pelo `04`, antes de o
+`dsm_final()` existir, então não tinha relatório. Retreinar para ter um mudaria
+as seeds (T1). O `dsm_report_final()` escreve a declaração a partir dos
+arquivos, com a mesma montagem que o P3 acabou de provar, e **só acrescenta**
+`final_report.md` e `selected_hyperparameters.csv` à pasta da rodada. O que o
+`04` não registrou (threads, cronograma do refit) o relatório diz que não foi
+registrado, em vez de supor. O `04b_final_report.R` faz isso para o SOC. O
+`test_final.R` ganhou a mesma situação simulada (uma rodada "do `04`", sem
+registros): a declaração sai igual à que o `dsm_final()` escreveu.
+
+**O que a declaração vai mostrar sobre o SOC:** a rodada de tuning de onde o
+modelo saiu é a de dev, com `tune_length = 3`, então a "busca" comparou três
+configurações. A tabela vai dizer quais valores foram de fato comparados, e
+isso é o que ela existe para dizer.

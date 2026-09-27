@@ -193,6 +193,34 @@ ok["an_existing_run_is_not_overwritten_silently"] <-
   grepl("already exists", refuse(run_id = "par", resume = FALSE))
 ok["a_seed_count_means_42_onwards"] <- identical(.final_seeds(3L), 42:44)
 
+# ── 7. the declaration of a model fitted before dsm_final() existed ──────────
+#
+# A stage-04 run: the same files, but no record of threads, schedule or
+# units, and no report. dsm_report_final() must write the declaration from
+# what is on disk -- the same one dsm_final() wrote -- without retraining.
+old <- file.path(base, "stage04_like")
+dir.create(old)
+file.copy(rd, old, recursive = TRUE)
+old_rd <- file.path(old, basename(rd))
+s04 <- readRDS(file.path(old_rd, "comparison", "final_run_summary.rds"))
+s04[c("threads_per_unit", "n_workers", "training", "fitted_by", "validation_frac",
+      "n_train", "n_validation", "n_test", "torch_version", "r_version",
+      "git_commit", "finished_at")] <- NULL
+saveRDS(s04, file.path(old_rd, "comparison", "final_run_summary.rds"))
+unlink(file.path(old_rd, c("final_report.md", "selected_hyperparameters.csv")))
+unlink(file.path(old_rd, cid, "units"), recursive = TRUE)
+rep04 <- suppressMessages(dsm_report_final(old_rd, fit$run_dir, verbose = FALSE))
+txt04 <- readLines(rep04$report_file, encoding = "UTF-8")
+ok["a_stage_04_run_gets_its_declaration_without_retraining"] <-
+  file.exists(file.path(old_rd, "selected_hyperparameters.csv")) &&
+  any(grepl("not recorded", txt04, fixed = TRUE)) &&
+  all(file.exists(file.path(old_rd, cid, "models", sprintf("seed%04d_best.pt", 1:3))))
+ok["it_declares_the_hyperparameters_dsm_final_declared"] <-
+  identical(as.list(rep04$hyper), as.list(fin$hyper[fin$hyper$group != "final refit", ]))
+ok["and_reports_the_same_test_results"] <-
+  isTRUE(all.equal(rep04$config_summary$ccc_mean, fin$config_summary$ccc_mean)) &&
+  isTRUE(all.equal(rep04$config_summary$mae_mean, fin$config_summary$mae_mean))
+
 unlink(base, recursive = TRUE)
 
 cat(sprintf("  fixture                  : %d points in %d sites | %d configs tuned\n",

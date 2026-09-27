@@ -312,7 +312,8 @@ dsm_final <- function(tuning, data = NULL, config = "auto",
     per_worker_gb_estimate = run_info$per_worker_gb_estimate,
     split = c(train = n_train, validation = length(index$validation),
               test = length(index$test)),
-    target = data$target_col, minutes = as.numeric(difftime(Sys.time(), t_start, units = "mins"))),
+    target = data$target_col, fitted_by = "dsm_final()",
+    minutes = as.numeric(difftime(Sys.time(), t_start, units = "mins"))),
     class = "dsm_final")
   out$report_file <- .final_write_report(out)
   if (verbose) print(out)
@@ -324,8 +325,10 @@ print.dsm_final <- function(x, ...) {
   cat("\n<dsm_final> ", x$run_dir, "\n", sep = "")
   cat("  selected   : ", paste(x$selected_config_ids, collapse = ", "), "  (",
       x$selection$rule_applied, " on ", x$selection$metric, ")\n", sep = "")
-  cat("  seeds      : ", length(x$seeds), "  (", x$threads_per_unit,
-      " thread(s) per seed", if (x$n_workers > 0L) sprintf(", %d side by side", x$n_workers) else "",
+  cat("  seeds      : ", length(x$seeds), "  (",
+      if (is.na(x$threads_per_unit)) "thread count not recorded"
+      else paste0(x$threads_per_unit, " thread(s) per seed"),
+      if (isTRUE(x$n_workers > 0L)) sprintf(", %d side by side", x$n_workers) else "",
       ")\n", sep = "")
   cat("  split      : ", paste(sprintf("%s %d", names(x$split), x$split), collapse = " | "), "\n", sep = "")
   for (cid in x$selected_config_ids) {
@@ -343,6 +346,91 @@ print.dsm_final <- function(x, ...) {
     }
   }
   cat("\n  report     : ", x$report_file, "\n", sep = "")
+  invisible(x)
+}
+
+#' The declaration of a final model that already exists.
+#'
+#' dsm_final() writes final_report.md as it fits. A final model fitted by
+#' stage 04, before dsm_final() existed, has the seeds and the files but no
+#' declaration -- and retraining ten seeds to obtain one would also change
+#' them (T1: the thread count changes the numbers). This writes it from what
+#' is on disk, re-assembling the seeds the way P3 proved dsm_final() does,
+#' and changes nothing that is there: it ADDS final_report.md and
+#' selected_hyperparameters.csv to the run directory.
+#'
+#' @param run_dir    The final-model run (it holds comparison/final_run_summary.rds).
+#' @param tuning_dir The tuning run it was selected from.
+#' @param conformal_alpha As the run was calibrated; stage 04 used c(0.1, 0.05).
+#' @return A `dsm_final` describing the run, printed with the declaration.
+dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05),
+                             verbose = TRUE) {
+  summ_path <- file.path(run_dir, "comparison", "final_run_summary.rds")
+  for (f in c(summ_path, file.path(tuning_dir, "tune_grid.rds"),
+              file.path(tuning_dir, "comparison", "comparison_ranked.csv"))) {
+    if (!file.exists(f)) stop("Not found: ", f, call. = FALSE)
+  }
+  summ      <- readRDS(summ_path)
+  grid      <- readRDS(file.path(tuning_dir, "tune_grid.rds"))
+  units_tbl <- safe_read_csv2(file.path(tuning_dir, "comparison", "comparison_ranked.csv"))
+  bc_path   <- file.path(tuning_dir, "comparison", "comparison_by_config.csv")
+  by_config <- if (file.exists(bc_path)) safe_read_csv2(bc_path) else NULL
+  sel_path  <- file.path(tuning_dir, "comparison", "selection.rds")
+  metric    <- if (file.exists(sel_path)) readRDS(sel_path)$metric else "val_ccc"
+  ids       <- summ$selected_config_ids
+  seeds     <- summ$seeds
+
+  # The selection as it was made: the rule is the recorded one, and one_se's
+  # tie count is recomputed from the table it was computed from.
+  pick <- NULL
+  if (identical(summ$selection_rule, "one_se") && !is.null(by_config)) {
+    pick <- tryCatch(one_se(by_config, metric = metric, complexity = "n_params"),
+                     error = function(e) NULL)
+  }
+  noise <- if (!is.null(by_config) && paste0(metric, "_sd") %in% names(by_config)) {
+    stats::median(by_config[[paste0(metric, "_sd")]], na.rm = TRUE)
+  } else NA_real_
+  sel <- list(ids = ids, rule_applied = summ$selection_rule,
+              rule_asked = summ$selection_rule, metric = metric, pick = pick,
+              median_seed_sd = noise)
+
+  per_config <- list()
+  all_seed_results <- tibble::tibble()
+  for (cid in ids) {
+    per_config[[cid]] <- .final_assemble_config(
+      cfg_dir = file.path(run_dir, cid), cfg_out_dir = NULL, config_id = cid,
+      seeds = seeds, tuning_dir = tuning_dir, conformal_alpha = conformal_alpha,
+      transform_name = if (file.exists(file.path(run_dir, cid, "smearing.rds"))) "log1p" else "none",
+      verbose = FALSE, write = FALSE)
+    all_seed_results <- dplyr::bind_rows(all_seed_results, per_config[[cid]]$seed_rows)
+  }
+
+  # The split, counted from what the first seed predicted: no store needed.
+  pa <- safe_read_csv2(file.path(run_dir, ids[1], "predictions",
+                                 sprintf("seed%04d_pred_all.csv", seeds[1])))
+  n_role <- function(r) sum(pa$dataset_role == r)
+
+  training <- summ$training %||% list()
+  x <- structure(list(
+    run_dir = run_dir, tuning_dir = tuning_dir, selected_config_ids = ids,
+    selection = sel, selected = summ$selected_cfgs, seeds = seeds,
+    hyper = .final_hyper_table(summ$selected_cfgs, grid, training),
+    all_seed_results = all_seed_results,
+    config_summary = .final_config_summary(all_seed_results),
+    per_config = per_config, by_config = by_config, units_tbl = units_tbl,
+    grid = grid, training = training,
+    threads_per_unit = summ$threads_per_unit %||% NA_integer_,
+    n_workers = summ$n_workers %||% 0L, peak_gb = NA_real_,
+    per_worker_gb_estimate = NA_real_,
+    split = c(train = n_role("train"), validation = n_role("validation"),
+              test = n_role("test")),
+    target = summ$target %||% basename(dirname(run_dir)),
+    fitted_by = summ$fitted_by %||% "stage 04 (examples/.../04_final_model.R)",
+    minutes = NA_real_),
+    class = "dsm_final")
+  safe_write_csv2(x$hyper, file.path(run_dir, "selected_hyperparameters.csv"))
+  x$report_file <- .final_write_report(x)
+  if (verbose) print(x)
   invisible(x)
 }
 
@@ -645,9 +733,10 @@ print.dsm_final <- function(x, ...) {
 # how _p3_final_assembly_check.R proves it computes what 04 computed.
 .final_assemble_config <- function(cfg_dir, cfg_out_dir, config_id, seeds,
                                    tuning_dir, conformal_alpha,
-                                   transform_name = "log1p", verbose = TRUE) {
+                                   transform_name = "log1p", verbose = TRUE,
+                                   write = TRUE) {
   say <- function(...) if (verbose) message(...)
-  create_output_dirs(cfg_out_dir)
+  if (write) create_output_dirs(cfg_out_dir)
   seed_rows <- list(); seed_preds <- list()
   for (s in seeds) {
     sl   <- sprintf("seed%04d", s)
@@ -674,7 +763,7 @@ print.dsm_final <- function(x, ...) {
                      pred = stats::median(.data$pred),
                      spread = stats::sd(.data$pred),
                      n_seeds = dplyr::n(), .groups = "drop")
-  safe_write_csv2(ens, file.path(cfg_out_dir, "ensemble_predictions.csv"))
+  if (write) safe_write_csv2(ens, file.path(cfg_out_dir, "ensemble_predictions.csv"))
 
   # WHICH RESIDUALS CALIBRATE (stage 04's finding): the tuning run's
   # cross-validated residuals, which cover every block, and not the refit's
@@ -706,13 +795,15 @@ print.dsm_final <- function(x, ...) {
       # The level-and-dissimilarity interval is dsm_predict()'s (step 4): the
       # difficulty score must be computed the same way for a calibration point
       # and for a map pixel, which the seed spread here is not.
-      safe_save_rds(
-        list(alpha = a, constant = cal, normalised = NULL,
-             n_calibration = nrow(cal_rows), config_id = config_id,
-             calibrated_on = "validation", checked_on = "test",
-             calibration_source = cal_source),
-        file.path(cfg_out_dir, sprintf("conformal_%02d.rds", round(100 * (1 - a)))),
-        compress = FALSE)
+      if (write) {
+        safe_save_rds(
+          list(alpha = a, constant = cal, normalised = NULL,
+               n_calibration = nrow(cal_rows), config_id = config_id,
+               calibrated_on = "validation", checked_on = "test",
+               calibration_source = cal_source),
+          file.path(cfg_out_dir, sprintf("conformal_%02d.rds", round(100 * (1 - a)))),
+          compress = FALSE)
+      }
       conformal[[as.character(a)]] <- list(cal = cal, picp = pr)
     }
   } else {
@@ -728,7 +819,7 @@ print.dsm_final <- function(x, ...) {
     sm <- smearing_from_run(tuning_dir, config_id)
     if (!is.null(sm)) {
       if (verbose) print(sm)
-      safe_save_rds(sm, file.path(cfg_out_dir, "smearing.rds"), compress = FALSE)
+      if (write) safe_save_rds(sm, file.path(cfg_out_dir, "smearing.rds"), compress = FALSE)
       tst <- dplyr::filter(preds, .data$dataset_role == "test") %>%
         dplyr::group_by(.data$sample_id) %>%
         dplyr::summarise(obs = dplyr::first(.data$obs),
@@ -880,7 +971,8 @@ print.dsm_final <- function(x, ...) {
   f <- function(v, d = 4) if (is.null(v) || length(v) == 0L || !is.finite(v)) "NA" else formatC(v, digits = d, format = "f")
   bc <- x$by_config
   L <- c(sprintf("# Final model -- %s", x$target %||% "target"), "",
-         sprintf("Run `%s`, fitted %s by `dsm_final()`.", basename(x$run_dir), format(Sys.time(), "%Y-%m-%d %H:%M")), "",
+         sprintf("Run `%s`, fitted by %s. This report written %s.", basename(x$run_dir),
+                 x$fitted_by %||% "`dsm_final()`", format(Sys.time(), "%Y-%m-%d %H:%M")), "",
          "## How it was chosen", "",
          sprintf("- Tuning run: `%s` -- %d configuration(s) in the grid, %s unit(s) trained.",
                  basename(x$tuning_dir), nrow(x$grid), format(nrow(x$units_tbl), big.mark = ",")),
@@ -925,9 +1017,15 @@ print.dsm_final <- function(x, ...) {
   L <- c(L, "", "## The refit", "",
          sprintf("- Split from the tuning plan: %d training, %d validation (early stopping), %d test.",
                  x$split[["train"]], x$split[["validation"]], x$split[["test"]]),
-         sprintf("- Seeds: %s -- each with **%d thread(s)**%s. A seed's numbers depend on its seed and its thread count, and on nothing else (T2).",
-                 paste(x$seeds, collapse = ", "), x$threads_per_unit,
-                 if (x$n_workers > 0L) sprintf(", %d trained side by side", x$n_workers) else ""),
+         if (is.na(x$threads_per_unit)) {
+           sprintf("- Seeds: %s. The thread count they trained with was not recorded by the stage that fitted them -- and a seed's numbers depend on it (T1).",
+                   paste(x$seeds, collapse = ", "))
+         } else {
+           sprintf("- Seeds: %s -- each with **%d thread(s)**%s. A seed's numbers depend on its seed and its thread count, and on nothing else (T2).",
+                   paste(x$seeds, collapse = ", "), x$threads_per_unit,
+                   if (isTRUE(x$n_workers > 0L)) sprintf(", %d trained side by side", x$n_workers) else "")
+         },
+         if (length(x$training) == 0L) "- The refit's training schedule was not recorded by the stage that fitted it." else NULL,
          if (is.finite(x$peak_gb %||% NA_real_)) sprintf("- Peak RAM per worker: %.1f GB (estimated %.1f).", x$peak_gb, x$per_worker_gb_estimate) else NULL)
   for (cid in x$selected_config_ids) {
     s  <- x$config_summary[x$config_summary$config_id == cid, , drop = FALSE]
