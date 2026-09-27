@@ -4828,3 +4828,65 @@ linhas seriam **~6,6 h com um leitor**. É um teto: leituras de 15 linhas pagam
 181 buscas no HD por poucas linhas, e o mapa global lê passos de 32 linhas
 nos três workers ao mesmo tempo. A sondagem da próxima rodada mede com mais
 linhas.
+
+
+## 2026-09-27 — P4: PASS 10/10; o `dsm_predict()` está pronto, e o T3 mede o global
+
+**`test_predict.R`: 29/29**, incluindo os dois casos novos: fontes com
+referências diferentes, e a sondagem sem os perfis que não têm previsão
+gravada.
+
+**P4: 10/10**, com o código do commit 40ee0da:
+
+- **Grade de 20 km:** tudo como antes. Máscara idêntica, bandas a ≤ 2e-5, S e
+  q do `04` exatos, DI a 7e-8, AOA por fonte, patch a patch = convolucional a
+  5,4e-7. O DI contra o raster do `07` ficou em 1,2e-7 (o `07` usou a mesma
+  referência).
+- **Velocidade:** o mapa de 20 km saiu em **0,5 min**, 11.616 pixels válidos
+  por segundo contra 196 do `05`: **59×**. Dentro das unidades: leitura 23%,
+  rede 63%, DI 13%.
+- **A sondagem a 250 m passou:** 48 perfis × 10 seeds, lidos dos 181 rasters
+  reais, reproduzem as previsões gravadas a **3,8e-7** (12 s). A cadeia
+  inteira vale na grade de treino.
+
+### A memória com o coletor novo
+
+| | antes | coleta completa a cada 2 s |
+|---|---|---|
+| mapa de 20 km (motor convolucional) | 8,0–13,4 GB | 7,2–9,3 GB |
+| pedaço patch a patch | 17,2 GB | 9,7 GB |
+| estimativa do modelo de RAM | 6,1 | 7,9 |
+
+O pico ainda passa da estimativa. A rede implantada aloca muito: cada
+BatchNorm e cada SiLU criam um mapa novo, ~1,9 GB por seed numa faixa de
+20 km, ~2,4 GB/s por worker. Em 2 s sobram ~5 GB de lixo. **Decisão:** coleta
+completa a cada **1 s** (custa dezenas de ms, poucos por cento), e o modelo de
+RAM passa a contar 3,5 GB para isso.
+
+Motivo: a 250 m, na largura inteira, o buffer de um passo de 32 linhas tem
+~5 GB sozinho, e três workers com 5 GB de lixo cada chegariam perto do limite
+da máquina.
+
+### A estimativa da sondagem, corrigida
+
+O P4 imprimiu "88,2 h de rede por worker". Esse número é o **total** de
+horas-worker (1,38e-4 s por pixel válido × 2,3 bilhões): com 3 workers seria
+~29 h de relógio. E é **pessimista**, porque a unidade da sondagem é pequena
+(30 linhas × 272 colunas) e paga custos fixos por chamada que uma faixa
+inteira dilui. Leitura: 0,19 s por linha inteira dos 181 rasters, **~3,3 h**
+com um leitor.
+
+### T3: o que ainda falta medir antes do global
+
+O `_t3_predict_layouts.R` mapeia, na grade de 250 m, três faixas vizinhas de
+largura inteira perto de 47°N, uma por arranjo dos mesmos 15 núcleos:
+
+- **a:** 3 workers × 5 threads;
+- **b:** 1 × 15;
+- **c:** 5 × 3.
+
+Ele mede pixels válidos por segundo, a parte de cada fase, segundos por linha
+lida e por pixel, e o pico de RAM de cada worker contra a estimativa. Imprime o
+tempo estimado do global para cada arranjo. As checagens exigem que o pico não
+passe 25% da estimativa e que a soma caiba no orçamento. Se o modelo de RAM
+estiver errado na largura inteira, o T3 para antes do global.
