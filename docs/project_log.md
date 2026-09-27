@@ -4040,3 +4040,61 @@ dentro do ruído do mais rápido, os scripts largam o 30 e usam o padrão. Se n�
 estiver, passam o número medido, com esta rodada como motivo.
 
 **Custo:** 8 processos, ~15–25 min, com a máquina parada. Resultado: pendente.
+
+
+## 2026-09-27 — T1: PASS 3/3 — 30 threads não ganham; o ganho está em dividir os núcleos
+
+Antes, a suíte inteira: **26/26 em 3,7 min**, com o `test_train_defaults.R`
+novo (39/39) e a seção 3b do `test_api_run.R`. O passo 2 está verificado.
+
+### O resultado
+
+Segundos por época, média das duas passadas. O maior desvio entre passadas
+foi 5,7% (30 threads, config pesada); nos outros casos, até 3%.
+
+| threads | `heavy_3x15` | vs 15 | `light_3` | vs 15 |
+|---|---|---|---|---|
+| 5  | 5,58 | 0,67× | 0,67  | 1,04× |
+| 7  | 4,75 | 0,78× | 0,67  | 1,04× |
+| 15 | 3,72 | 1     | 0,695 | 1     |
+| 30 | 3,50 | 1,06× | 0,78  | 0,89× |
+
+### O que diz
+
+1. **Hyperthreading não paga.** Com 30 threads a config pesada ficou 6%
+   mais rápida (no limite do ruído) e a leve ficou 11% mais lenta. Numa grade
+   que mistura as duas, a diferença fica em torno de 3%. O critério escrito
+   antes da rodada ("15 dentro do ruído do mais rápido?") deu veredito
+   dividido: não na pesada (6,4% contra 5,7% de ruído), sim na leve.
+2. **Uma unidade sozinha usa mal a máquina.** Na pesada, triplicar as threads
+   (5 → 15) deu só 1,5× de velocidade. Na leve, nada acima de 5.
+3. **Por isso a estimativa de unidades lado a lado:** 3 unidades de 5 threads
+   renderiam ~2,0× (pesada) e ~3,1× (leve) a vazão de uma unidade de 15.
+   **É estimativa:** supõe que as unidades não disputam a banda de memória e
+   o cache L3, e só uma rodada real confirma.
+4. **Reprodutibilidade.** Com a mesma contagem, as duas passadas deram
+   `val_ccc` idêntico bit a bit (8 de 8), então o treino é determinístico dado
+   o par (seed, threads). Entre contagens, a pesada variou **0,067 de CCC** em
+   12 épocas e a leve, 1e-6.
+   - Na pesada, a contagem de threads age como uma troca de seed: outra ordem
+     de soma nas reduções leva a outra trajetória.
+   - Na leve, as operações são pequenas demais para o torch dividir, e nada
+     muda (é também por isso que ela não acelera).
+   - Em 12 épocas o `val_ccc` ainda sobe rápido, então 0,067 não é o efeito no
+     fim do treino; só mostra que o efeito existe. Isso também explica os
+     1,2e-4 do B6.
+
+### O que decide, e o que não
+
+- **O 30 dos scripts fica, por enquanto.** Entre 15 e 30 a diferença é de ~3%
+  numa grade mista. Trocar mudaria os números de toda unidade treinada daqui
+  em diante, como uma troca de seed. Melhor mudar **uma vez só**, para o
+  esquema de unidades em paralelo, se ele se confirmar.
+- **A contagem de threads por unidade faz parte do que torna um resultado
+  reprodutível**, e o executor ainda não a registra. Vai para o passo 3, junto
+  com o registro da rodada final.
+- **Próximo: T2.** Três unidades de 5 threads lado a lado contra as mesmas três
+  em sequência com 15, mesmo trabalho, medindo o tempo de parede. Se
+  confirmar ~2×, o `dsm_final()` (passo 3) treina as N seeds assim, com threads
+  por unidade fixas e registradas. Assim o resultado não depende de quantas
+  unidades couberam na máquina.
