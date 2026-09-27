@@ -1491,7 +1491,12 @@ print.dsm_prediction <- function(x, ...) {
     for (s in seq(1L, n, by = batch)) {
       e <- min(n, s + batch - 1L)
       xb <- xw[s:e, , drop = FALSE]
-      d2 <- (xb * xb)$sum(dim = 2L, keepdim = TRUE) - 2 * torch::torch_mm(xb, u$xt_t) + u$r2
+      # |r|^2 - 2 x.r in ONE fused product: |x|^2 is the same for every
+      # profile a pixel is compared with, so it cannot change which is
+      # nearest -- and leaving it out takes a pass over the pixels x profiles
+      # matrix away, and the cancellation that came with adding it. The
+      # distance itself is recomputed in double below.
+      d2 <- torch::torch_addmm(u$r2, xb, u$xt_t, beta = 1, alpha = -2)
       x64 <- xb$to(dtype = torch::torch_float64())
       for (grp in u$groups) {
         sub <- if (isTRUE(grp$all)) d2 else d2[, grp$cols, drop = FALSE]
