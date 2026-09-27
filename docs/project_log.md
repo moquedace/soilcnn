@@ -4182,3 +4182,83 @@ As passadas diferiram em no máximo 0,06 no ganho.
 4. **O limite de RAM é estimado pelo T2** (1,5 GB + 7 × o tamanho das janelas
    carregadas), e o pico real de cada processo é medido e relatado, para a
    estimativa poder ser conferida em cada rodada.
+
+
+## 2026-09-27 — Passo 3: `dsm_final()`, e a declaração de cada hiperparâmetro da CNN escolhida
+
+`R/final.R` é o estágio `04` com o conjunto de dados retirado. Recebe um
+`dsm_fit` (ou a pasta de uma rodada de tuning) e o `dsm_data`, escolhe a
+config, reajusta com N seeds e grava **os mesmos arquivos nos mesmos
+lugares**, de modo que o `05` lê uma rodada do `dsm_final()` como lê uma do
+`04`.
+
+**O que ele faz, na ordem:**
+
+1. **A escolha**, com as regras do `04`, sem mudança: one_se por padrão, o
+   motivo registrado quando cai para rank 1, o aviso quando a margem é menor
+   que o ruído entre seeds, `freeze_selection()` na rodada de tuning.
+2. **O recorte do refit** pelo critério do próprio plano de tuning
+   (`refit_split()`).
+3. **A escala dos preditores**, calculada uma vez, entregue a todos os
+   processos e gravada ao lado dos pesos.
+4. **As seeds lado a lado**, conforme o T1 e o T2:
+   - cada seed roda num processo R próprio, lançado com `OMP_NUM_THREADS` já
+     definido, mesmo quando há um processo só;
+   - as threads por seed são fixas (padrão 5) e ficam registradas;
+   - quantos processos rodam juntos sai de `n_cores ÷ threads`, limitado pela
+     RAM (a estimativa do T2 fica ao lado do pico medido);
+   - cada processo "reserva" a próxima seed com um `dir.create()`, que é
+     atômico: dois processos nunca treinam a mesma seed, e a distribuição se
+     ajusta sozinha quando uma seed para antes da outra.
+5. **De N seeds ao que o mapa precisa**: mediana do ensemble, conformal com os
+   resíduos da CV do tuning (o achado do `04`: a validação do refit é uma
+   dobra só e dava 83,6% de cobertura para 90% nominais) e fator de smearing.
+6. **Retomada:** uma seed com registro de sucesso e checkpoint no disco não é
+   treinada de novo.
+
+**A declaração pedida** ("declarar cada parâmetro ótimo da CNN que foi
+selecionada") sai no console, em `final_report.md` e em
+`selected_hyperparameters.csv`. Para cada hiperparâmetro vêm o valor, **se foi
+a busca que o escolheu ou se a grade o fixou**, os valores que a grade tentou
+e o que ele significa. A distinção importa: um valor só é "o ótimo" se a
+grade oferecia alternativas. Um parâmetro fixo foi decidido por quem escreveu
+a grade, não pelos dados. O relatório também diz como a config foi escolhida
+(regra, métrica, média ± sd, posição, quantas configs ficaram dentro de um
+erro-padrão, o ruído entre seeds), como foi o refit e o resultado no teste
+(por seed e do ensemble, cobertura do conformal, fator de smearing).
+
+**Duas coisas que o `04` fazia e o `dsm_final()` não faz:**
+
+- **O intervalo normalizado pela dispersão entre seeds.** O próprio `04`
+  explicava por que ele não vale quando a calibração vem da CV. O intervalo
+  normalizado de verdade (nível + dissimilaridade) é do `dsm_predict()`, no
+  passo 4.
+- **Treinar na sessão do usuário.** É isso que torna o resultado reproduzível
+  seja qual for a sessão.
+
+**Verificação:**
+
+- **`tests/test_final.R`**, na suíte lenta, sobre 96 pontos em 8 sítios.
+  Confere o layout, a seleção congelada na rodada de tuning e a declaração (o
+  único parâmetro que a grade variou aparece como "tuned", com os valores
+  tentados). Confere também a retomada sem retreino e cinco argumentos
+  recusados antes de treinar. Acima de tudo: **2 processos de 1 thread e 1
+  processo de 1 thread dão métricas por seed idênticas bit a bit**, a
+  propriedade do T2 mantida pela suíte.
+- **P3** (`_p3_final_assembly_check.R`) roda a montagem do `dsm_final()` sobre
+  os arquivos por seed que o `04` deixou na rodada implantada e compara tudo
+  com o que o `04` gravou: ensemble, quantil conformal de 90 e 95%, fator de
+  smearing, métricas por seed e resumo. Retreinar não serviria para isso: o
+  `04` treinou com 30 threads e o `dsm_final()` treina com 5, e o T1 mostrou
+  que a contagem muda os números. Sobre os mesmos arquivos, a comparação tem
+  que ser exata (até 1e-12, por causa do leitor de CSV).
+
+**Uma ferramenta nova:** `tools/r_balance.py` confere o balanço de `()`, `[]`
+e `{}` com números de linha reais, entendendo strings, comentários e raw
+strings. O `r_skeleton.py` descarta as linhas de comentário e desalinha a
+numeração. Os 80 arquivos R do projeto passam.
+
+**O que ainda não muda:** o `04` continua sendo o script dele. Trocá-lo por uma
+chamada ao `dsm_final()` só depois do P3, e é uma decisão do usuário, porque
+um novo modelo final treinado com 5 threads por seed tem números diferentes
+(estatisticamente equivalentes) do implantado, treinado com 30.

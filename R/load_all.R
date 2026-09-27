@@ -62,7 +62,8 @@
   "baselines.R",        # rf, mlp, cnn -- registered
   "train_table.R",      # the tabular runner
   "caret_adapter.R",    # optional: borrow caret's model library
-  "api.R"               # dsm_load / spatial_cv / dsm_train
+  "api.R",              # dsm_load / spatial_cv / dsm_train
+  "final.R"             # dsm_final: the selected config under N seeds, and its report
 )
 
 # A MISSING MODULE IS AN ERROR, NOT A WARNING. This used to warn and carry on,

@@ -167,7 +167,7 @@ to maps, and what exists today:
 | points + raster folder → patch store, at the windows the user declares | `dsm_prepare()` | **done 2026-09-26** — proven on the SOC data to build the identical store (P1, 19/19); 01 calls it, 02 is folded in |
 | folds, buffer, tuning, selection | `dsm_load()`, `*_cv()`, `dsm_train()`, `one_se()` | **done** |
 | a tuning grid drawn from the windows in the store | inside `dsm_train()` | **done 2026-09-27** — every window the store holds and every pair; batch sizes that give the smallest fold >= 4 steps an epoch; the inverse read from the store; `n_cores`. The thread count the examples pass (30) awaits `_t1_threads_benchmark.R` |
-| refit the chosen config under N seeds | `dsm_final()` | only `examples/.../04` |
+| refit the chosen config under N seeds | `dsm_final()` | **written 2026-09-27** — seeds side by side with fixed threads per seed (T1, T2), stage 04's selection and post-processing, the declaration of every hyperparameter; `tests/test_final.R` and P3 (the assembly against stage 04's own files) to run; 04 still its own script |
 | median, mean and interval maps, with the calibration source as an argument | `dsm_predict()` | only `examples/.../05` |
 
 ### Robustness and ease of use (the audit's list, applied)

@@ -71,6 +71,7 @@ run_slow <- TRUE
 slow_files <- c(
   "test_resample_run.R",     # end-to-end wiring: store -> folds -> tables
   "test_api_run.R",          # the same, through dsm_load() and dsm_train()
+  "test_final.R",            # dsm_final(): N seeds side by side == one by one; the report
   "test_prepare.R"           # points + raster folder -> store; 2 cores == 1
 )
 
