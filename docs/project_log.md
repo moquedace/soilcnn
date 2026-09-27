@@ -5049,3 +5049,47 @@ configurações, cada uma uma hipótese:
   buffers.
 
 Desligado, o rastreio não custa nada.
+
+
+## 2026-09-27 — T4: o vazamento está na leitura, e não é do GDAL nem do MKL
+
+**T4 (commit 82cd562).** O working set atual do worker (1 × 15 threads), em
+GB, depois de cada fase de cada unidade (um passo de 32 linhas de largura
+inteira cada):
+
+| config. | unid. | início | leitura | rede+DI | bandas | escrita | coleta |
+|---|---|---|---|---|---|---|---|
+| como está | 1 | 0,42 | 6,71 | 14,01 | 15,02 | 15,13 | 14,34 |
+| | 2 | 13,98 | 17,48 | 19,31 | 20,31 | 20,67 | 19,60 |
+| | 3 | 19,28 | 22,77 | 23,16 | 24,13 | 24,14 | 23,45 |
+| GDAL 1 thread | 1–3 | | | | | | 14,71 → 20,14 → 23,89 |
+| MKL sem fast MM | 1–3 | | | | | | 13,64 → 18,88 → 22,98 |
+
+O nível que a coleta completa deixa sobe **~4,6 GB por unidade nas três**.
+
+- **Não é o GDAL em várias threads nem o gerenciador de memória do MKL.**
+- **A rede + DI** acrescenta 7,3 GB na 1ª unidade, 1,8 na 2ª e 0,4 na 3ª: é
+  memória reusada, que estabiliza.
+- **A leitura** acrescenta **~3,5 GB a cada unidade que nunca volta**. É o
+  tamanho do tensor das linhas de um passo (181 × 32 × 160.312 × 4 bytes =
+  3,71 GB).
+- **A coleta do fim do passo solta só ~0,8 GB**, quando deveria soltar mais
+  de 6: as linhas do passo, o halo antigo, os vetores do R.
+
+**O alocador do torch 0.17.0 não guarda memória** (tag v0.17.0,
+`src/lantern/src/Allocator.cpp`: `alloc_cpu`/`free_cpu`, sem cache; o cache
+de blocos que eu tinha lido no GitHub, #1447, é posterior). Memória que fica,
+então, é memória **ainda referenciada** ou **nunca finalizada**.
+
+**T5** separa os suspeitos da leitura, cada um num processo novo, repetido 3
+vezes na mesma faixa de largura inteira, medindo o working set depois de cada
+coleta completa:
+
+- `x[k, , ] <- tensor` (atribuição do torch);
+- tensor feito de vetor do R;
+- `terra::readValues()` sozinho;
+- o leitor do mapa;
+- o mesmo leitor montado com `torch_stack()` em vez de `[<-`.
+
+**Plano B, se a raiz não tiver conserto:** um processo novo por unidade. A
+memória começa limpa em cada uma, a ~5 s de partida por unidade.
