@@ -40,11 +40,12 @@
 # per valid pixel of network -- as an estimate of the global map. An estimate:
 # the reads of one unit on an idle disk are not three workers' on a busy one.
 #
-# WHAT IT WRITES: the two maps under outputs/.../spatial_prediction/.../
-# dsm_predict/ (p4_20km, p4_20km_part_patch, p4_250m_probe) and the checks in
-# outputs/.../tuning/.../capability_sweep/p4_predict/. Stage 05's and 07's
-# outputs are read, never written. A second run resumes the maps and only
-# repeats the comparisons.
+# WHAT IT WRITES: the maps under outputs/.../spatial_prediction/.../
+# dsm_predict/ (p4_20km_<commit>, p4_20km_part_patch_<commit>, p4_250m_probe)
+# and the checks in outputs/.../tuning/.../capability_sweep/p4_predict/. Stage
+# 05's and 07's outputs are read, never written. A second run of the same
+# commit resumes the maps and only repeats the comparisons; the probe runs
+# every time.
 #
 # COST: part A ~2-5 min (most of it starting workers and the patch engine);
 # part B ~2-4 min, most of it reading ~140 full rows of 181 rasters from the
@@ -97,6 +98,12 @@ maps_dir     <- file.path(sp_dir, "dsm_predict")                        # this s
 p4_dir       <- file.path(tuning_base, "capability_sweep", "p4_predict") # its checks
 coarse_dir   <- env_chr("soc_predict_raster_dir",
                         "D:/usuario_armazenamento/cassio/R/predictors_resolution_20000m")
+# THE 20 km MAPS ARE NAMED BY THE CODE THAT MADE THEM. A second run of the
+# same code resumes them and only repeats the comparisons; a new commit maps
+# them anew, so the speed and the memory it prints are the current code's --
+# the first P4 run's peaks came from a collector since changed. The old maps
+# are left where they are (~34 MB each).
+code_tag <- .git_commit_at(project_root)
 
 final_run_id <- latest_run_dir(final_base, prefix = "final_",
                                require_file = file.path("comparison", "final_run_summary.rds"),
@@ -162,7 +169,7 @@ ledger_check(L, "p4_01", "the reference is the deployed model's map, on this gri
                      format(pc05$n_valid[1], big.mark = ","), pc05$runtime_min[1]))
 
 map <- dsm_predict(final_dir, data, rasters = rt_coarse, qc_table = qc_path,
-                   calibration = calibration, output_dir = maps_dir, run_id = "p4_20km")
+                   calibration = calibration, output_dir = maps_dir, run_id = paste0("p4_20km_", code_tag))
 
 # THE DI BAND OF A SOURCE IS NAMED BY THE MAP, not assumed: sources whose fold
 # plans used different profiles have different references -- the block plan's
@@ -261,7 +268,7 @@ cols <- as.integer(pmin(pmax(c(pcc - 75, pcc + 75), 1), terra::ncol(g20)))
 part <- dsm_predict(final_dir, data, rasters = rt_coarse, qc_table = qc_path,
                     calibration = calibration, extent = list(rows = rows, cols = cols),
                     engine = "patch", probe = FALSE, bands = c("ensemble_median", "di", "valid_mask"),
-                    output_dir = maps_dir, run_id = "p4_20km_part_patch", verbose = FALSE)
+                    output_dir = maps_dir, run_id = paste0("p4_20km_part_patch_", code_tag), verbose = FALSE)
 pm <- mine(part, "ensemble_median"); wm <- mine(map, "ensemble_median")[rows[1]:rows[2], cols[1]:cols[2]]
 pdi <- mine(part, part$calibration$di_band[part$calibration$source == "block"][1])
 wdi <- di_map[rows[1]:rows[2], cols[1]:cols[2]]
