@@ -4956,3 +4956,58 @@ novo, nesta ordem:
 3. **T3, segunda rodada**, em faixas novas (o cache do Windows pode guardar
    as da primeira): **2 workers × 7 threads** (o que a RAM permite, usando
    todos os núcleos) contra 1 × 15.
+
+
+## 2026-09-27 — T3, segunda rodada: 2 × 7 dá 21 mil px/s (~32 h para o globo), e a memória vazava por unidade
+
+**Com o código dda346b, as correções anteriores estão confirmadas:**
+
+- `test_predict.R`: **29/29** (DI pior 3,2e-7 com a escala em float32);
+- P4: **10/10**, com as bandas a ≤ 3,4e-5 do `05`, o DI a 1,5e-7 do
+  `aoa_di()` e a sondagem a 1,8e-7.
+
+**T3, arranjos novos em faixas novas:**
+
+| arranjo | px válidos/s | s por px válido (worker) | s por linha lida | leitura / rede / DI | pico por worker |
+|---|---|---|---|---|---|
+| **a: 2 × 7 threads** | **21.021** | 7,8e-5 | 0,78 | 14 / 60 / 22% | 21,1 GB |
+| b: 1 × 15 | 16.726 | 4,9e-5 | 0,51 | 15 / 60 / 20% | 25,9 GB |
+
+**2 workers × 7 threads é o arranjo:** o global sai em **~32 h** nesse ritmo.
+A união das referências tirou uns 3 pontos da fatia do DI (25% → 22%).
+
+### O vazamento
+
+As duas checagens de RAM falharam de novo, mas agora os registros por
+unidade mostram a causa. **O pico cresce de unidade em unidade no mesmo
+worker:**
+
+- **(b):** 16,9 → 21,9 → 25,9 GB;
+- **(a):** 15,9 → 21,1 e 15,2 → 20,7 GB;
+- **P4 a 20 km** (uma faixa por unidade): +0,7 GB por unidade.
+
+Na primeira unidade o pico fica **na estimativa** (15–17 GB contra 16,2): o
+modelo de RAM está certo. O que sobra é um vazamento.
+
+**A causa provável:** o oneDNN (e o ideep acima dele), que faz as convoluções
+do torch na CPU, compila e guarda um "primitive" por formato de entrada, com
+buffers do tamanho da entrada, até 1.024 entradas. As faixas eram recortadas
+na caixa dos pixels válidos, e quase todo bloco costeiro tinha um formato
+novo. É um comportamento conhecido do PyTorch em CPU com formatos variáveis.
+No globo, subiria até a máquina cair.
+
+**A correção:**
+
+- **Poucos formatos:** cada faixa pega todas as linhas do passo e as colunas
+  arredondadas para múltiplos de 512 a partir do início do bloco. O oceano de
+  um bloco costeiro é calculado e descartado, no máximo ~5% do bloco.
+- **Caches limitados:** os workers partem com `LRU_CACHE_CAPACITY` e
+  `ONEDNN_PRIMITIVE_CACHE_CAPACITY` em 64.
+
+**O DI numa operação só:** `|r|² − 2 x·r` com um `addmm`. O `|x|²` é o mesmo
+para todos os perfis com que um pixel é comparado, então não muda o mais
+próximo. Sai uma passada pela matriz pixels × perfis, e a distância segue
+recalculada em double.
+
+**T3, terceira rodada** (faixas novas de novo): **t3_05** exige que o pico de
+cada worker pare de crescer de uma unidade para a seguinte.
