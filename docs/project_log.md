@@ -3994,3 +3994,49 @@ concorda com o log1p do store.
   exatamente `expm1` da saída da rede. O `clamp` fica aberto nesse teste,
   senão uma rede com saídas todas negativas daria 0 com qualquer inversa, e o
   teste passaria no vazio.
+
+
+## 2026-09-27 — T1: quantas threads o torch deve usar nesta máquina
+
+Todo script de treino digitava `setup_torch_device(n_threads = 30)`. A máquina
+tem 32 núcleos **lógicos**, mas só 16 **físicos**. A regra do framework é
+físicos − 1 = 15, porque hyperthreads dividem as unidades aritméticas de um
+núcleo e o torch em CPU costuma ficar mais lento quando tem mais threads que
+núcleos. Ninguém mediu qual das duas vale para esta rede nesta máquina. A
+extração acabou de mostrar que a intuição "mais núcleos, mais rápido" falhou
+aqui.
+
+O `_t1_threads_benchmark.R` mede **segundos por época** de duas configs da
+rede real, no store de dev, com 5, 7, 15 e 30 threads:
+
+- `heavy_3x15`: ramo duplo 3 + 15, três blocos, flatten, SE. É a forma mais
+  cara que a grade sorteia.
+- `light_3`: um ramo 3×3, dois blocos, gap. É barata, e nela domina o custo
+  fixo de cada operação.
+
+**Como mede, e por quê:**
+
+- **Um processo R por contagem**, lançado com `OMP_NUM_THREADS` já definido. O
+  OpenMP dimensiona o pool quando o torch carrega. O B6 suspeitava justamente
+  disso na diferença de 1,2e-4 de CCC do seu subprocesso.
+- **Duas passadas em ordens opostas** (15, 30, 7, 5 e de volta), porque a
+  máquina deriva ao longo do tempo. A diferença entre as passadas é o ruído, e
+  uma diferença menor que ele não é resultado.
+- **12 épocas na pesada e 60 na leve.** O executor grava o tempo arredondado a
+  0,01 min (0,6 s), e dez épocas da leve dariam alguns por cento só de
+  arredondamento.
+- **5 e 7 respondem a uma segunda pergunta:** dividir os 15 núcleos em 3
+  unidades de 5 threads, ou 2 de 7, lado a lado. O refit final com N seeds
+  (passo 3) são N unidades independentes. A tabela **estima** isso. Só uma
+  rodada real de unidades lado a lado confirmaria, porque elas dividem a
+  banda de memória.
+- A mesma semente em todas as contagens. Assim o resultado também mostra se
+  uma rodada se reproduz com a mesma contagem, e se a contagem muda os
+  números. Isso é relatado, não checado, porque não decide nada sobre
+  velocidade.
+
+**O que decide.** O `n_cores` que os scripts de treino passam. Se 15 estiver
+dentro do ruído do mais rápido, os scripts largam o 30 e usam o padrão. Se não
+estiver, passam o número medido, com esta rodada como motivo.
+
+**Custo:** 8 processos, ~15–25 min, com a máquina parada. Resultado: pendente.
