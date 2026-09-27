@@ -1041,17 +1041,17 @@ print.dsm_prediction <- function(x, ...) {
 # maps over one chunk, the band vectors of a step; then GDAL's cache (0.5 GB),
 # an R + torch + terra session with the seeds' models (2 GB), and the torch
 # garbage the collector leaves between two full collections plus the freed
-# blocks torch keeps for reuse (3 GB: ~1 GB/s for 2 s, and a cache capped at
-# the 1 GB light-collection threshold -- see .predict_gc_hook()). An estimate,
-# said to be one: the real peak of every worker is measured and written beside
-# it.
+# blocks torch keeps for reuse (3.5 GB: ~2.4 GB/s for 1 s -- P4 measured that
+# rate for the deployed network -- and a cache capped at the 1 GB
+# light-collection threshold; see .predict_gc_hook()). An estimate, said to
+# be one: the real peak of every worker is measured and written beside it.
 .predict_worker_gb <- function(g, h, w_out, n_ch, chunk_cols, conv_sum) {
   w_buf <- w_out + 2 * h
   bytes <- (g + 2 * h) * w_buf * (4 * n_ch + 1) +
     3 * g * w_buf * 8 +
     2 * (g + 2 * h) * (min(chunk_cols, w_out) + 2 * h) * (n_ch + 4 * conv_sum) * 4 +
     6 * g * w_out * 8
-  bytes / 1e9 + 0.5 + 2 + 3
+  bytes / 1e9 + 0.5 + 2 + 3.5
 }
 
 .predict_work_plan <- function(grid, inp, cfg, band_tbl, n_cores, tpw, max_ram_gb,
@@ -1142,7 +1142,7 @@ print.dsm_prediction <- function(x, ...) {
          name = s$name, di_group = s$di_group, threshold = s$threshold,
          smearing = s$smearing, intervals = s$intervals)),
        threads = tpw, gdal_cache_mb = 512L, blocky = work$blocky,
-       gc_threshold_mb = 1000L, gc_every_s = 2,
+       gc_threshold_mb = 1000L, gc_every_s = 1,
        units_dir = file.path(run_dir, "units"), probe_cells = NULL)
 }
 
@@ -1246,10 +1246,13 @@ print.dsm_prediction <- function(x, ...) {
 # convolutional path, 17 GB for the patch-by-patch one, against ~6 estimated.
 #
 # So: a light collection at every call (milliseconds), and a full one every
-# `every_s` seconds. Garbage is allocated at a rate the computation sets
-# (~1 GB/s per worker here), so a clock bounds it as well as a byte count
-# would, without a model of every layer; a full collection of a worker's
-# session costs tens of ms, a few percent at 2 s.
+# `every_s` seconds. Garbage is allocated at a rate the computation sets, so a
+# clock bounds it as well as a byte count would, without a model of every
+# layer. The rate is not small: every BatchNorm and SiLU of the deployed
+# network allocates a new map, ~1.9 GB per seed over a 20 km strip, ~2.4 GB/s
+# per worker -- and at 2 s the 20 km map still peaked at 9.3 GB (P4, second
+# run). 1 s halves what is left; a full collection of a worker's session costs
+# tens of ms, a few percent of that second.
 .predict_gc_hook <- function(every_s) {
   last <- Sys.time()
   function() {
