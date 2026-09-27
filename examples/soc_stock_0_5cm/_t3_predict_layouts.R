@@ -99,14 +99,23 @@ unit_rows    <- 32L
 layouts <- tibble::tibble(layout = c("a", "b"), threads = c(7L, 15L), units = c(4L, 3L))
 # Rows the earlier runs mapped may still be in the file cache: the first
 # mapped 448 from the first profile's, the second (commit dda346b) the 224
-# after those. This run maps the bands after both.
+# after those, the third the 224 after those.
 #
 # THE SECOND RUN found the leak this one checks for: a worker's peak climbed
 # ~5 GB a unit (a: 15.9 -> 21.1 GB; b: 16.9 -> 21.9 -> 25.9), while the first
 # unit's peak sat on the estimate (15-17 GB against 16.2). oneDNN compiles and
 # keeps a primitive per input shape, and the strips were cropped to a new
 # shape at nearly every coastal chunk. t3_05 asks that the peak stop growing.
-offset_rows <- env_int("soc_t3_offset_rows", 672L, min = 0L)
+#
+# THE THIRD RUN (commit a786d8b), with the strips in a few fixed shapes and
+# oneDNN's caches capped, still climbed ~4.3 GB a unit: it was not oneDNN.
+# T4 put the climb in the read phase and T5 in the tensor itself -- R torch
+# 0.17.0 here never gives back a tensor of 2^31 bytes or more, and a
+# full-width step's rows were one of 3.7 GB. They are now held in blocks of
+# channels under 1.5 GB (.predict_channel_blocks()). This run maps the rows
+# after T4's (288 from offset 896) and T5's (the next 32), starting a unit
+# past them so that not even its first halo is in the file cache.
+offset_rows <- env_int("soc_t3_offset_rows", 1248L, min = 0L)
 
 final_run_id <- latest_run_dir(final_base, prefix = "final_",
                                require_file = file.path("comparison", "final_run_summary.rds"),
