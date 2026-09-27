@@ -31,9 +31,9 @@
 # WHAT IT WRITES: outputs/.../spatial_prediction/.../dsm_predict/
 # p5_<region>_<commit> (~10 GB for Brazil) and p5_<region>_seam_<commit>, and the checks in
 # outputs/.../tuning/.../capability_sweep/p5_region/. The maps are named by
-# the code that made them: a second run of the same commit RESUMES the map --
-# a reboot costs only the units in flight -- and repeats the checks; a new
-# commit maps it anew.
+# the package code that made them (the last commit of R/): a second run
+# RESUMES the map -- a reboot costs only the units in flight -- and repeats
+# the checks, even after a fix to this script; new package code maps anew.
 #
 # COST: ~3-5 h at T3's rates, 2 workers x 7 threads when two fit in the RAM
 # (else 1 x 15, as in the global script). Pause Windows Update and keep the
@@ -91,7 +91,26 @@ final_base   <- base("outputs", "final_model")
 tuning_base  <- base("outputs", "tuning")
 maps_dir     <- file.path(base("outputs", "spatial_prediction"), "dsm_predict")
 p5_dir       <- file.path(tuning_base, "capability_sweep", "p5_region")
-code_tag     <- .git_commit_at(project_root)
+
+# THE MAP IS NAMED BY THE PACKAGE CODE THAT MADE IT -- the last commit that
+# touched R/ -- not by the repository's head: a fix to this script's checks
+# after the night's run must find Brazil's map and resume it, not map four
+# hours anew. Uncommitted changes under R/ would make that name a lie, so
+# they stop the run.
+code_tag <- (function() {
+  git <- function(...) {
+    tryCatch(suppressWarnings(system2("git", c("-C", shQuote(project_root), ...),
+                                      stdout = TRUE, stderr = FALSE)),
+             error = function(e) character(0))
+  }
+  if (length(git("status", "--porcelain", "--", "R")) > 0L) {
+    stop("R/ has uncommitted changes: commit them first, so the map's name says which code made it.",
+         call. = FALSE)
+  }
+  tag <- trimws(git("log", "-1", "--format=%h", "--", "R")[1])
+  if (is.na(tag) || !nzchar(tag)) stop("Could not read the commit of R/ with git.", call. = FALSE)
+  tag
+})()
 
 # Brazil's mainland with a margin: Monte Caburai (5.27 N), Arroio Chui
 # (33.75 S), Serra do Divisor (73.99 W), Ponta do Seixas (34.79 W). A
