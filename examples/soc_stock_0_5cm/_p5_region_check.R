@@ -29,7 +29,7 @@
 # like Brazil's soils is for someone who knows them.
 #
 # WHAT IT WRITES: outputs/.../spatial_prediction/.../dsm_predict/
-# p5_brasil_<commit> (~10 GB) and p5_brasil_seam_<commit>, and the checks in
+# p5_<region>_<commit> (~10 GB for Brazil) and p5_<region>_seam_<commit>, and the checks in
 # outputs/.../tuning/.../capability_sweep/p5_region/. The maps are named by
 # the code that made them: a second run of the same commit RESUMES the map --
 # a reboot costs only the units in flight -- and repeats the checks; a new
@@ -40,7 +40,9 @@
 # machine from sleeping.
 #
 # SETTINGS (environment variables, optional):
-#   soc_p5_extent    "xmin,xmax,ymin,ymax" in degrees; Brazil's mainland by default
+#   soc_p5_extent    "xmin,xmax,ymin,ymax" in degrees; Brazil's mainland by default.
+#                    Run a small box first -- "-56,-50.5,-15,-13.8", ~10 min -- to
+#                    see the whole script work before the night's run.
 #   soc_p5_threads   7 or 15 -- chosen from the free RAM when unset
 #
 # Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/examples/soc_stock_0_5cm/_p5_region_check.R")
@@ -92,10 +94,17 @@ code_tag     <- .git_commit_at(project_root)
 # Brazil's mainland with a margin: Monte Caburai (5.27 N), Arroio Chui
 # (33.75 S), Serra do Divisor (73.99 W), Ponta do Seixas (34.79 W). A
 # rectangle, so it holds some of every neighbour, and the sea to the east.
-box <- suppressWarnings(as.numeric(env_csv("soc_p5_extent", c("-74.1", "-34.7", "-33.9", "5.4"))))
+brasil <- c(-74.1, -34.7, -33.9, 5.4)
+box <- suppressWarnings(as.numeric(env_csv("soc_p5_extent", as.character(brasil))))
 if (length(box) != 4L || anyNA(box) || box[1] >= box[2] || box[3] >= box[4]) {
   stop("soc_p5_extent must be \"xmin,xmax,ymin,ymax\" in degrees, xmin < xmax and ymin < ymax.",
        call. = FALSE)
+}
+# Another box, another map: a small box first (minutes, the whole script run
+# once) must not become the start of Brazil's -- the settings lock would then
+# refuse Brazil. "-56,-50.5,-15,-13.8" becomes m56_m50p5_m15_m13p8.
+region <- if (isTRUE(all(box == brasil))) "brasil" else {
+  gsub(".", "p", gsub("-", "m", paste(box, collapse = "_"), fixed = TRUE), fixed = TRUE)
 }
 n_cores   <- env_int("soc_p5_n_cores", 15L)
 unit_rows <- 256L                # as the global map
@@ -144,7 +153,7 @@ two_fit  <- is.finite(ram_free) && 0.7 * ram_free >= 2 * 14.6
 threads  <- env_int("soc_p5_threads", if (two_fit) 7L else 15L)
 
 message("\n", strrep("=", 78))
-message("P5 -- the global map's rehearsal: dsm_predict() over Brazil at 250 m")
+message("P5 -- the global map's rehearsal: dsm_predict() over ", if (region == "brasil") "Brazil" else paste("the box", region), " at 250 m")
 message(strrep("=", 78))
 message("  final run   : ", final_dir, "  (", config_id, ", ", length(summ$seeds), " seeds)")
 message("  calibration : block = ", basename(tuning_dir), " | knndm = ", basename(knndm_dir))
@@ -160,7 +169,7 @@ L <- check_ledger("P5")
 m <- dsm_predict(final_dir, data, rasters = rt, qc_table = qc_path, calibration = calibration,
                  extent = box, n_cores = n_cores, threads_per_worker = threads,
                  unit_rows = unit_rows, step_rows = step_rows, probe = TRUE,
-                 output_dir = maps_dir, run_id = paste0("p5_brasil_", code_tag))
+                 output_dir = maps_dir, run_id = paste0("p5_", region, "_", code_tag))
 
 ledger_check(L, "p5_01", "the probe passes on the 250 m grid, before the map",
              identical(m$probe$status, "pass"),
@@ -243,7 +252,7 @@ if (!is.null(best) && best$score >= 100L) {
                       extent = list(rows = pr, cols = pc), n_cores = n_cores,
                       threads_per_worker = threads, unit_rows = unit_rows, step_rows = step_rows,
                       probe = FALSE, output_dir = maps_dir,
-                      run_id = paste0("p5_brasil_seam_", code_tag), verbose = FALSE)
+                      run_id = paste0("p5_", region, "_seam_", code_tag), verbose = FALSE)
   ct <- m$calibration
   worst <- c(rel = 0, di = 0); flips <- 0L; same_na <- TRUE
   for (i in seq_len(nrow(m$bands))) {
@@ -345,8 +354,10 @@ message("(info) to look at it: open ", m$vrt[["ensemble_median"]], " and ",
         m$vrt[[paste0("aoa_", ct$source[1])]], " in QGIS.")
 
 create_output_dirs(p5_dir)
-verdict <- ledger_verdict(L, required, file.path(p5_dir, "p5_checks.csv"))
+verdict <- ledger_verdict(L, required, file.path(p5_dir, paste0("p5_checks_", region, ".csv")))
 if (verdict$pass) {
-  message("\nP5 passed: hours of the global map's work over Brazil at 250 m, memory flat, no seams,",
-          "\nevery band in its order. The global map is 05_dsm_predict_global.R.")
+  message("\nP5 passed over ", if (region == "brasil") "Brazil" else paste("the box", region),
+          ": memory flat, no seams, every band in its order.",
+          if (region == "brasil") "\nThe global map is 05_dsm_predict_global.R." else
+            "\nNow Brazil: Sys.unsetenv(\"soc_p5_extent\") and source this script again.")
 }
