@@ -106,7 +106,13 @@ experiment <- function(kind, root, files, rules, center, scale, rows, n_row, n_c
   out <- numeric(0)
   base_gb <- rss()
   for (r in seq_len(reps)) {
-    if (identical(kind, "torch_assign")) {
+    if (startsWith(kind, "size_")) {
+      # One flat tensor of that many GB, every page touched, then dropped.
+      gb <- as.numeric(sub("size_", "", kind))
+      x <- torch::torch_empty(as.integer(round(gb * 1e9 / 4)))
+      x$fill_(0)
+      rm(x)
+    } else if (identical(kind, "torch_assign")) {
       x <- torch::torch_empty(c(n_ch, nr, w_buf))
       for (k in seq_len(n_ch)) {
         x[k, , ] <- torch::torch_zeros(c(nr, w_buf))
@@ -156,7 +162,12 @@ experiment <- function(kind, root, files, rules, center, scale, rows, n_row, n_c
        peak_gb = as.numeric(ps::ps_memory_info(ps::ps_handle())[["peak_wset"]] %||% NA) / 1e9)
 }
 
-kinds <- c("torch_assign", "torch_from_r", "terra_read", "read_rows", "stack")
+# THE FIRST RUN (commit b56d6ff): torch_assign, torch_from_r, read_rows and
+# stack each kept 3.7-4.3 GB a repetition; terra_read kept nothing. A 3.71 GB
+# tensor is not given back however it is built, while T4 saw the 1.6 GB halo
+# come back -- so the second run asks by size, across 2^31 bytes, and runs the
+# reader again now that it holds a step in channel blocks under 1.5 GB.
+kinds <- env_csv("soc_t5_kinds", c("size_1.0", "size_1.9", "size_2.2", "size_3.7", "read_rows"))
 message("\n", strrep("=", 78))
 message("T5 -- which part of the reader keeps memory | rows ", rows[1], "-", rows[length(rows)],
         ", full width (", format(n_col, big.mark = ","), " columns), ", nrow(rt), " bands")
