@@ -1168,7 +1168,8 @@ print.dsm_prediction <- function(x, ...) {
        transform = inp$transform$name, clamp = clamp,
        grid = grid[c("nrow", "ncol", "xmin", "ymax", "xres", "yres", "crs")],
        h = grid$h, step_rows = work$step_rows, chunk_cols = work$chunk_cols,
-       batch = 4096L, gather_mb = 256, engine = engine, bands = band_tbl,
+       batch = 4096L, gather_mb = 256, col_quantum = min(512L, work$chunk_cols),
+       engine = engine, bands = band_tbl,
        di = .predict_di_plan(cal),
        sources = lapply(cal$sources, function(s) list(
          name = s$name, di_group = s$di_group, threshold = s$threshold,
@@ -1207,9 +1208,15 @@ print.dsm_prediction <- function(x, ...) {
     callr::r_bg(
       .predict_worker_entry,
       args = list(job = c(job, list(worker = w)), root = root),
+      # The primitive caches of ideep (LRU_CACHE_CAPACITY) and oneDNN
+      # (ONEDNN_PRIMITIVE_CACHE_CAPACITY) default to 1,024 entries each, and
+      # an entry holds buffers sized to its input: bounded here, beside the
+      # few strip shapes the unit loop keeps to (see "THE STRIP'S SHAPE").
       env = c(callr::rcmd_safe_env(),
               OMP_NUM_THREADS = as.character(job$threads),
-              MKL_NUM_THREADS = as.character(job$threads)),
+              MKL_NUM_THREADS = as.character(job$threads),
+              LRU_CACHE_CAPACITY = "64",
+              ONEDNN_PRIMITIVE_CACHE_CAPACITY = "64"),
       stdout = file.path(logs_dir, sprintf("%s_worker_%02d.log", tag, w)), stderr = "2>&1",
       supervise = TRUE)
   })
@@ -1632,14 +1639,25 @@ print.dsm_prediction <- function(x, ...) {
       if (!any(vm)) next
       ij <- which(vm, arr.ind = TRUE)
       i <- as.integer(ij[, 1]); j <- as.integer(ij[, 2]) + j0 - 1L
-      imin <- min(i); imax <- max(i); jmin <- min(j); jmax <- max(j)
-      bcols <- jmin:(jmax + 2L * h)
-      full <- if (h > 0L) {
+      # THE STRIP'S SHAPE COMES FROM A SHORT LIST. oneDNN keeps a compiled
+      # primitive, with its buffers, for every input shape it has seen, and a
+      # strip cropped to the box of its valid pixels had a new shape at
+      # nearly every coastal chunk: T3 saw a worker's peak climb ~5 GB a
+      # unit, unit after unit (15.9 -> 21.1 GB; 16.9 -> 21.9 -> 25.9 with 15
+      # threads) -- on the globe, until the machine gave out. So every row of
+      # the step, and the columns rounded out to whole quanta from the
+      # chunk's own start: a handful of shapes, reused all run. The ocean in
+      # a coastal chunk's quantum is computed and discarded; ~5% of a chunk
+      # at most, on the chunks that have any.
+      q <- job$col_quantum
+      a0 <- j0 + ((min(j) - j0) %/% q) * q
+      a1 <- min(j1, a0 + q * as.integer(ceiling((max(j) - a0 + 1) / q)) - 1L)
+      bcols <- a0:(a1 + 2L * h)
+      strip <- if (h > 0L) {
         torch::torch_cat(list(halo[, , bcols, drop = FALSE], new[, , bcols, drop = FALSE]), dim = 2L)
       } else new[, , bcols, drop = FALSE]
-      strip <- full[, imin:(imax + 2L * h), , drop = FALSE]$contiguous()
-      rm(full)
-      cs <- cbind(i - imin + 1L + h, j - jmin + 1L + h)
+      strip <- strip$contiguous()
+      cs <- cbind(i + h, j - a0 + 1L + h)
       tn <- Sys.time()
       x4 <- strip$unsqueeze(1L)
       P <- matrix(NA_real_, length(i), S)
