@@ -80,6 +80,13 @@ source(file.path(project_root, "utils", "install_load_pkg.R"))
 install_load_pkg(c("torch", "terra", "dplyr", "readr", "tibble", "ps", "callr"))
 source(file.path(project_root, "R", "load_all.R"))
 options(width = 200)
+# The read_* experiments hold the reader's rows in channel blocks, which the
+# worker's window replaced once T6 had named the cause: this is a record of a
+# measurement at commit a7421ff, and runs there.
+if (!exists(".predict_channel_blocks", mode = "function")) {
+  stop("T6 measured the reader holding a step in channel blocks, removed once T6 named the ",
+       "cause (the worker's window replaced them). Run it at commit a7421ff.", call. = FALSE)
+}
 
 target_label <- "soc_stock_0_5cm"
 base <- function(...) file.path(project_root, ..., "soc_stock_modeling", target_label)

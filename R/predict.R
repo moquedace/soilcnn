@@ -1037,8 +1037,8 @@ print.dsm_prediction <- function(x, ...) {
 #
 # THE RAM MODEL, per worker, for a step of g rows over W columns of C channels:
 #
-#   the step's rows as float32, the kept halo and the new rows, and the mask
-#   the next halo, cloned while the step's rows are still alive
+#   the step's window as float32 -- the kept halo and the new rows, made once
+#     per worker (.predict_window()) -- and its masks
 #   one band in flight: its R doubles, its float32 tensor, its masks
 #   the network's strip and feature maps over one chunk
 #   the step's per-pixel R vectors -- the seeds' predictions twice (as read and
@@ -1053,14 +1053,13 @@ print.dsm_prediction <- function(x, ...) {
 #
 # The first version counted neither the halo's clone nor the R vectors, and a
 # band's copies as three doubles; on full-width rows T3 measured 24-32 GB
-# against its 12.4 (with the reader's own garbage, since fixed). An estimate,
-# said to be one: the real peak of every worker is measured and written
-# beside it.
+# against its 12.4 (with the reader's own garbage, since fixed). The clone
+# left the model with the window that replaced it. An estimate, said to be
+# one: the real peak of every worker is measured and written beside it.
 .predict_worker_gb <- function(g, h, w_out, n_ch, chunk_cols, conv_sum, n_seeds = 10L,
                                n_bands = 21L, n_iv = 4L) {
   w_buf <- w_out + 2 * h
   bytes <- (g + 2 * h) * w_buf * (4 * n_ch + 1) +
-    2 * h * w_buf * 4 * n_ch +
     g * w_buf * 20 +
     2 * (g + 2 * h) * (min(chunk_cols, w_out) + 2 * h) * (n_ch + 4 * conv_sum) * 4 +
     g * w_out * (8 * (2 * n_seeds + n_bands + 4 * n_iv) + 16)
@@ -1105,6 +1104,14 @@ print.dsm_prediction <- function(x, ...) {
     step_rows <- 16L * as.integer(ceiling(step_rows / 16))
     say("step_rows rounded up to ", step_rows, ": a step writes whole tile rows, and ",
         "GeoTIFF tiles are multiples of 16.")
+  }
+  # A step at least as tall as the halo: the next step's halo is then the last
+  # 2h rows of this one, moved within the window (.predict_unit()). Only a
+  # unit's last step may be shorter, and it keeps no halo.
+  if (step_rows < 2L * grid$h) {
+    step_rows <- 16L * as.integer(ceiling(2 * grid$h / 16))
+    say("step_rows raised to ", step_rows, ": a step keeps the ", 2L * grid$h,
+        " rows of its halo.")
   }
   if (!is.null(budget)) {
     fits <- max(1L, as.integer(floor(budget / gb(step_rows))))
@@ -1176,9 +1183,6 @@ print.dsm_prediction <- function(x, ...) {
          smearing = s$smearing, intervals = s$intervals)),
        threads = tpw, gdal_cache_mb = 512L, blocky = work$blocky,
        gc_threshold_mb = 1000L, gc_every_s = 1,
-       # The largest tensor a step's rows are held in (.predict_channel_blocks());
-       # the test suite lowers it to exercise several blocks on a small grid.
-       block_bytes = getOption("dsm.predict.block_bytes", 1.5e9),
        units_dir = file.path(run_dir, "units"), probe_cells = NULL,
        # options(dsm.predict.trace_mem = TRUE): every unit records the worker's
        # CURRENT working set after each phase of each step (see .predict_unit).
@@ -1383,51 +1387,63 @@ print.dsm_prediction <- function(x, ...) {
   list(models = models, srcs = srcs, n_ch = length(job$files), n_seeds = length(models),
        rules = rules, has_rule = has_rule, inverse = target_transform_spec(job$transform)$inverse,
        di = di, n_di = n_di, index_base = index_base, gc_hook = .predict_gc_hook(job$gc_every_s),
-       fcn_engine = if (identical(job$engine, "patch")) "patch" else "fcn")
+       fcn_engine = if (identical(job$engine, "patch")) "patch" else "fcn",
+       # The worker's step window, kept across its units (.predict_window()):
+       # an environment, so one unit's allocation is the next unit's to reuse.
+       bufs = new.env(parent = emptyenv()))
 }
 
-# THE STEP'S ROWS IN BLOCKS OF CHANNELS, NONE OF THEM 2 GiB.
+# THE STEP'S WINDOW LIVES IN THE WORKER, MADE ONCE.
 #
-# R torch 0.17.0 here does not give back a tensor as large as a full-width
-# step's rows. T5 made one of 3.71 GB, dropped it and ran a full collection,
-# three times: the working set rose 3.71 GB each time -- whether the tensor
-# was filled band by band with `[<-`, made from R vectors, or built by
-# torch_stack() -- while terra's reads alone stayed flat. Yet the step's
-# 1.6 GB halo came back every step (T4). Between the two sits 2^31 bytes, the
-# limit torch_save() has in this version (see safe_torch_save()): somewhere a
-# size lives in 32 bits. So the rows are held as consecutive blocks of
-# channels, each under `max_bytes`, and a strip is joined from the blocks'
-# columns.
-.predict_channel_blocks <- function(n_ch, rows, w_buf, max_bytes = 1.5e9) {
-  per_channel <- 4 * as.numeric(rows) * w_buf
-  if (per_channel > max_bytes) {
-    stop(sprintf("One channel of a step is %.2f GB (%d rows x %s columns), over the %.2f GB a tensor may take here: use a smaller step_rows.",
-                 per_channel / 1e9, as.integer(rows), format(w_buf, big.mark = ","), max_bytes / 1e9),
-         call. = FALSE)
+# libtorch on Windows allocates CPU memory with mimalloc (2.2.3 here, built
+# into c10.dll), and T6 found that it neither gives back nor reuses the memory
+# of a freed block of a few hundred MB: a 1 GB tensor made and dropped three
+# times left 3 GB behind, 0.5 GB ones 1.5 GB, while blocks of ~20 MB were
+# reused. R let go of every tensor -- T6 counted their finalizers -- emptying
+# a tensor's storage by hand gave nothing back, and neither one thread nor
+# mimalloc's own options (purge at once, no arenas) changed it. A full-width
+# step allocated its rows (3.7 GB), its first halo (1.6 GB) and the next
+# halo's clone (1.6 GB) afresh, and each worker grew by about that a step.
+# Holding the rows in blocks of channels under 2^31 bytes, the guess T5's
+# first run suggested, changed nothing: its second run kept a 1.0 GB tensor
+# like a 3.7 GB one.
+#
+# So the halo and the step's rows are one tensor, [halo; rows], made once in
+# the worker and kept for all its units: every read writes into it, the
+# network's strips are copies of its columns, and a step's last 2h rows move
+# to its top for the next step. Nothing that size is allocated again; a unit
+# of another shape (a part narrower than the map) makes its own, once.
+.predict_window <- function(env, n_ch, rows, w_buf) {
+  key <- paste(n_ch, rows, w_buf, sep = "x")
+  b <- env$bufs
+  if (!identical(b$key, key)) {
+    b$W <- NULL
+    invisible(gc(verbose = FALSE, full = TRUE))
+    b$W <- torch::torch_zeros(c(n_ch, rows, w_buf))
+    b$key <- key
   }
-  k <- max(1L, as.integer(floor(max_bytes / per_channel)))
-  unname(split(seq_len(n_ch), ceiling(seq_len(n_ch) / k)))
+  b$W
 }
 
 # Rows of every band, QC'd and scaled, as float32 over the unit's buffer
-# columns -- a list of tensors, one per block of channels -- with the mask of
-# cells finite in every channel. Rows and columns outside the raster are 0 and
-# masked: the full-window rule then discards any centre whose window leaves
-# the raster, which is the rule stage 05 applied.
-.predict_read_rows <- function(rows, rc0, rc1, pad_l, pad_r, w_buf, env, job, blocks = NULL) {
+# columns, with the mask of cells finite in every channel: written into
+# `into` from its row at + 1 (the window), or into a tensor of their own.
+# Rows and columns outside the raster are 0 and masked: the full-window rule
+# then discards any centre whose window leaves the raster, which is the rule
+# stage 05 applied.
+.predict_read_rows <- function(rows, rc0, rc1, pad_l, pad_r, w_buf, env, job, into = NULL,
+                               at = 0L) {
   nr <- length(rows)
-  blocks <- blocks %||% .predict_channel_blocks(env$n_ch, nr, w_buf)
+  x <- into %||% torch::torch_empty(c(env$n_ch, nr, w_buf))
+  if (is.null(into)) at <- 0L
   inside <- rows >= 1L & rows <= job$grid$nrow
   if (!any(inside)) {
-    return(list(x = lapply(blocks, function(ch) torch::torch_zeros(c(length(ch), nr, w_buf))),
-                fin = torch::torch_zeros(c(nr, w_buf), dtype = torch::torch_bool())))
+    x[, (at + 1L):(at + nr), ] <- 0
+    return(list(x = x, fin = torch::torch_zeros(c(nr, w_buf), dtype = torch::torch_bool())))
   }
   ra <- min(rows[inside]); rn <- sum(inside)
   pads <- c(pad_l, pad_r, ra - rows[1], nr - (ra - rows[1]) - rn)
   wn <- rc1 - rc0 + 1L
-  x <- lapply(blocks, function(ch) torch::torch_empty(c(length(ch), nr, w_buf)))
-  block_of <- rep(seq_along(blocks), lengths(blocks))
-  pos_in   <- unlist(lapply(blocks, seq_along))
   fok <- NULL
   for (k in seq_len(env$n_ch)) {
     v <- terra::readValues(env$srcs[[k]], row = ra, nrows = rn, col = rc0, ncols = wn, mat = FALSE)
@@ -1446,7 +1462,8 @@ print.dsm_prediction <- function(x, ...) {
     f <- torch::torch_isfinite(t)
     fok <- if (is.null(fok)) f else torch::torch_logical_and(fok, f)
     t$masked_fill_(f$logical_not(), 0)
-    x[[block_of[k]]][pos_in[k], , ] <- if (any(pads > 0L)) torch::nnf_pad(t, pads) else t
+    # `:` inside torch's brackets is a slice: this writes into x's own rows.
+    x[k, (at + 1L):(at + nr), ] <- if (any(pads > 0L)) torch::nnf_pad(t, pads) else t
     rm(t, f)
     env$gc_hook()
   }
@@ -1633,10 +1650,8 @@ print.dsm_prediction <- function(x, ...) {
   bc0 <- u$c0 - h                               # raster column of buffer column 1
   rc0 <- max(1L, bc0); rc1 <- min(job$grid$ncol, u$c1 + h)
   pad_l <- rc0 - bc0; pad_r <- (u$c1 + h) - rc1
-  # One partition of the channels for the halo and the rows alike, sized on
-  # the larger of the two (see .predict_channel_blocks()).
-  blocks <- .predict_channel_blocks(C, max(job$step_rows, 2L * h), w_buf,
-                                    max_bytes = job$block_bytes %||% 1.5e9)
+  # [halo; rows], the worker's own and reused (see .predict_window()).
+  W <- .predict_window(env, C, 2L * h + job$step_rows, w_buf)
 
   unit_dir <- file.path(job$units_dir, u$unit_id)
   create_output_dirs(unit_dir)
@@ -1650,7 +1665,7 @@ print.dsm_prediction <- function(x, ...) {
   probe <- job$probe_cells
   probe_pred <- if (!is.null(probe)) matrix(NA_real_, nrow(probe), S) else NULL
   n_valid <- 0
-  halo <- NULL; fin_halo <- NULL
+  fin_halo <- NULL
   first <- TRUE
   # THE WORKER'S CURRENT WORKING SET after each phase of each step, when the
   # map is asked for it (options(dsm.predict.trace_mem = TRUE); T4 does). A
@@ -1682,16 +1697,12 @@ print.dsm_prediction <- function(x, ...) {
     # two afterwards: the block, its halo's clone and its rows' copy alive
     # together were ~11 GB of a full-width worker's peak (T3).
     if (first && h > 0L) {
-      hb <- .predict_read_rows((o0 - h):(o0 + h - 1L), rc0, rc1, pad_l, pad_r, w_buf, env, job,
-                               blocks = blocks)
-      halo <- hb$x; fin_halo <- hb$fin
-      rm(hb)
+      fin_halo <- .predict_read_rows((o0 - h):(o0 + h - 1L), rc0, rc1, pad_l, pad_r, w_buf, env,
+                                     job, into = W, at = 0L)$fin
     }
     first <- FALSE
-    blk <- .predict_read_rows((o0 + h):(o1 + h), rc0, rc1, pad_l, pad_r, w_buf, env, job,
-                              blocks = blocks)
-    new <- blk$x; fin_new <- blk$fin
-    rm(blk)
+    fin_new <- .predict_read_rows((o0 + h):(o1 + h), rc0, rc1, pad_l, pad_r, w_buf, env, job,
+                                  into = W, at = 2L * h)$fin
     tm[["read"]] <- tm[["read"]] + secs(tr)
     mark("read")
 
@@ -1720,18 +1731,10 @@ print.dsm_prediction <- function(x, ...) {
       q <- job$col_quantum
       a0 <- j0 + ((min(j) - j0) %/% q) * q
       a1 <- min(j1, a0 + q * as.integer(ceiling((max(j) - a0 + 1) / q)) - 1L)
-      bcols <- a0:(a1 + 2L * h)
-      # Each block's halo and rows over the strip's columns, then the blocks
-      # joined back in channel order.
-      pieces <- lapply(seq_along(blocks), function(b) {
-        if (h > 0L) {
-          torch::torch_cat(list(halo[[b]][, , bcols, drop = FALSE], new[[b]][, , bcols, drop = FALSE]),
-                           dim = 2L)
-        } else new[[b]][, , bcols, drop = FALSE]
-      })
-      strip <- if (length(pieces) == 1L) pieces[[1]] else torch::torch_cat(pieces, dim = 1L)
-      rm(pieces)
-      strip <- strip$contiguous()
+      # The window's halo and rows over the strip's columns: `:` inside the
+      # brackets makes slices, so this is a view of W and contiguous() its one
+      # copy.
+      strip <- W[, 1:(2L * h + gs), a0:(a1 + 2L * h), drop = FALSE]$contiguous()
       cs <- cbind(i + h, j - a0 + 1L + h)
       tn <- Sys.time()
       x4 <- strip$unsqueeze(1L)
@@ -1804,18 +1807,17 @@ print.dsm_prediction <- function(x, ...) {
     mark("write")
 
     # ── the halo the next step keeps ────────────────────────────────────────
-    if (h > 0L) {
-      if (gs >= 2L * h) {
-        halo <- lapply(new, function(z) z[, (gs - 2L * h + 1L):gs, , drop = FALSE]$clone())
-        fin_halo <- fin_new[(gs - 2L * h + 1L):gs, , drop = FALSE]$clone()
-      } else {
-        halo <- lapply(seq_along(new), function(b) {
-          torch::torch_cat(list(halo[[b]][, (gs + 1L):(2L * h), , drop = FALSE], new[[b]]), dim = 2L)
-        })
-        fin_halo <- torch::torch_cat(list(fin_halo[(gs + 1L):(2L * h), , drop = FALSE], fin_new), dim = 1L)
+    # The step's last 2h rows move to the window's top, in place. A step is at
+    # least 2h rows (.predict_work_plan()) but a unit's last, and the last
+    # keeps no halo: the next unit reads its own.
+    if (h > 0L && o1 < u$r1) {
+      if (gs < 2L * h) {
+        stop("A step of ", gs, " rows cannot keep a halo of ", 2L * h, " rows.", call. = FALSE)
       }
+      W[, 1:(2L * h), ]$copy_(W[, (gs + 1L):(gs + 2L * h), ])
+      fin_halo <- fin_new[(gs - 2L * h + 1L):gs, , drop = FALSE]$clone()
     }
-    rm(new, fin_new, vals, P_all, D_all, I_all)
+    rm(fin_new, vals, P_all, D_all, I_all)
     invisible(gc(verbose = FALSE))
     mark("gc")
   }

@@ -69,11 +69,6 @@ err <- function(expr) {
   e <- tryCatch({ suppressMessages(expr); NULL }, error = function(e) conditionMessage(e))
   if (is.null(e)) "" else e
 }
-# A step's rows are held in blocks of channels, each under a size torch can
-# give back (.predict_channel_blocks()); on a grid this small one block would
-# hold them all, so the blocks are made one channel each, and every map below
-# goes through the joining of blocks.
-old_block <- options(dsm.predict.block_bytes = 5000)
 
 # ── the fixture: rasters, profiles, a store, a tuning run, a final model ─────
 base <- file.path(tempdir(), "dlc_predict_test")
@@ -151,10 +146,16 @@ ok["every_band_is_written_with_its_mosaic"] <-
   identical(map2$bands$band, bands_all) && all(file.exists(map2$vrt))
 ok["three_units_on_two_workers"] <- nrow(map2$units) == 3L && identical(map2$n_workers, 2L)
 ok["one_branch_per_engine"] <- identical(map2$engine, c("patch", "fcn"))
-ok["a_step_is_held_in_several_channel_blocks"] <-
-  length(.predict_channel_blocks(5L, 16L, 62L, max_bytes = 5000)) == 5L &&
-  identical(unlist(.predict_channel_blocks(181L, 32L, 160312L)), 1:181) &&
-  all(lengths(.predict_channel_blocks(181L, 32L, 160312L)) * 4 * 32 * 160312 < 2^31)
+# A worker makes its step window once and hands the same tensor to every unit
+# of that shape (.predict_window()): what one call wrote, the next one sees.
+e_w <- list(bufs = new.env(parent = emptyenv()))
+w1 <- .predict_window(e_w, 5L, 22L, 62L)
+w1[1, 1, 1] <- 7
+w2 <- .predict_window(e_w, 5L, 22L, 62L)
+w3 <- .predict_window(e_w, 5L, 38L, 62L)
+ok["a_worker_makes_its_window_once_per_shape"] <- as.numeric(w2[1, 1, 1]) == 7 &&
+  all(w3$size() == c(5, 38, 62)) && as.numeric(w3[1, 1, 1]) == 0
+rm(e_w, w1, w2, w3)
 ok["the_probe_reproduced_the_stored_predictions_at_the_profiles"] <-
   identical(map2$probe$status, "pass") && map2$probe$n >= 9L && map2$probe$max_rel_diff < 1e-5
 snap <- stats::setNames(lapply(bands_all, function(b) rd(map2, b)), bands_all)
@@ -244,6 +245,14 @@ ok["the_record_says_what_each_band_is"] <-
 map1 <- mp(run_id = "map_one", probe = FALSE)
 ok["one_worker_and_two_give_identical_maps"] <-
   all(vapply(bands_all, function(b) identical(rd(map1, b), snap[[b]]), logical(1)))
+
+# Every map above has one step a unit. Here the first unit has two: its second
+# step's halo is the first step's last rows, moved to the top of the window,
+# and the window the first unit made is the second unit's too. The same rows
+# go through the network in the same strips, so the numbers are the same.
+map_steps <- mp(run_id = "map_steps", unit_rows = 32L, probe = FALSE)
+ok["units_of_two_steps_give_identical_maps"] <- nrow(map_steps$units) == 2L &&
+  all(vapply(bands_all, function(b) identical(rd(map_steps, b), snap[[b]]), logical(1)))
 
 # ── 4. a part of the map, by the other engine ─────────────────────────────────
 part <- mp(run_id = "map_part_patch", engine = "patch", probe = FALSE,
@@ -347,6 +356,5 @@ cat(sprintf("  probe                    : %d profile(s), max relative difference
 cat(sprintf("  worst ensemble band      : %.2e (%s)\n", max(worst_ens), names(which.max(worst_ens))))
 cat(sprintf("  worst DI                 : %.2e\n", max(abs(di - di_ref))))
 
-options(old_block)
 unlink(base, recursive = TRUE)
 .report(ok, "test_predict")
