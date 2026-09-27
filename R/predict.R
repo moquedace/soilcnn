@@ -1176,7 +1176,10 @@ print.dsm_prediction <- function(x, ...) {
          smearing = s$smearing, intervals = s$intervals)),
        threads = tpw, gdal_cache_mb = 512L, blocky = work$blocky,
        gc_threshold_mb = 1000L, gc_every_s = 1,
-       units_dir = file.path(run_dir, "units"), probe_cells = NULL)
+       units_dir = file.path(run_dir, "units"), probe_cells = NULL,
+       # options(dsm.predict.trace_mem = TRUE): every unit records the worker's
+       # CURRENT working set after each phase of each step (see .predict_unit).
+       trace_mem = isTRUE(getOption("dsm.predict.trace_mem", FALSE)))
 }
 
 .predict_done_path <- function(units_dir, unit_id) file.path(units_dir, unit_id, "done.rds")
@@ -1216,7 +1219,9 @@ print.dsm_prediction <- function(x, ...) {
               OMP_NUM_THREADS = as.character(job$threads),
               MKL_NUM_THREADS = as.character(job$threads),
               LRU_CACHE_CAPACITY = "64",
-              ONEDNN_PRIMITIVE_CACHE_CAPACITY = "64"),
+              ONEDNN_PRIMITIVE_CACHE_CAPACITY = "64",
+              # A diagnosis can add to the workers' environment (T4 does).
+              getOption("dsm.predict.worker_env", character(0))),
       stdout = file.path(logs_dir, sprintf("%s_worker_%02d.log", tag, w)), stderr = "2>&1",
       supervise = TRUE)
   })
@@ -1345,9 +1350,12 @@ print.dsm_prediction <- function(x, ...) {
   set_torch_threads(job$threads)
   tryCatch(terra::gdalCache(job$gdal_cache_mb), error = function(e) NULL)
   # GDAL decodes the strips of one read on several threads (GDAL >= 3.6); the
-  # torch threads are idle while a band is read, so this costs nothing.
-  tryCatch(terra::setGDALconfig("GDAL_NUM_THREADS", as.character(job$threads)),
-           error = function(e) NULL)
+  # torch threads are idle while a band is read, so this costs nothing. A
+  # GDAL_NUM_THREADS already in the worker's environment wins (T4 sets it).
+  if (!nzchar(Sys.getenv("GDAL_NUM_THREADS"))) {
+    tryCatch(terra::setGDALconfig("GDAL_NUM_THREADS", as.character(job$threads)),
+             error = function(e) NULL)
+  }
   models <- lapply(job$model_files, function(f) {
     m <- build_cnn_from_config(job$cfg, job$n_channels)
     m$load_state_dict(torch::torch_load(f))
@@ -1610,10 +1618,28 @@ print.dsm_prediction <- function(x, ...) {
   n_valid <- 0
   halo <- NULL; fin_halo <- NULL
   first <- TRUE
+  # THE WORKER'S CURRENT WORKING SET after each phase of each step, when the
+  # map is asked for it (options(dsm.predict.trace_mem = TRUE); T4 does). A
+  # peak says only how high memory once went; a phase after which the level
+  # left by a full collection climbs step after step is a leak, and names
+  # itself.
+  trace <- list()
+  si <- 0L
+  mark <- function(phase) {
+    if (isTRUE(job$trace_mem)) {
+      mi <- tryCatch(ps::ps_memory_info(ps::ps_handle()), error = function(e) NULL)
+      trace[[length(trace) + 1L]] <<- data.frame(
+        step = si, phase = phase,
+        rss_gb = if (is.null(mi)) NA_real_ else as.numeric(mi[["rss"]]) / 1e9)
+    }
+    invisible(NULL)
+  }
 
   for (o0 in seq(u$r0, u$r1, by = job$step_rows)) {
     o1 <- min(o0 + job$step_rows - 1L, u$r1)
     gs <- o1 - o0 + 1L
+    si <- si + 1L
+    mark("start")
 
     # ── the rows: read once, the halo kept ──────────────────────────────────
     tr <- Sys.time()
@@ -1631,6 +1657,7 @@ print.dsm_prediction <- function(x, ...) {
     new <- blk$x; fin_new <- blk$fin
     rm(blk)
     tm[["read"]] <- tm[["read"]] + secs(tr)
+    mark("read")
 
     fin_full <- if (h > 0L) torch::torch_cat(list(fin_halo, fin_new), dim = 1L) else fin_new
     valid <- .predict_valid(fin_full, h, gs, w_out)
@@ -1687,6 +1714,7 @@ print.dsm_prediction <- function(x, ...) {
       D_all[[k]] <- D
       rm(strip, x4)
     }
+    mark("network_di")
     idx <- unlist(I_all)
     nv <- length(idx)
     n_valid <- n_valid + nv
@@ -1707,6 +1735,7 @@ print.dsm_prediction <- function(x, ...) {
       }
     }
     tm[["bands"]] <- tm[["bands"]] + secs(tb)
+    mark("bands")
 
     tw <- Sys.time()
     for (b in seq_len(nb)) {
@@ -1729,6 +1758,7 @@ print.dsm_prediction <- function(x, ...) {
       }
     }
     tm[["write"]] <- tm[["write"]] + secs(tw)
+    mark("write")
 
     # ── the halo the next step keeps ────────────────────────────────────────
     if (h > 0L) {
@@ -1742,14 +1772,17 @@ print.dsm_prediction <- function(x, ...) {
     }
     rm(new, fin_new, vals, P_all, D_all, I_all)
     invisible(gc(verbose = FALSE))
+    mark("gc")
   }
 
   for (w in writers) terra::writeStop(w$rast)
   open <- FALSE
+  mark("unit_end")
   list(unit_id = u$unit_id, r0 = u$r0, r1 = u$r1, c0 = u$c0, c1 = u$c1,
        n_cells = as.numeric(u$r1 - u$r0 + 1L) * w_out, n_valid = n_valid,
        seconds = tm, total_s = secs(t_unit), band_stats = bstat,
        probe_pred = probe_pred,
+       mem_trace = if (length(trace)) do.call(rbind, trace) else NULL,
        step_rows = job$step_rows, chunk_cols = job$chunk_cols, engine = job$engine,
        status = "success", finished_at = Sys.time())
 }
