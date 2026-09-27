@@ -407,7 +407,7 @@ dsm_predict <- function(final, data, rasters = NULL, qc_table = NULL, extent = N
   }
   safe_save_rds(cal, file.path(run_dir, "calibration.rds"), compress = FALSE)
   safe_write_csv2(band_tbl, file.path(run_dir, "bands.csv"))
-  cal_tbl <- .predict_calibration_table(cal)
+  cal_tbl <- .predict_calibration_table(cal, band_tbl)
   if (nrow(cal_tbl) > 0L) safe_write_csv2(cal_tbl, file.path(run_dir, "calibration.csv"))
 
   probe_model <- build_cnn_from_config(fr$cfg, length(inp$predictors))
@@ -911,9 +911,18 @@ print.dsm_prediction <- function(x, ...) {
   list(sources = out, refs = refs)
 }
 
-.predict_calibration_table <- function(cal) {
+# One row per source and level. di_band names the DI band the source's
+# level+DI interval and AOA were computed from: sources whose fold plans used
+# different profiles (a buffer drops some) have different references, and so
+# a DI band each.
+.predict_calibration_table <- function(cal, band_tbl = NULL) {
   rows <- list()
   for (s in cal$sources) {
+    di_band <- NA_character_
+    if (!is.null(band_tbl)) {
+      b <- band_tbl$band[band_tbl$kind == "di" & band_tbl$group %in% s$di_group]
+      if (length(b)) di_band <- b[1]
+    }
     for (iv in s$intervals) {
       rows[[length(rows) + 1L]] <- tibble::tibble(
         source = s$name, dir = s$dir, config_id_there = s$config_id, method = s$method,
@@ -922,7 +931,7 @@ print.dsm_prediction <- function(x, ...) {
         q_level_di = iv$level_di$q, scale_intercept = iv$level_di$coef[[1]],
         scale_level = iv$level_di$coef[["level"]], scale_di = iv$level_di$coef[["di"]],
         scale_floor = iv$level_di$floor, scale_r2_fit = iv$level_di$r2_fit,
-        aoa_threshold = s$threshold, di_group = s$di_group,
+        aoa_threshold = s$threshold, di_group = s$di_group, di_band = di_band,
         smearing_s = if (is.null(s$smearing)) NA_real_ else s$smearing$s)
     }
   }
@@ -1491,6 +1500,11 @@ print.dsm_prediction <- function(x, ...) {
       for (s in seq_len(S)) {
         P[, s] <- fcn_predict_strip(env$models[[s]], x4, cs, engine = env$fcn_engine,
                                     batch = job$batch, gather_mb = job$gather_mb)
+        # R frees a tensor when its collector runs, and it cannot see a
+        # tensor's size: ten seeds' feature maps piled up to 8-13 GB per
+        # worker on P4's first run. A minor collection takes milliseconds
+        # and reaches exactly those, the youngest objects.
+        invisible(gc(verbose = FALSE, full = FALSE))
       }
       tm[["net"]] <- tm[["net"]] + secs(tn)
       td <- Sys.time()
@@ -1500,6 +1514,7 @@ print.dsm_prediction <- function(x, ...) {
         xc <- strip$view(c(C, -1L))[, (cs[, 1] - 1L) * ws + cs[, 2], drop = FALSE]$t()
         D <- matrix(vapply(env$di, function(ref) .predict_di(ref, xc, env$index_base),
                            numeric(length(i))), nrow = length(i))
+        invisible(gc(verbose = FALSE, full = FALSE))
       }
       tm[["di"]] <- tm[["di"]] + secs(td)
       k <- k + 1L

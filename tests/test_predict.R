@@ -292,7 +292,28 @@ two <- mp(run_id = "map_sources", probe = FALSE, calibration = c(block = fit$run
           bands = c("ensemble_median", "di", "aoa"), extent = list(rows = c(10L, 20L), cols = c(10L, 30L)))
 ok["sources_with_one_reference_share_one_di_band"] <-
   identical(two$bands$band, c("ensemble_median", "di", "aoa_block", "aoa_again")) &&
-  identical(rd(two, "aoa_block"), rd(two, "aoa_again"))
+  identical(rd(two, "aoa_block"), rd(two, "aoa_again")) &&
+  identical(two$calibration$di_band, c("di", "di"))
+
+# A plan that left one profile out of every fold -- as a buffer does -- has
+# another reference, so the source gets its own DI band, and says so.
+other <- file.path(base, "out", "tuning_other")
+dir.create(other)
+invisible(file.copy(list.files(fit$run_dir, full.names = TRUE), other, recursive = TRUE))
+pl <- readRDS(file.path(other, "fold_plan.rds"))
+gone <- pl$folds[[1]]$validation[1]
+pl$folds <- lapply(pl$folds, function(f) {
+  f$train <- setdiff(f$train, gone)
+  f$validation <- setdiff(f$validation, gone)
+  f
+})
+saveRDS(pl, file.path(other, "fold_plan.rds"))
+diff2 <- mp(run_id = "map_sources_diff", probe = FALSE, calibration = c(block = fit$run_dir, other = other),
+            bands = c("ensemble_median", "di", "aoa"), extent = list(rows = c(10L, 20L), cols = c(10L, 30L)))
+ok["sources_with_different_references_get_a_di_band_each"] <-
+  identical(diff2$bands$band, c("ensemble_median", "di_block", "di_other", "aoa_block", "aoa_other")) &&
+  identical(diff2$calibration$di_band, c("di_block", "di_other")) &&
+  identical(rd(diff2, "di_block"), rd(two, "di"))
 
 cat(sprintf("  fixture                  : %d x %d grid, %d channels, %d profiles, %d valid pixel(s)\n",
             n_r, n_c, C, nrow(data$store$meta), sum(valid_ref)))
