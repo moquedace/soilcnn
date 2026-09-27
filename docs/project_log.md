@@ -5319,3 +5319,44 @@ teste curto enxerga. Então:
 
 **T3, 5ª rodada (commit 0da027f):** unidades de dois passos de 32 linhas,
 nas 448 linhas depois das da 4ª rodada.
+
+
+## 2026-09-27 — T3, 5ª rodada: a memória parou de subir; o mapa global está pronto para rodar
+
+**Com o código 1d81e34:**
+
+- `tests/test_predict.R`: todas as 32 asserções passaram. Entre elas, as da
+  janela: feita uma vez por formato; unidades de dois passos dão o mapa
+  idêntico, bit a bit; reinícios forçados dão o mapa idêntico.
+- **P4: 10/10** (20 km, contra o estágio 05). O pico por worker ficou em
+  6,6 GB, com estimativa de 8,5.
+
+**T3, 5ª rodada** (unidades de dois passos de 32 linhas, linhas
+17.761–18.208):
+
+| arranjo | workers × threads | px válidos/s | pico (GB) | estimativa | o pico ao longo das unidades | ETA global |
+|---|---|---|---|---|---|---|
+| a | 2 × 7 | **21.202** | 14,7 | 14,6 | 14,4 → 14,7 e 14,6 → 14,7 | **~33 h** |
+| b | 1 × 15 | 17.428 | 15,9 | 14,6 | 15,4 → 15,9 (3 unidades) | ~39 h |
+
+- **O vazamento acabou.** O pico sobe no máximo 0,5 GB depois da primeira
+  unidade, contra +1,9 a +4,6 GB por unidade antes. Nenhum worker precisou
+  reiniciar.
+- **A estimativa de RAM acertou:** 14,6 GB previstos, 14,7 medidos no 2 × 7.
+- **O 2 × 7 finalmente coube com os seus dois workers** e é o mais rápido.
+  Antes a RAM o cortava para 1 × 7.
+- **Onde vai o tempo:** leitura 13–14%, rede 63–64%, DI 17–19%. Com dois
+  workers lendo do mesmo disco, cada linha custa 0,85 s, contra 0,48 s com
+  um. Mas os dois juntos rendem mais.
+
+**A rodada global** fica em `examples/soc_stock_0_5cm/05_dsm_predict_global.R`:
+
+- a grade inteira, com os 10 seeds e as duas fontes de calibração (bloco e
+  kNNDM);
+- 249 unidades de 256 linhas, em passos de 32;
+- 2 × 7 quando dois workers cabem na RAM; senão 1 × 15, que é o mais rápido
+  com um worker só;
+- antes de mapear: a sonda nos perfis, a checagem de espaço em disco (T3: ~42
+  bytes por pixel válido, ~100 GB para o globo) e a de RAM;
+- retomável: se parar (reinício do Windows, queda de energia), basta rodar
+  de novo.
