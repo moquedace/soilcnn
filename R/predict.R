@@ -88,8 +88,10 @@ fcn_supported <- function(model) {
   x_flat[, cell]$view(c(C, n, w, w))$permute(c(2L, 1L, 3L, 4L))$contiguous()
 }
 
-# One branch's embedding for every centre, patch by patch.
-.fcn_branch_patchwise <- function(branch, x_strip, centres, w, batch) {
+# One branch's embedding for every centre, patch by patch. gc_hook, when
+# given, runs after every batch: a dense chunk is dozens of batches of
+# hundreds of MB each, all of it garbage R does not know the size of.
+.fcn_branch_patchwise <- function(branch, x_strip, centres, w, batch, gc_hook = NULL) {
   n <- nrow(centres)
   out <- vector("list", ceiling(n / batch))
   k <- 0L
@@ -97,6 +99,7 @@ fcn_supported <- function(model) {
     e <- min(n, s + batch - 1L)
     k <- k + 1L
     out[[k]] <- branch(.fcn_gather_patches(x_strip, centres[s:e, , drop = FALSE], w))
+    if (!is.null(gc_hook)) gc_hook()
   }
   torch::torch_cat(out, dim = 1L)
 }
@@ -105,7 +108,7 @@ fcn_supported <- function(model) {
 # position (a, b) of the pooled features is the patch whose top-left corner is
 # strip pixel (a, b), i.e. the centre (a + h, b + h).
 .fcn_branch_convolutional <- function(branch, x_strip, centres, w, batch = 4096L,
-                                      gather_mb = 256) {
+                                      gather_mb = 256, gc_hook = NULL) {
   h  <- (w - 1L) %/% 2L
   nb <- length(branch$blocks)
   f  <- x_strip
@@ -135,6 +138,7 @@ fcn_supported <- function(model) {
       k <- k + 1L
       g <- .fcn_gather_patches(f, centres[s:e, , drop = FALSE] - nb, o)
       parts[[k]] <- branch$linear(branch$flatten(g))
+      if (!is.null(gc_hook)) gc_hook()
     }
     z <- torch::torch_cat(parts, dim = 1L)
   }
@@ -167,9 +171,11 @@ fcn_supported <- function(model) {
 #'   the rest patch by patch; "patch" runs every branch patch by patch.
 #' @param batch   Centres per batch on the patch-by-patch path and the head.
 #' @param gather_mb Memory one gathered batch of patches may take.
+#' @param gc_hook NULL, or a function called after every batch and branch --
+#'   the map passes one that collects R's garbage (see .predict_gc_hook()).
 #' @return A numeric vector, one prediction per centre.
 fcn_predict_strip <- function(model, x_strip, centres, engine = c("fcn", "patch"),
-                              batch = 4096L, gather_mb = 256) {
+                              batch = 4096L, gather_mb = 256, gc_hook = NULL) {
   engine <- match.arg(engine)
   if (nrow(centres) == 0L) return(numeric(0))
   x_strip <- x_strip$contiguous()
@@ -179,12 +185,15 @@ fcn_predict_strip <- function(model, x_strip, centres, engine = c("fcn", "patch"
   n_ch <- x_strip$size(2L)
   torch::with_no_grad({
     emb <- lapply(seq_along(brs), function(b) {
-      if (identical(engine, "fcn") && supported[b]) {
-        .fcn_branch_convolutional(brs[[b]], x_strip, centres, windows[b], batch, gather_mb)
+      e <- if (identical(engine, "fcn") && supported[b]) {
+        .fcn_branch_convolutional(brs[[b]], x_strip, centres, windows[b], batch, gather_mb,
+                                  gc_hook)
       } else {
         .fcn_branch_patchwise(brs[[b]], x_strip, centres, windows[b],
-                              .fcn_gather_batch(n_ch, windows[b], batch, gather_mb))
+                              .fcn_gather_batch(n_ch, windows[b], batch, gather_mb), gc_hook)
       }
+      if (!is.null(gc_hook)) gc_hook()
+      e
     })
     n <- nrow(centres)
     out <- numeric(n)
@@ -1029,16 +1038,20 @@ print.dsm_prediction <- function(x, ...) {
 # THE RAM MODEL, per worker, for a step of g rows over W columns of C channels:
 # the step's rows as float32 (the new rows and the kept halo), the mask, the
 # double copies one band's read goes through, the network's strip and feature
-# maps over one chunk, the band vectors of a step, GDAL's cache, and a base
-# R + torch session. An estimate, said to be one: the real peak of every
-# worker is measured and written beside it.
+# maps over one chunk, the band vectors of a step; then GDAL's cache (0.5 GB),
+# an R + torch + terra session with the seeds' models (2 GB), and the torch
+# garbage the collector leaves between two full collections plus the freed
+# blocks torch keeps for reuse (3 GB: ~1 GB/s for 2 s, and a cache capped at
+# the 1 GB light-collection threshold -- see .predict_gc_hook()). An estimate,
+# said to be one: the real peak of every worker is measured and written beside
+# it.
 .predict_worker_gb <- function(g, h, w_out, n_ch, chunk_cols, conv_sum) {
   w_buf <- w_out + 2 * h
   bytes <- (g + 2 * h) * w_buf * (4 * n_ch + 1) +
     3 * g * w_buf * 8 +
     2 * (g + 2 * h) * (min(chunk_cols, w_out) + 2 * h) * (n_ch + 4 * conv_sum) * 4 +
     6 * g * w_out * 8
-  bytes / 1e9 + 0.5 + 1.5 + 2
+  bytes / 1e9 + 0.5 + 2 + 3
 }
 
 .predict_work_plan <- function(grid, inp, cfg, band_tbl, n_cores, tpw, max_ram_gb,
@@ -1129,6 +1142,7 @@ print.dsm_prediction <- function(x, ...) {
          name = s$name, di_group = s$di_group, threshold = s$threshold,
          smearing = s$smearing, intervals = s$intervals)),
        threads = tpw, gdal_cache_mb = 512L, blocky = work$blocky,
+       gc_threshold_mb = 1000L, gc_every_s = 2,
        units_dir = file.path(run_dir, "units"), probe_cells = NULL)
 }
 
@@ -1211,8 +1225,42 @@ print.dsm_prediction <- function(x, ...) {
 # At the top level on purpose, as .final_worker_entry(): nothing a worker
 # does may depend on a frame serialised along with it.
 .predict_worker_entry <- function(job, root) {
+  # BEFORE torch loads -- the threshold is read once, when torch starts, and
+  # R/load_all.R builds torch modules as it sources. torch then runs a LIGHT
+  # collection every job$gc_threshold_mb of new allocations (lantern's CPU
+  # allocator, src/lantern/src/Allocator.cpp), and caches freed blocks up to
+  # the same amount. See .predict_gc_hook() for the full collections.
+  options(torch.threshold_call_gc = job$gc_threshold_mb)
   suppressMessages(source(file.path(root, "R", "load_all.R")))
   .predict_worker(job)
+}
+
+# THE COLLECTOR THE MAP RUNS, and why it has to run a FULL collection.
+#
+# R frees a tensor only when its own collector finds it unreachable, and R
+# cannot see a tensor's size. torch compensates with a light collection every
+# N MB it allocates -- but a light collection only reaches the youngest
+# generation, and every tensor still in use when one runs (the seed being
+# computed) is promoted past it, to die later where only a full collection
+# looks. P4's first run showed the result: 8-13 GB per worker for the fully
+# convolutional path, 17 GB for the patch-by-patch one, against ~6 estimated.
+#
+# So: a light collection at every call (milliseconds), and a full one every
+# `every_s` seconds. Garbage is allocated at a rate the computation sets
+# (~1 GB/s per worker here), so a clock bounds it as well as a byte count
+# would, without a model of every layer; a full collection of a worker's
+# session costs tens of ms, a few percent at 2 s.
+.predict_gc_hook <- function(every_s) {
+  last <- Sys.time()
+  function() {
+    if (as.numeric(difftime(Sys.time(), last, units = "secs")) >= every_s) {
+      invisible(gc(verbose = FALSE, full = TRUE))
+      last <<- Sys.time()
+    } else {
+      invisible(gc(verbose = FALSE, full = FALSE))
+    }
+    invisible(NULL)
+  }
 }
 
 .predict_worker <- function(job) {
@@ -1253,10 +1301,6 @@ print.dsm_prediction <- function(x, ...) {
 
 .predict_worker_setup <- function(job) {
   set_torch_threads(job$threads)
-  # R frees a tensor only when R's own collector runs, and it cannot see how
-  # large a tensor is: the map allocates hundreds of MB per chunk, so torch is
-  # told to call the collector well before the default 4 GB.
-  options(torch.threshold_call_gc = 2000)
   tryCatch(terra::gdalCache(job$gdal_cache_mb), error = function(e) NULL)
   # GDAL decodes the strips of one read on several threads (GDAL >= 3.6); the
   # torch threads are idle while a band is read, so this costs nothing.
@@ -1284,7 +1328,7 @@ print.dsm_prediction <- function(x, ...) {
   index_base <- 2L - as.integer(torch::torch_argmin(torch::torch_tensor(c(3, 1, 2))))
   list(models = models, srcs = srcs, n_ch = length(job$files), n_seeds = length(models),
        rules = rules, has_rule = has_rule, inverse = target_transform_spec(job$transform)$inverse,
-       di = di, index_base = index_base,
+       di = di, index_base = index_base, gc_hook = .predict_gc_hook(job$gc_every_s),
        fcn_engine = if (identical(job$engine, "patch")) "patch" else "fcn")
 }
 
@@ -1499,12 +1543,8 @@ print.dsm_prediction <- function(x, ...) {
       P <- matrix(NA_real_, length(i), S)
       for (s in seq_len(S)) {
         P[, s] <- fcn_predict_strip(env$models[[s]], x4, cs, engine = env$fcn_engine,
-                                    batch = job$batch, gather_mb = job$gather_mb)
-        # R frees a tensor when its collector runs, and it cannot see a
-        # tensor's size: ten seeds' feature maps piled up to 8-13 GB per
-        # worker on P4's first run. A minor collection takes milliseconds
-        # and reaches exactly those, the youngest objects.
-        invisible(gc(verbose = FALSE, full = FALSE))
+                                    batch = job$batch, gather_mb = job$gather_mb,
+                                    gc_hook = env$gc_hook)
       }
       tm[["net"]] <- tm[["net"]] + secs(tn)
       td <- Sys.time()
@@ -1514,7 +1554,7 @@ print.dsm_prediction <- function(x, ...) {
         xc <- strip$view(c(C, -1L))[, (cs[, 1] - 1L) * ws + cs[, 2], drop = FALSE]$t()
         D <- matrix(vapply(env$di, function(ref) .predict_di(ref, xc, env$index_base),
                            numeric(length(i))), nrow = length(i))
-        invisible(gc(verbose = FALSE, full = FALSE))
+        env$gc_hook()
       }
       tm[["di"]] <- tm[["di"]] + secs(td)
       k <- k + 1L
