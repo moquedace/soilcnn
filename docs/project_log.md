@@ -5157,3 +5157,64 @@ inteira.
 - **T3, 4ª rodada:** nas 224 linhas a partir do deslocamento 1.248, depois das
   que o T4 e o T5 leram. O `t3_05` pede que o pico de cada worker pare de
   subir.
+
+
+## 2026-09-27 — T5, 2ª rodada: não é o limite de 2^31; T6 pergunta quem segura a memória
+
+**T5, 2ª rodada (commit 79e1815).** Working set em GB, depois de cada
+repetição e de uma coleta completa:
+
+| experimento | base | 1ª | 2ª | 3ª | cresce por rep. |
+|---|---|---|---|---|---|
+| tensor de 1,0 GB | 0,33 | 1,33 | 2,24 | 3,24 | 0,95 |
+| tensor de 1,9 GB | 0,33 | 2,22 | 4,12 | 6,02 | 1,90 |
+| tensor de 2,2 GB | 0,33 | 2,52 | 4,72 | 6,92 | 2,20 |
+| tensor de 3,7 GB | 0,33 | 4,02 | 7,72 | 11,40 | 3,70 |
+| leitor em blocos de 1,5 GB | 0,34 | 7,85 | 11,60 | 15,40 | 3,75 |
+
+- **A hipótese do 2^31 estava errada.** Até o tensor de 1,0 GB fica inteiro,
+  e o leitor em blocos (73 + 73 + 35 canais) segura os 3,7 GB como antes. A
+  correção 02e4bc5 não resolve. Ela fica, porque não custa nada e deixa o
+  tamanho do bloco ajustável.
+- **Mas nem todo tensor fica.** Os de ~20 MB que o leitor cria banda a banda
+  e as faixas da rede (~70 MB) voltam: as repetições deles nunca somaram.
+
+**T3, 4ª rodada (commit 351c18c, linhas 17.537–17.760).**
+
+- 1 × 7 threads (o 2 × 7 foi cortado pela RAM): 11.581 px/s.
+- 1 × 15: 17.123 px/s, ou ~39 h para o globo.
+- Sonda: 1,78e-7.
+- O pico ainda sobe: 13,9 → 19,7 GB em 4 unidades (1 × 7) e 15,2 → 21,2 GB
+  em 3 (1 × 15). `t3_03` e `t3_05` falham.
+
+**A pista nova: o alocador.** No Windows, o libtorch aloca memória de CPU com
+o **mimalloc** (PyTorch ≥ 2.1.2). O `c10.dll` desta instalação o traz
+embutido: os nomes das opções (`purge_delay`, `arena_reserve`,
+`disallow_arena_alloc`...) e as mensagens estão no binário. O mimalloc, em
+casos documentados, guarda memória liberada sem devolvê-la ao sistema.
+Um bloco grande liberado por outra thread que não a que o alocou só volta
+quando essa thread faz uma coleta (microsoft/mimalloc#440).
+
+O código do torch 0.17.0, lido na tag, libera de imediato: o finalizador do
+R apaga o tensor, e o alocador do lantern chama `free_cpu()`, que com o
+mimalloc é o `mi_free()`. Então a memória que fica é do mimalloc, ou de uma referência que
+eu ainda não vi.
+
+**T6** separa as três hipóteses. Cada experimento roda num processo novo,
+repetido 3 vezes, com um finalizador R que conta em cada tensor:
+
+- **É o R?** O contador diz se o R finalizou o tensor.
+- **É o torch?** O armazenamento é esvaziado à mão (`x$set_()` num tensor
+  vazio) antes de soltar o objeto R. Se o working set cai ali, o alocador
+  devolve memória, e o que falha é a finalização.
+- **É o mimalloc?**
+  - `MIMALLOC_PURGE_DELAY=0`: liberado é devolvido na hora;
+  - `MIMALLOC_DISALLOW_ARENA_ALLOC=1`: cada bloco vem do sistema e volta a
+    ele;
+  - uma thread só: descarta a liberação vinda de outra thread.
+- **O limite é o tamanho?** Tensores de 0,1, 0,25 e 0,5 GB, e o leitor com
+  blocos de 64 MB e de um canal (20 MB). Se estes voltarem, a correção é só
+  baixar o tamanho do bloco.
+
+O primeiro experimento também grava a versão, as opções e as estatísticas do
+mimalloc.
