@@ -556,7 +556,7 @@ dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
   if (identical(model$input, "patches")) {
     dots <- names(list(...))
     internal <- c("cfg", "n_channels", "loaders", "points_valid", "transform",
-                  "device", "clamp")
+                  "device", "clamp", "on_epoch")
     allowed <- c(setdiff(names(formals(train_one_cnn)), internal), "release_store")
     bad <- setdiff(dots, allowed)
     if (length(bad) > 0L) {

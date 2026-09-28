@@ -161,7 +161,7 @@ dsm_final <- function(tuning, data = NULL, config = "auto",
   }
   seeds <- .final_seeds(seeds)
   internal <- c("cfg", "n_channels", "loaders", "points_valid", "transform",
-                "device", "model_name")
+                "device", "model_name", "on_epoch")
   bad <- setdiff(names(training), setdiff(names(formals(train_one_cnn)), internal))
   if (length(bad) > 0L) {
     stop("`training` has argument(s) train_one_cnn() does not take: ",
@@ -729,7 +729,10 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
     cell_size = data$cell_size, target_col = data$target_col, index = index,
     scaling = scaling, cfgs = selected, units = todo, training = training,
     transform = transform, run_dir = run_dir, claims_dir = claims_dir,
-    threads = threads_per_unit)
+    threads = threads_per_unit,
+    # options(dsm.final.trace_mem = TRUE): every worker records its memory
+    # after each phase and each epoch (see .final_worker()). T7 does.
+    trace_mem = isTRUE(getOption("dsm.final.trace_mem", FALSE)))
   .pkg_check_portable(job, "dsm_final()")
 
   t0 <- Sys.time()
@@ -739,7 +742,10 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
       args = list(job = c(job, list(worker = w)), loader = loader),
       env = c(callr::rcmd_safe_env(),
               OMP_NUM_THREADS = as.character(threads_per_unit),
-              MKL_NUM_THREADS = as.character(threads_per_unit)),
+              MKL_NUM_THREADS = as.character(threads_per_unit),
+              # A diagnosis can add to the workers' environment, as dsm_predict()'s
+              # can (T7 sets MIMALLOC_SHOW_STATS).
+              getOption("dsm.final.worker_env", character(0))),
       stdout = file.path(logs_dir, sprintf("worker_%02d.log", w)), stderr = "2>&1",
       supervise = TRUE)
   })
@@ -794,22 +800,60 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
 # showed a unit's numbers do not depend on it.
 .final_worker <- function(job) {
   set_torch_threads(job$threads)
+
+  # THE WORKER'S MEMORY, PHASE BY PHASE AND EPOCH BY EPOCH, when the fit is
+  # asked for it (options(dsm.final.trace_mem = TRUE); T7 does): the training
+  # side of what T4 did for the map. T2 measured ~10 GB at the peak of a
+  # worker holding 1.26 GB of windows, and a peak says neither which phase set
+  # it nor whether the level climbs from epoch to epoch or unit to unit. Each
+  # mark follows a collection, so a level is what is held rather than garbage
+  # waiting; the private memory is read beside the working set because Windows
+  # takes pages out of a working set when the PC needs them, and a leak hides
+  # there (P5). Written after the setup and after every unit, so a worker that
+  # dies leaves its trace up to its last unit.
+  t0 <- Sys.time()
+  trace <- list()
+  mark <- function(phase, unit_id = NA_character_, epoch = NA_integer_) {
+    if (!isTRUE(job$trace_mem)) return(invisible(NULL))
+    g <- gc(verbose = FALSE)
+    trace[[length(trace) + 1L]] <<- data.frame(
+      worker = job$worker, unit_id = unit_id, phase = phase, epoch = as.integer(epoch),
+      seconds = as.numeric(difftime(Sys.time(), t0, units = "secs")),
+      rss_gb = .predict_rss_gb(), private_gb = .predict_private_gb(),
+      peak_gb = .final_peak_gb(), r_heap_gb = sum(g[, 2]) / 1024,
+      stringsAsFactors = FALSE)
+    invisible(NULL)
+  }
+  save_trace <- function() {
+    if (isTRUE(job$trace_mem) && length(trace) > 0L) {
+      safe_save_rds(do.call(rbind, trace),
+                    file.path(job$run_dir, "logs", sprintf("worker_%02d_mem_trace.rds", job$worker)),
+                    compress = FALSE)
+    }
+  }
+
+  mark("start")
   data <- dsm_load(job$patch_dir, points = job$points, type_table = job$type_table,
                    windows = job$windows, cell_size = job$cell_size,
                    target_col = job$target_col, verbose = FALSE)
+  mark("store_loaded")
   fold <- build_fold_cache(data$store, data$points, data$type_table, job$index,
                            job$windows, scaling = job$scaling, verbose = FALSE)
+  mark("fold_cache")
   pv    <- fold_points_valid(data$store, job$index)
   n_ch  <- data$store$n_channels
   cache <- fold$cache
   data$store$windows <- NULL
   invisible(gc(verbose = FALSE))
+  mark("store_dropped")
+  save_trace()
   device <- torch::torch_device("cpu")
 
   for (u in seq_len(nrow(job$units))) {
     cid  <- job$units$config_id[u]
     seed <- job$units$seed[u]
-    if (!dir.create(file.path(job$claims_dir, job$units$unit_id[u]), showWarnings = FALSE)) next
+    uid  <- job$units$unit_id[u]
+    if (!dir.create(file.path(job$claims_dir, uid), showWarnings = FALSE)) next
     cfg <- job$cfgs[job$cfgs$config_id == cid, , drop = FALSE]
     cfg_dir <- file.path(job$run_dir, cid)
     message("\n-- [", cid, "] seed ", seed, " (worker ", job$worker, ", ",
@@ -820,14 +864,19 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
     set.seed(seed)
     torch::torch_manual_seed(seed)
     loaders <- .make_loaders_from_cache(cache, cfg)
+    mark("unit_start", uid)
+    # The hook reads memory and nothing else: no tensor, no RNG, so a traced
+    # unit trains exactly as an untraced one (tests/test_final.R asserts it).
+    on_epoch <- if (isTRUE(job$trace_mem)) function(epoch) mark("epoch", uid, epoch) else NULL
     result <- tryCatch(
       do.call(train_one_cnn, c(list(
         cfg = cfg, n_channels = n_ch, loaders = loaders, points_valid = pv,
         transform = job$transform, device = device,
-        model_name = paste0(cid, "_seed", seed)), job$training)),
+        model_name = paste0(cid, "_seed", seed), on_epoch = on_epoch), job$training)),
       error = function(e) e)
+    mark("unit_trained", uid)
 
-    rec <- list(unit_id = job$units$unit_id[u], config_id = cid, seed = seed,
+    rec <- list(unit_id = uid, config_id = cid, seed = seed,
                 threads = job$threads, worker = job$worker, finished_at = Sys.time())
     if (inherits(result, "error")) {
       rec$status <- "failed"
@@ -854,6 +903,8 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
     safe_save_rds(rec, .final_unit_record_path(job$run_dir, cid, seed), compress = FALSE)
     rm(result, loaders)
     invisible(gc(verbose = FALSE))
+    mark("unit_released", uid)
+    save_trace()
   }
   list(worker = job$worker, peak_gb = .final_peak_gb())
 }

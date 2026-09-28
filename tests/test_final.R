@@ -8,7 +8,8 @@
 #   2. the choice is frozen in the TUNING run, as stage 04 froze it
 #   3. SIDE BY SIDE CHANGES NO NUMBER: two workers of one thread and one worker
 #      of one thread give every seed identical metrics, bit for bit -- T2's
-#      finding, kept by the suite at the size of a test
+#      finding, kept by the suite at the size of a test. The one worker runs
+#      with the memory trace on, so the trace is held to it as well
 #   4. the report declares every hyperparameter of the grid, says which the
 #      search varied, and lists what it tried
 #   5. an interrupted fit resumes without retraining a finished seed
@@ -144,8 +145,14 @@ ok["the_choice_is_frozen_in_the_tuning_run"] <- {
 }
 
 # ── 3. side by side changes no number ────────────────────────────────────────
+#
+# WITH THE MEMORY TRACE ON, for this fit only (T7 reads the trace): a traced
+# worker must train exactly as an untraced one, and the identity below with
+# the two-worker fit, which ran without it, is what says so.
+old_opt <- options(dsm.final.trace_mem = TRUE)
 fin1 <- suppressMessages(do.call(dsm_final, c(list(fit, config = cid, n_cores = 1L,
                                                    run_id = "seq"), final_args)))
+options(old_opt)
 ok["one_worker_is_what_one_worker_was_asked"] <- identical(fin1$n_workers, 1L)
 ok["two_workers_and_one_give_identical_seeds"] <-
   identical(fin$all_seed_results$seed, fin1$all_seed_results$seed) &&
@@ -154,6 +161,16 @@ ok["two_workers_and_one_give_identical_seeds"] <-
 ok["and_an_identical_ensemble"] <- identical(
   safe_read_csv2(file.path(rd, cid, "ensemble_predictions.csv"))$pred,
   safe_read_csv2(file.path(fin1$run_dir, cid, "ensemble_predictions.csv"))$pred)
+# Every phase once, every epoch of every seed (3 epochs, none stopped early:
+# patience 3 cannot run out before a fourth), and a level at each.
+tr1 <- readRDS(file.path(fin1$run_dir, "logs", "worker_01_mem_trace.rds"))
+ok["the_trace_has_every_phase_and_every_epoch"] <-
+  all(c("start", "store_loaded", "fold_cache", "store_dropped", "unit_start",
+        "epoch", "unit_trained", "unit_released") %in% tr1$phase) &&
+  identical(as.integer(table(tr1$unit_id[tr1$phase == "epoch"])), rep(3L, 3L)) &&
+  all(is.finite(tr1$rss_gb)) && all(is.finite(tr1$r_heap_gb))
+ok["without_the_option_there_is_no_trace"] <-
+  !file.exists(file.path(rd, "logs", "worker_01_mem_trace.rds"))
 
 # ── 4. the declaration ───────────────────────────────────────────────────────
 h <- safe_read_csv2(file.path(rd, "selected_hyperparameters.csv"))

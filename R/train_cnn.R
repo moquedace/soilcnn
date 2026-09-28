@@ -183,6 +183,10 @@ extract_gate_analysis <- function(model, data_loader, points_valid,
 #'   is a label-preserving regulariser. Applied to training batches only.
 #' @param clamp          Plausible range of the target in native units, passed
 #'   to predict_loader(). See there: c(0, Inf) by default.
+#' @param on_epoch       NULL, or a function(epoch) called at the end of every
+#'   epoch, after its collection. It must touch neither the model nor the RNG:
+#'   it exists for the final worker's memory trace (options(dsm.final.trace_mem
+#'   = TRUE)), which reads memory and nothing else.
 #'
 #' @return A list with: history, pred_all, perf_all, perf_quantile,
 #'   gate, best_epoch, runtime, config. The trained model is NOT returned --
@@ -208,7 +212,8 @@ train_one_cnn <- function(
   print_every        = 5L,
   model_name         = "cnn",
   augment            = TRUE,
-  clamp              = c(0, Inf)
+  clamp              = c(0, Inf),
+  on_epoch           = NULL
 ) {
   base_lr       <- cfg$base_lr
   batch_size    <- cfg$batch_size
@@ -350,9 +355,11 @@ train_one_cnn <- function(
     if (no_improve >= patience) {
       message("  Early stopping at epoch ", epoch,
               " (best: ", best_epoch, ")")
+      if (!is.null(on_epoch)) on_epoch(epoch)
       break
     }
     gc()
+    if (!is.null(on_epoch)) on_epoch(epoch)
   }
 
   runtime <- Sys.time() - t0
