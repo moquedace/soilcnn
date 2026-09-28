@@ -4,7 +4,7 @@
 # or pkgload::load_all() on the source tree:
 #
 #   the fingerprint of the code it loaded, which every worker compares with
-#     its own before it maps a unit (see .dlc_loader(), R/utils.R);
+#     its own before it maps a unit (see .pkg_loader(), R/utils.R);
 #   the built-in models, into the registry.
 #
 # The models used to register at the top of R/baselines.R, as it was
@@ -14,6 +14,6 @@
 # order -- and would be the list R/load_all.R kept, a second place to keep in
 # step with the files, which is what making this a package was meant to end.
 .onLoad <- function(libname, pkgname) {
-  .dlc_state$code_hash <- .dlc_code_hash(getNamespaceInfo(pkgname, "path"))
+  .pkg_state$code_hash <- .pkg_code_hash(getNamespaceInfo(pkgname, "path"))
   .register_builtin_models()
 }

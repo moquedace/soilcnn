@@ -14,7 +14,7 @@
 #     fails on the next machine.
 #
 # And the two guards that keep workers on the session's own code
-# (.dlc_loader(), .dlc_check_portable() in R/utils.R), checked here without
+# (.pkg_loader(), .pkg_check_portable() in R/utils.R), checked here without
 # starting a process; tests/test_package_install.R starts them.
 #
 # Verified:
@@ -75,7 +75,7 @@ used <- unique(unlist(lapply(r_files, function(f) {
   pd$text[pd$token == "SYMBOL_PACKAGE"]
 })))
 undeclared <- setdiff(used, c(imports, suggests, "base"))
-ok["description_names_the_package"] <- identical(pkg, "deeplearningcaret")
+ok["description_names_the_package"] <- identical(pkg, "soilcnn")
 ok["every_pkg_call_is_declared"] <- length(undeclared) == 0L
 ok["every_import_is_used"] <- all(imports %in% used)
 
@@ -121,34 +121,34 @@ ok["no_loader_in_R"] <- !file.exists(file.path(root, "R", "load_all.R"))
 ok["no_file_in_R_sources_another"] <- !any(sources_something)
 
 # ── 6. the loader, in this session: the source tree, fingerprinted ───────────
-ld <- .dlc_loader()
+ld <- .pkg_loader()
 ok["loader_names_the_package"] <- identical(ld$package, pkg)
 ok["loader_says_source_tree"]  <- isTRUE(ld$dev)
 ok["loader_points_at_the_root"] <-
   identical(normalizePath(ld$path, winslash = "/"), normalizePath(root, winslash = "/"))
 ok["loader_carries_the_fingerprint"] <-
   is.character(ld$code_hash) && nzchar(ld$code_hash) &&
-  identical(ld$code_hash, .dlc_code_hash(root))
-# What travels must not drag the namespace along (see .dlc_loader()).
+  identical(ld$code_hash, .pkg_code_hash(root))
+# What travels must not drag the namespace along (see .pkg_loader()).
 ok["loader_open_has_base_as_its_environment"] <-
   identical(environment(ld$open), baseenv())
 
 # ── 7. a framework that is not a namespace is refused ────────────────────────
 # What a session that source()d the files would have: the same function, its
 # environment the global one.
-loose <- .dlc_loader
+loose <- .pkg_loader
 environment(loose) <- globalenv()
 msg <- tryCatch({ loose(); "" }, error = function(e) conditionMessage(e))
 ok["loader_refuses_source_d_files"] <- grepl("as a package", msg)
 
 # ── 8. a job tied to the namespace is refused ────────────────────────────────
-ok["plain_job_passes"] <- isTRUE(.dlc_check_portable(
+ok["plain_job_passes"] <- isTRUE(.pkg_check_portable(
   list(a = 1, b = list(c = "x", f = identity), d = data.frame(x = 1:3)), "test"))
-msg <- tryCatch({ .dlc_check_portable(list(a = 1, nested = list(fit = dsm_train)), "test"); "" },
+msg <- tryCatch({ .pkg_check_portable(list(a = 1, nested = list(fit = dsm_train)), "test"); "" },
                 error = function(e) conditionMessage(e))
 ok["namespace_function_in_a_job_is_refused"] <- grepl("job\\$nested\\$fit", msg)
 closure <- local({ x <- 1; function() x })       # enclosed by this test, not the package
-ok["foreign_closure_passes"] <- isTRUE(.dlc_check_portable(list(f = closure), "test"))
+ok["foreign_closure_passes"] <- isTRUE(.pkg_check_portable(list(f = closure), "test"))
 
 cat("  imports declared/used    : ", length(imports), " / ", sum(imports %in% used), "\n", sep = "")
 cat("  exports, S3 methods      : ", length(exported), ", ", length(registered), "\n", sep = "")

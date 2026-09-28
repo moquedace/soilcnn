@@ -198,7 +198,7 @@ would hit it:
 
 `R/load_all.R` said it: "when this becomes a package this file disappears and
 `library()` takes its place." **It has, 2026-09-28** (0616460, bcd3b0b): the
-repository is the package `deeplearningcaret`, and `R/load_all.R` is gone.
+repository is the package `soilcnn`, and `R/load_all.R` is gone.
 
 - ~~`DESCRIPTION`, `NAMESPACE` (roxygen)~~ — **done.** Imports are what a core
   call uses unconditionally; what sits behind a `requireNamespace()` guard is
@@ -207,7 +207,7 @@ repository is the package `deeplearningcaret`, and `R/load_all.R` is gone.
   methods. `tests/test_package_metadata.R` checks it against the tags, and
   DESCRIPTION against the `pkg::` calls.
 - ~~One way to load~~ — **done.** Scripts and tests load the source tree with
-  `pkgload::load_all()`; `library(deeplearningcaret)` loads an installed
+  `pkgload::load_all()`; `library(soilcnn)` loads an installed
   copy, built through a tarball (`R CMD INSTALL` of the directory copies
   `data/`). The models register in `.onLoad()`. Workers load what their
   session loaded and stop if the code changed since; `dsm_prepare()`'s band

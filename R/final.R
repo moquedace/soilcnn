@@ -577,7 +577,7 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
     stop("dsm_final() trains every seed in its own R process and needs the ",
          "callr package. install.packages(\"callr\").", call. = FALSE)
   }
-  loader <- .dlc_loader()          # the framework this session runs, for each worker
+  loader <- .pkg_loader()          # the framework this session runs, for each worker
 
   per_worker_gb <- .final_worker_gb(data$store, windows)
   n_workers <- max(1L, min(n_cores %/% threads_per_unit, nrow(todo)))
@@ -614,7 +614,7 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
     scaling = scaling, cfgs = selected, units = todo, training = training,
     transform = transform, run_dir = run_dir, claims_dir = claims_dir,
     threads = threads_per_unit)
-  .dlc_check_portable(job, "dsm_final()")
+  .pkg_check_portable(job, "dsm_final()")
 
   t0 <- Sys.time()
   procs <- lapply(seq_len(n_workers), function(w) {

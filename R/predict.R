@@ -1249,14 +1249,14 @@ print.dsm_prediction <- function(x, ...) {
     stop("dsm_predict() maps in worker processes and needs the callr package. ",
          "install.packages(\"callr\").", call. = FALSE)
   }
-  loader <- .dlc_loader()          # the framework this session runs, for each worker
+  loader <- .pkg_loader()          # the framework this session runs, for each worker
   claims_dir <- file.path(run_dir, paste0(".claims_", tag))
   logs_dir   <- file.path(run_dir, "logs")
   unlink(claims_dir, recursive = TRUE)          # stale claims of a run that died
   create_output_dirs(c(claims_dir, logs_dir, job$units_dir))
   job$claims_dir <- claims_dir
   job$units <- units
-  .dlc_check_portable(job, "dsm_predict()")
+  .pkg_check_portable(job, "dsm_predict()")
   done_paths <- .predict_done_path(job$units_dir, units$unit_id)
   cells <- as.numeric(units$r1 - units$r0 + 1L) * (units$c1 - units$c0 + 1L)
 

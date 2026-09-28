@@ -1,7 +1,11 @@
-# r-cnn-soil-mapping
+# SoilCNN
 
 <p align="center">
-  <img src="https://img.shields.io/badge/R-%3E%3D4.1-276DC3?style=flat-square&logo=r&logoColor=white"/>
+  <strong>Convolutional Neural Networks for Digital Soil Mapping</strong>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/R-%3E%3D4.5-276DC3?style=flat-square&logo=r&logoColor=white"/>
   <img src="https://img.shields.io/badge/torch-deep%20learning-EE4C2C?style=flat-square&logo=pytorch&logoColor=white"/>
   <img src="https://img.shields.io/badge/domain-digital%20soil%20mapping-4CAF50?style=flat-square"/>
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"/>
@@ -10,7 +14,8 @@
 
 <p align="center">
   A <strong>caret-style hyperparameter tuning framework</strong> for dual-branch CNNs applied to
-  <strong>digital soil mapping</strong> with raster predictors — in R.
+  <strong>digital soil mapping</strong> with raster predictors — in R, as the
+  package <code>soilcnn</code>.
 </p>
 
 ---
@@ -220,7 +225,7 @@ Beside `R/`:
 
 | Where | What |
 |------|---------|
-| [`DESCRIPTION`](DESCRIPTION) · [`NAMESPACE`](NAMESPACE) | The package, `deeplearningcaret`: what it imports, and the 100 functions it exports — every one some script calls. NAMESPACE is what roxygen2 writes from the `@export` tags, and `tests/test_package_metadata.R` checks that it still is |
+| [`DESCRIPTION`](DESCRIPTION) · [`NAMESPACE`](NAMESPACE) | The package, `soilcnn`: what it imports, and the 100 functions it exports — every one some script calls. NAMESPACE is what roxygen2 writes from the `@export` tags, and `tests/test_package_metadata.R` checks that it still is |
 | [`tests/run_all.R`](tests/run_all.R) | 31 files: 25 fast, then 6 slow ones that train, map, and build and install the package. The package is loaded once for the suite. Every accumulator is named and `.report()` refuses an empty, unnamed, NA-bearing or non-logical one. `test_sources_parse.R` runs first and is the authority on syntax. |
 | [`tools/`](tools/) | Three Python checks that need no R: `r_lint.py` (a top-level `else`, the native pipe — the two mistakes that have cost a round trip here; has a `--selftest`), `r_calls.py` (every project function a script calls exists, `do.call` targets included; named arguments match formals), `r_skeleton.py` (an edit touched only comments and strings). Run them after any edit made without an R session. |
 | [`utils/install_load_pkg.R`](utils/install_load_pkg.R) | Installs what is missing, then **stops** if a package will not load |
@@ -230,7 +235,7 @@ Beside `R/`:
 ## Quickstart
 
 ```r
-pkgload::load_all(".")          # the package, from this source tree (or library(deeplearningcaret))
+pkgload::load_all(".")          # the package, from this source tree (or library(soilcnn))
 
 data <- dsm_load(
   patch_dir    = "outputs/patches/.../",
@@ -544,11 +549,11 @@ is missing and then **stops** if a package will not load — it used to say
 
 ### Loading it
 
-The framework is an R package, `deeplearningcaret`:
+The framework is an R package, `soilcnn`:
 
 ```r
 pkgload::load_all("<project root>")         # the source tree, as it stands -- what the scripts do
-library(deeplearningcaret)                  # an installed copy
+library(soilcnn)                            # an installed copy
 ```
 
 To install a copy, build the tarball first: `R CMD INSTALL` of the directory

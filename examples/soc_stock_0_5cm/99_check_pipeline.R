@@ -41,7 +41,7 @@ setwd(project_root)
 # example's orchestrator -- anyone using the framework on other data gets the
 # same checks without copying anything from here.
 # The framework is a package: pkgload::load_all() loads it from this source
-# tree as it stands. library(deeplearningcaret) loads an installed copy.
+# tree as it stands. library(soilcnn) loads an installed copy.
 pkgload::load_all(project_root)
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -125,7 +125,7 @@ project_root <- (function() {
 setwd(project_root)
 
 # The framework is a package: pkgload::load_all() loads it from this source
-# tree as it stands. library(deeplearningcaret) loads an installed copy.
+# tree as it stands. library(soilcnn) loads an installed copy.
 pkgload::load_all(project_root)
 
 # ── Settings ──────────────────────────────────────────────────────────────────
@@ -524,12 +524,12 @@ message(strrep("=", 78))
 # the end; a script that stops midway leaves a wrapper that is semantically the
 # original, and the next pkgload::load_all() replaces it anyway.
 .b3_augment_d4_batch_real <- get("augment_d4_batch",
-                                 envir = asNamespace("deeplearningcaret"))
+                                 envir = asNamespace("soilcnn"))
 .b3_augment_calls <- 0L
 utils::assignInNamespace("augment_d4_batch", function(tensor_list) {
   .b3_augment_calls <<- .b3_augment_calls + 1L
   .b3_augment_d4_batch_real(tensor_list)
-}, ns = "deeplearningcaret")
+}, ns = "soilcnn")
 
 # Checkpoints are written only after a unit finishes, so counting them before
 # and after an arm says how many units THIS session actually trained -- which is
@@ -1079,7 +1079,7 @@ if (!is.null(repro) && nrow(repro) > 0L) {
 # anyway -- but leaving a wrapper behind for the next reader to discover is
 # not a courtesy.
 utils::assignInNamespace("augment_d4_batch", .b3_augment_d4_batch_real,
-                         ns = "deeplearningcaret")
+                         ns = "soilcnn")
 rm(.b3_augment_d4_batch_real, .b3_augment_calls)
 
 message("\nB3 complete: ", verdict_code)

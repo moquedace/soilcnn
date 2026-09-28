@@ -105,7 +105,7 @@
 #' @param root The project root.
 #' @return The package's namespace, invisibly.
 .load_framework <- function(root) {
-  suite <- isTRUE(get0(".dlc_suite_loaded", envir = parent.frame(), inherits = FALSE))
+  suite <- isTRUE(get0(".suite_loaded", envir = parent.frame(), inherits = FALSE))
   if (!suite) {
     if (!requireNamespace("pkgload", quietly = TRUE)) {
       stop("The tests load the framework with pkgload::load_all(): ",

@@ -106,7 +106,7 @@ for (tf in test_files) {
     loaded <- TRUE
   }
   test_env <- new.env()
-  test_env$.dlc_suite_loaded <- TRUE
+  test_env$.suite_loaded <- TRUE
   status[tf] <- tryCatch(
     {
       source(file.path(root, "tests", tf), local = test_env)

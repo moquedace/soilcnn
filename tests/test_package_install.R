@@ -70,10 +70,10 @@ lib <- file.path(work, "lib")
 dir.create(lib)
 
 # ── 1-2. a worker of this session: the source tree, fingerprint checked ──────
-loader <- .dlc_loader()
+loader <- .pkg_loader()
 seen <- callr::r(function(l) {
   ns <- l$open(l)
-  list(hash = get(".dlc_state", envir = ns)$code_hash,
+  list(hash = get(".pkg_state", envir = ns)$code_hash,
        path = getNamespaceInfo(ns, "path"),
        dev  = pkgload::is_dev_package(l$package))
 }, args = list(loader))
@@ -108,24 +108,24 @@ if (inst$status != 0L) {
              collapse = "\n"), call. = FALSE)
 }
 ok["installed_into_the_temporary_library"] <-
-  file.exists(file.path(lib, "deeplearningcaret", "DESCRIPTION"))
+  file.exists(file.path(lib, "soilcnn", "DESCRIPTION"))
 
 # ── 5-7. a fresh process, as a user of the installed package ─────────────────
 got <- callr::r(function(lib) {
-  library(deeplearningcaret, lib.loc = lib)
-  ns <- asNamespace("deeplearningcaret")
-  exports <- getNamespaceExports("deeplearningcaret")
-  loader <- get(".dlc_loader", envir = ns)()
+  library(soilcnn, lib.loc = lib)
+  ns <- asNamespace("soilcnn")
+  exports <- getNamespaceExports("soilcnn")
+  loader <- get(".pkg_loader", envir = ns)()
   # A worker of THIS session, started as dsm_predict() starts one.
   worker <- callr::r(function(l) {
     ns <- l$open(l)
-    list(hash = get(".dlc_state", envir = ns)$code_hash,
+    list(hash = get(".pkg_state", envir = ns)$code_hash,
          path = getNamespaceInfo(ns, "path"))
   }, args = list(loader))
   list(
     api = c("dsm_prepare", "dsm_load", "spatial_cv", "knndm_cv", "dsm_train",
             "one_se", "dsm_final", "dsm_predict") %in% exports,
-    internal_hidden = !any(c(".dlc_loader", ".predict_worker", ".check_cnn_grid") %in% exports),
+    internal_hidden = !any(c(".pkg_loader", ".predict_worker", ".check_cnn_grid") %in% exports),
     models = sort(list_models()$name),
     # From the global environment, where print.dsm_fit is not visible: only a
     # REGISTERED method is found from here, and only a registered one
@@ -134,7 +134,7 @@ got <- callr::r(function(lib) {
                                      envir = globalenv())),
     loader = loader[c("package", "dev", "path", "code_hash")],
     worker = worker,
-    lib_path = normalizePath(file.path(lib, "deeplearningcaret"), winslash = "/"))
+    lib_path = normalizePath(file.path(lib, "soilcnn"), winslash = "/"))
 }, args = list(lib), libpath = c(lib, .libPaths()))
 
 ok["installed_exports_the_api"] <- all(got$api)

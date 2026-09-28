@@ -5494,12 +5494,14 @@ português (`06_avaliacao_grafica.R` e as saídas dele).
 - `test_final.R`: o final herda o `clamp`, e outro é recusado;
 - `test_api_run.R`: a rodada guarda o `clamp` que recebeu.
 
-## 2026-09-28 — O repositório é um pacote: `deeplearningcaret`
+## 2026-09-28 — O repositório é um pacote: `soilcnn`
 
-O item "Toward a package" do roadmap. Dois commits:
+O item "Toward a package" do roadmap. Os commits:
 
 - 0616460: `DESCRIPTION`, `NAMESPACE` e as tags `@export`;
-- bcd3b0b: o framework carrega como pacote, e o `R/load_all.R` sumiu.
+- bcd3b0b: o framework carrega como pacote, e o `R/load_all.R` sumiu;
+- c605c16: o carregador pergunta pelo próprio ambiente, não pelo do nome;
+- o nome definitivo, `soilcnn` (o primeiro foi `deeplearningcaret`).
 
 ### O que mudou para quem roda
 
@@ -5508,7 +5510,7 @@ O item "Toward a package" do roadmap. Dois commits:
   `R/`, nem os nove scripts antigos (05a, 05b, 05c, 06, 99b, `_b4`,
   `_diagnose_predictor_gaps`, `_measure_knndm`, 05a_test) que carregavam só o
   `utils.R`.
-- **`library(deeplearningcaret)` carrega uma cópia instalada.** A instalação
+- **`library(soilcnn)` carrega uma cópia instalada.** A instalação
   passa por um tarball (`pkgbuild::build()`, depois `install.packages()`).
   `R CMD INSTALL` direto no diretório copiaria o `data/` inteiro para a
   biblioteca, com as subpastas; o `.Rbuildignore` deixa `data/`, `outputs/`,
@@ -5520,11 +5522,28 @@ O item "Toward a package" do roadmap. Dois commits:
 
 ### As decisões, e o que perdeu
 
-- **O nome, `deeplearningcaret`**, é o que o `R/load_all.R` já anunciava. O
-  R não aceita `_` em nome de pacote. Perdeu: um nome tirado do repositório
-  no GitHub (`r-cnn-soil-mapping`). Enquanto os scripts usam
-  `pkgload::load_all()`, o nome aparece só no `DESCRIPTION` e trocá-lo é uma
-  linha.
+- **O nome é `soilcnn`**, escolhido pelo autor. Na apresentação (README,
+  slides) é **SoilCNN**, e o subtítulo é o `Title` do `DESCRIPTION`:
+  *Convolutional Neural Networks for Digital Soil Mapping*.
+  - O critério foi dizer o que o pacote faz. Quem é de MDS entende na hora.
+  - Está livre no CRAN, tanto nos pacotes atuais quanto no arquivo, e no
+    R-universe. Na busca, só um template de treino em Python usa o nome.
+  - Vai em minúsculas porque nome de pacote no R diferencia maiúsculas:
+    `library(soilcnn)` num pacote `SoilCNN` falha. É também a regra de nomes
+    do projeto.
+
+  Perderam:
+  - `deeplearningcaret`, o primeiro, que o `R/load_all.R` anunciava:
+    comprido, e preso a outro pacote;
+  - nomes-metáfora (`brasa`, `solum`, `terroir`, `entorno`, `gleba`,
+    `halo`), que diziam pouco do que o pacote faz;
+  - conceitos do MDS e compostos (`scorpan`, `catena`, `soilscape`,
+    `torchdsm`, `deepdsm`, `convoscape`);
+  - misturas de caret e CAST (`deepcast`, `carta`, `castnet`/`tarrafa`,
+    `caretta`). `carrot` e `castor` já existem no CRAN.
+
+  O prefixo `.dlc_` (de "deep learning caret") das funções internas novas
+  virou `.pkg_`.
 - **A regra de exportação: exporta a função sem ponto que algum script
   chama** (`examples/`, `README.md`). São 100, mais os 20 métodos `print`,
   registrados como S3. O que só `R/` ou os testes chamam fica interno.
@@ -5544,7 +5563,7 @@ O item "Toward a package" do roadmap. Dois commits:
   ambiente global, e cada teste checaria uma mistura: as cópias soltas
   atendendo às chamadas do teste, o namespace atendendo às do framework, cada
   um com o seu registro de modelos. A suíte passa de 29 para 31 arquivos.
-- **Os workers carregam o que a sessão deles carregou** (`.dlc_loader()`, em
+- **Os workers carregam o que a sessão deles carregou** (`.pkg_loader()`, em
   `R/utils.R`): o código-fonte, ou a mesma cópia instalada. Vai para o
   worker uma descrição, e uma função `open()` cujo ambiente é o `base`.
   Perderam:
@@ -5555,7 +5574,7 @@ O item "Toward a package" do roadmap. Dois commits:
   - mandar funções do próprio pacote, que fariam a mesma coisa ao serem
     lidas.
 
-  O `.dlc_check_portable()` recusa um job que carregue qualquer coisa ligada
+  O `.pkg_check_portable()` recusa um job que carregue qualquer coisa ligada
   ao namespace.
 - **O código não pode mudar debaixo de uma rodada.** O `.onLoad()` tira uma
   impressão digital (md5) do `DESCRIPTION`, do `NAMESPACE` e de `R/`. Um

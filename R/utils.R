@@ -218,26 +218,26 @@ resolve_cores <- function(n_cores = NULL, what = "this step") {
 # it READS its arguments -- before it has set what must be set before torch
 # starts (dsm_predict()'s collection threshold), and from wherever the
 # worker's library path finds a copy first. So open() is sent with base as its
-# environment, and .dlc_check_portable() refuses a job that carries anything
+# environment, and .pkg_check_portable() refuses a job that carries anything
 # tied to the namespace.
 #
 # And the code must not change under a run. Recycled workers start hours into
 # a global map; one that loaded files edited in the meantime would map its
 # units with other code than the rest. .onLoad() fingerprints what it loaded,
 # and a worker whose fingerprint differs from its session's stops.
-.dlc_state <- new.env(parent = emptyenv())
+.pkg_state <- new.env(parent = emptyenv())
 
 # The files a load reads: the package's metadata and its R/ directory -- the
 # sources in a source tree, the lazy-load database in an installed copy, which
 # a reinstall rewrites.
-.dlc_code_hash <- function(path) {
+.pkg_code_hash <- function(path) {
   files <- c(file.path(path, c("DESCRIPTION", "NAMESPACE")),
              sort(list.files(file.path(path, "R"), full.names = TRUE)))
   files <- files[file.exists(files) & !dir.exists(files)]
   paste(unname(tools::md5sum(files)), collapse = "")
 }
 
-.dlc_loader <- function() {
+.pkg_loader <- function() {
   # The environment of THIS function, not of whatever the name finds: a
   # source()d copy would otherwise find the attached package's and pass.
   ns <- environment(sys.function())
@@ -245,7 +245,7 @@ resolve_cores <- function(n_cores = NULL, what = "this step") {
     stop("dsm_final() and dsm_predict() start workers that load the framework ",
          "as a package, and this session has it some other way -- its files ",
          "source()d, most likely.\n  Start a fresh R session and load it with ",
-         "pkgload::load_all(\"<project root>\") or library(deeplearningcaret).",
+         "pkgload::load_all(\"<project root>\") or library(soilcnn).",
          call. = FALSE)
   }
   pkg  <- unname(getNamespaceName(ns))
@@ -258,7 +258,7 @@ resolve_cores <- function(n_cores = NULL, what = "this step") {
          "directory does not hold its DESCRIPTION -- a worker could not load ",
          "the same code.", call. = FALSE)
   }
-  if (is.null(.dlc_state$code_hash)) {
+  if (is.null(.pkg_state$code_hash)) {
     stop("This session's ", pkg, " has no fingerprint of the code it loaded; ",
          "its .onLoad() did not run. Load it with library() or ",
          "pkgload::load_all().", call. = FALSE)
@@ -277,7 +277,7 @@ resolve_cores <- function(n_cores = NULL, what = "this step") {
       loadNamespace(loader$package, lib.loc = dirname(loader$path))
     }
     ns <- asNamespace(loader$package)
-    here <- get(".dlc_state", envir = ns)$code_hash
+    here <- get(".pkg_state", envir = ns)$code_hash
     if (!identical(here, loader$code_hash)) {
       stop("This worker loaded ", loader$package, " from ", loader$path,
            " and the code there is not the code its session loaded: it changed ",
@@ -288,15 +288,15 @@ resolve_cores <- function(n_cores = NULL, what = "this step") {
     ns
   }
   environment(open) <- baseenv()
-  list(package = pkg, dev = dev, path = path, code_hash = .dlc_state$code_hash,
+  list(package = pkg, dev = dev, path = path, code_hash = .pkg_state$code_hash,
        open = open)
 }
 
 # NOTHING OF THE NAMESPACE IN WHAT A WORKER RECEIVES: a function or an
 # environment in the job whose enclosure leads to this package would make the
-# worker load it while reading its arguments (see .dlc_loader()). Checked
+# worker load it while reading its arguments (see .pkg_loader()). Checked
 # before any worker starts, because what it prevents fails without a word.
-.dlc_check_portable <- function(x, who) {
+.pkg_check_portable <- function(x, who) {
   ns  <- environment(sys.function())
   bad <- character(0)
   walk <- function(v, where) {
