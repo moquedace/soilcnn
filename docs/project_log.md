@@ -5493,3 +5493,113 @@ português (`06_avaliacao_grafica.R` e as saídas dele).
   tabela;
 - `test_final.R`: o final herda o `clamp`, e outro é recusado;
 - `test_api_run.R`: a rodada guarda o `clamp` que recebeu.
+
+## 2026-09-28 — O repositório é um pacote: `deeplearningcaret`
+
+O item "Toward a package" do roadmap. Dois commits:
+
+- 0616460: `DESCRIPTION`, `NAMESPACE` e as tags `@export`;
+- bcd3b0b: o framework carrega como pacote, e o `R/load_all.R` sumiu.
+
+### O que mudou para quem roda
+
+- **Todo script e todo teste carrega o pacote a partir do código-fonte**, com
+  `pkgload::load_all(project_root)`. Nenhum faz mais `source()` de arquivo de
+  `R/`, nem os nove scripts antigos (05a, 05b, 05c, 06, 99b, `_b4`,
+  `_diagnose_predictor_gaps`, `_measure_knndm`, 05a_test) que carregavam só o
+  `utils.R`.
+- **`library(deeplearningcaret)` carrega uma cópia instalada.** A instalação
+  passa por um tarball (`pkgbuild::build()`, depois `install.packages()`).
+  `R CMD INSTALL` direto no diretório copiaria o `data/` inteiro para a
+  biblioteca, com as subpastas; o `.Rbuildignore` deixa `data/`, `outputs/`,
+  `examples/`, `tests/` e `docs/` fora do tarball.
+- **Uma sessão que já fez `source(R/load_all.R)` precisa ser reiniciada.** As
+  cópias que ele deixou no ambiente global responderiam às chamadas diretas
+  dos testes no lugar do pacote. O `.load_framework()` dos testes recusa essa
+  sessão e diz para reiniciar.
+
+### As decisões, e o que perdeu
+
+- **O nome, `deeplearningcaret`**, é o que o `R/load_all.R` já anunciava. O
+  R não aceita `_` em nome de pacote. Perdeu: um nome tirado do repositório
+  no GitHub (`r-cnn-soil-mapping`). Enquanto os scripts usam
+  `pkgload::load_all()`, o nome aparece só no `DESCRIPTION` e trocá-lo é uma
+  linha.
+- **A regra de exportação: exporta a função sem ponto que algum script
+  chama** (`examples/`, `README.md`). São 100, mais os 20 métodos `print`,
+  registrados como S3. O que só `R/` ou os testes chamam fica interno.
+  Perderam:
+  - exportar tudo o que não tem ponto (172): 40 funções que ninguém fora de
+    `R/` chama virariam promessa;
+  - desenhar a API à mão agora: é decisão para quando os exemplos saírem.
+    Até lá a lista é a API como os scripts a usam.
+- **Os modelos se registram no `.onLoad()`** (`R/zzz.R`), não no topo do
+  `baselines.R`. O pacote lê os arquivos na instalação, em ordem alfabética,
+  e `baselines.R` vem antes de `model_registry.R`: o `register_model()` ainda
+  não existe. Perdeu: um campo `Collate` no `DESCRIPTION`, que seria a lista
+  do `load_all.R` de novo, um segundo lugar para manter em dia.
+- **Os testes carregam o pacote, uma vez por suíte** (o `run_all.R` carrega e
+  marca o ambiente de cada teste), ou uma vez cada quando rodam sozinhos.
+  Perdeu: manter o `source()` arquivo por arquivo. Os arquivos iriam para o
+  ambiente global, e cada teste checaria uma mistura: as cópias soltas
+  atendendo às chamadas do teste, o namespace atendendo às do framework, cada
+  um com o seu registro de modelos. A suíte passa de 29 para 31 arquivos.
+- **Os workers carregam o que a sessão deles carregou** (`.dlc_loader()`, em
+  `R/utils.R`): o código-fonte, ou a mesma cópia instalada. Vai para o
+  worker uma descrição, e uma função `open()` cujo ambiente é o `base`.
+  Perderam:
+  - a opção `package =` do `callr`, que carrega o namespace antes de a
+    entrada do worker rodar. Isso é antes do limiar de coleta do torch que o
+    `dsm_predict()` define, e é a cópia instalada, qualquer que fosse a da
+    sessão;
+  - mandar funções do próprio pacote, que fariam a mesma coisa ao serem
+    lidas.
+
+  O `.dlc_check_portable()` recusa um job que carregue qualquer coisa ligada
+  ao namespace.
+- **O código não pode mudar debaixo de uma rodada.** O `.onLoad()` tira uma
+  impressão digital (md5) do `DESCRIPTION`, do `NAMESPACE` e de `R/`. Um
+  worker cuja impressão difere da sessão dele para antes da primeira unidade.
+  É a pergunta feita durante o P5 ("vamos avançar enquanto roda?"): um worker
+  reciclado horas depois, num mapa global, mapearia com o que foi editado
+  nesse meio-tempo, e o mapa sairia feito de dois códigos.
+- **Os workers de banda do `dsm_prepare()` não carregam o pacote.** Recebem
+  cópias das seis funções deles com o ambiente global. Perdeu: carregar o
+  pacote em cada worker. Numa sessão do código-fonte isso carregaria a cópia
+  instalada, e cada um dos quinze ligaria o torch só para ler raster.
+- **R >= 4.5.0** é o R mais antigo em que isto rodou, não um palpite sobre o
+  mais antigo em que rodaria.
+- **A `LICENSE` virou o formato de duas linhas do R para MIT**, e o texto
+  inteiro foi para `LICENSE.md`.
+- **O `_b3` contava as chamadas de `augment_d4_batch()` com um embrulho no
+  ambiente global.** Num pacote o `train_one_cnn()` acha a própria cópia
+  primeiro, e o embrulho nunca seria chamado. Agora ele vai para o namespace
+  (`assignInNamespace()`).
+
+### Testes
+
+- **`test_package_metadata.R`** (rápido) checa:
+  - que o `NAMESPACE` é o que as tags dizem, na ordem do roxygen2;
+  - que cada export existe e cada `print.<classe>` está registrado;
+  - que o `DESCRIPTION` declara todo `pkg::` de `R/` (pelos tokens do
+    parser) e que todo import é usado;
+  - que nenhum arquivo de `R/` faz `source()`;
+  - o carregador e a guarda de portabilidade.
+- **`test_package_install.R`** (lento, ~2 min):
+  - um worker da sessão do código-fonte abre o mesmo código;
+  - um worker recusa uma impressão digital trocada;
+  - o tarball deixa os dados de fora;
+  - a instalação vai para uma biblioteca temporária, e o pacote carrega num
+    processo novo;
+  - nesse processo, a API está exportada e os internos não, o `print`
+    despacha, e os três modelos estão registrados;
+  - um worker dessa sessão abre a mesma cópia instalada.
+
+### O que falta do item
+
+- **As páginas de ajuda.** O `roxygen2::roxygenise()` escreve o `man/` a
+  partir dos blocos `#'` que os módulos já têm. O roxygen2 ainda não está
+  instalado.
+- **O `quickstart.R` como vinheta.** O exemplo do SOC fica fora do pacote.
+- **Os sete `docs/*.md` desatualizados.**
+- **Curar a lista de exportação.**

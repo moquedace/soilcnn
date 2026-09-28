@@ -30,9 +30,9 @@ What the framework guarantees, each with the test that proves it:
 | "latest" means newest **finished** run, by time | `utils.R` | `test_run_dirs` |
 | a check ledger cannot pass by doing nothing | `checks.R` | `test_checks` |
 
-The suite is `tests/run_all.R`: 24 files, ~790 assertions, ~3.5 min. Every
-file's accumulator is named and every `.report()` refuses an empty, unnamed,
-NA-bearing or non-logical one.
+The suite is `tests/run_all.R`: 31 files, 25 fast and 6 slow, with the
+package loaded once for all of them. Every file's accumulator is named and
+every `.report()` refuses an empty, unnamed, NA-bearing or non-logical one.
 
 ### The worked example (`examples/soc_stock_0_5cm/`)
 
@@ -196,9 +196,33 @@ would hit it:
 
 ### Toward a package
 
-`R/load_all.R` says it: "when this becomes a package this file disappears and
-`library()` takes its place." What stands between here and that:
+`R/load_all.R` said it: "when this becomes a package this file disappears and
+`library()` takes its place." **It has, 2026-09-28** (0616460, bcd3b0b): the
+repository is the package `deeplearningcaret`, and `R/load_all.R` is gone.
 
+- ~~`DESCRIPTION`, `NAMESPACE` (roxygen)~~ — **done.** Imports are what a core
+  call uses unconditionally; what sits behind a `requireNamespace()` guard is
+  a Suggest. NAMESPACE is what roxygen2 writes from the `@export` tags: 100
+  exports — every non-dot function some script calls — and the 20 print
+  methods. `tests/test_package_metadata.R` checks it against the tags, and
+  DESCRIPTION against the `pkg::` calls.
+- ~~One way to load~~ — **done.** Scripts and tests load the source tree with
+  `pkgload::load_all()`; `library(deeplearningcaret)` loads an installed
+  copy, built through a tarball (`R CMD INSTALL` of the directory copies
+  `data/`). The models register in `.onLoad()`. Workers load what their
+  session loaded and stop if the code changed since; `dsm_prepare()`'s band
+  workers never load the package. `tests/test_package_install.R` builds,
+  installs into a temporary library and loads it in a fresh process.
+- **The help pages.** `roxygen2::roxygenise()` writes `man/` from the `#'`
+  blocks the modules already carry; roxygen2 is not installed yet.
+- **`examples/`.** The worked example stays outside the package — it is the
+  SOC project, with its paths and its data, and the tarball leaves it out;
+  `quickstart.R` becomes a vignette. 03, 03b and 04 still type
+  `n_threads = 30` where `setup_torch_device()` would read the machine (T1
+  measured 30 and 15 a wash).
+- **The export list is the API as the scripts use it**, not yet as designed:
+  some helpers only the check scripts call (`patch_gather()`,
+  `patch_window_key()`) may not belong in it. Curated when the examples move.
 - ~~**The example headers.**~~ **Done, 2026-09-21.** 26 files carried
   `project_root <- "D:/usuario_armazenamento/..."` and 15 of them fetched
   `install_load_pkg()` from a GitHub URL on every run — so the project ran on
@@ -215,10 +239,6 @@ would hit it:
   and no amount of self-location can find it. It is a setting and it belongs
   in sight at the top of the script that needs it.
 
-- `DESCRIPTION`, `NAMESPACE` (roxygen), moving `examples/` to `inst/` or a
-  vignette. (`setup_torch_device()` and `dsm_train(n_cores = NULL)` already
-  read the machine; the examples' hand-typed 30 is replaced by what T1
-  measures.)
 - The seven `docs/*.md` files that predate the last month (see the audit's
   drift list).
 
