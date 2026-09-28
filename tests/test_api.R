@@ -300,14 +300,15 @@ ok["a_resume_with_the_same_clamp_goes_on"] <-
 unlink(cl_dir, recursive = TRUE)
 
 # A grid asking for a window the data was not loaded with must name the fix.
-if ("cnn" %in% list_models()$name) {
+# A whole grid, since dsm_train() now refuses one that lacks a column before
+# it gets as far as the windows.
+if ("cnn" %in% list_models()$name && exists("make_manual_tune_grid", mode = "function")) {
   small <- fake_data
   small$store$window_sizes <- 3L
   msg <- tryCatch(
     dsm_train(small, model = "cnn",
               resampling = p_spatial,
-              tune_grid = tibble::tibble(config_id = "c1",
-                                         window_sizes = list(c(3L, 21L)))),
+              tune_grid = make_manual_tune_grid(window_sizes = list(c(3L, 21L)))),
     error = function(e) conditionMessage(e))
   ok["missing_window_names_the_fix"] <-
     is.character(msg) && grepl("dsm_load", msg) && grepl("21", msg)

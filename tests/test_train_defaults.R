@@ -201,6 +201,50 @@ if (requireNamespace("torch", quietly = TRUE)) {
   invisible(suppressMessages(set_torch_threads(before)))
 }
 
+# ── 5. a grid given by hand, checked against the parameter space ─────────────
+#
+# A missing or misspelt column used to surface at the first unit -- after the
+# plan and the fold cache -- or, for an optional one, never. dsm_train() now
+# checks a grid it is given, at the door; the columns come from the space.
+g_ok <- make_manual_tune_grid(window_sizes = list(c(3L, 9L)), base_lr = c(1e-3, 3e-4))
+ok["a_grid_from_the_space_passes_unchanged"] <-
+  identical(.check_cnn_grid(g_ok, verbose = FALSE), g_ok)
+ok["the_grid_columns_come_from_the_space"] <-
+  setequal(.cnn_grid_columns(), c("config_id", names(.cnn_param_space), names(.expand_dropout(0))))
+g_typo <- g_ok; names(g_typo)[names(g_typo) == "base_lr"] <- "base_rl"
+ok["a_misspelt_required_column_is_refused_and_named"] <- {
+  m <- err(.check_cnn_grid(g_typo, verbose = FALSE))
+  grepl("lacks column", m) && grepl("base_lr", m) && grepl("base_rl", m)
+}
+g_opt <- g_ok; names(g_opt)[names(g_opt) == "embed_pool"] <- "embed_pol"
+ok["a_misspelt_optional_column_is_refused"] <-
+  grepl("look misspelt", err(.check_cnn_grid(g_opt, verbose = FALSE)))
+g_extra <- g_ok; g_extra$val_ccc_mean <- c(0.5, 0.6)
+ok["a_column_that_is_no_parameter_is_carried_along"] <-
+  identical(.check_cnn_grid(g_extra, verbose = FALSE)$val_ccc_mean, c(0.5, 0.6))
+g_knob <- g_ok[, setdiff(names(g_ok), names(.expand_dropout(0)))]
+g_knob$dropout <- c(0.2, 0)
+g_knob_out <- .check_cnn_grid(g_knob, verbose = FALSE)
+ok["the_dropout_knob_alone_is_expanded_as_the_generator_does"] <-
+  isTRUE(all.equal(g_knob_out$head_dropout_1, c(0.2, 0))) &&
+  isTRUE(all.equal(g_knob_out$gate_dropout, c(0.1, 0)))
+g_part <- g_ok[, setdiff(names(g_ok), "gate_dropout")]
+ok["some_dropout_sites_without_the_others_are_refused"] <-
+  grepl("some of the five", err(.check_cnn_grid(g_part, verbose = FALSE)))
+g_dup <- g_ok; g_dup$config_id <- c("a", "a")
+ok["a_duplicated_config_id_is_refused"] <- grepl("unique", err(.check_cnn_grid(g_dup, verbose = FALSE)))
+g_even <- g_ok; g_even$window_sizes <- list(4L, c(3L, 9L))
+ok["an_even_window_is_refused"] <- grepl("odd", err(.check_cnn_grid(g_even, verbose = FALSE)))
+g_gate <- g_ok; g_gate$gate_type <- c("vector_feature", "vector_featurewise")
+ok["an_unknown_gate_is_refused_with_the_known_ones"] <- {
+  m <- err(.check_cnn_grid(g_gate, verbose = FALSE))
+  grepl("vector_feature,|vector_feature\\.", m) && grepl("no_gate_concat", m)
+}
+g_lr <- g_ok; g_lr$base_lr <- c(0, 1e-3)
+ok["a_learning_rate_of_zero_is_refused"] <- grepl("base_lr", err(.check_cnn_grid(g_lr, verbose = FALSE)))
+ok["dsm_train_refuses_a_bad_grid_before_the_plan"] <-
+  grepl("lacks column", err(dsm_train(d_bare, model = "cnn", tune_grid = g_typo, verbose = FALSE)))
+
 cat(sprintf("  window options 3/9/15    : %s\n",
             paste(vapply(.window_options(c(3L, 9L, 15L)), paste, character(1),
                          collapse = "+"), collapse = ", ")))

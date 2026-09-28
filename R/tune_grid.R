@@ -454,3 +454,135 @@ make_manual_tune_grid <- function(...) {
     warmup_epochs   = as.integer(scalar_df$warmup_epochs)
   )
 }
+
+# ── A GRID GIVEN BY HAND, CHECKED AGAINST THE SPACE IT SHOULD HAVE COME FROM ──
+#
+# make_tune_grid() and make_manual_tune_grid() write every column the network
+# and its training read. A grid written or edited by hand could lack one or
+# misspell one, and the run found out at its first unit -- after the plan
+# was resolved and the fold cache built -- or never: an optional column
+# misspelt is a column silently left at its default. So dsm_train() checks a
+# grid it is given, at the door. The columns are derived from the parameter
+# space (and the five dropout sites the single knob expands to), so a
+# parameter added there is required here with no second list to keep.
+.cnn_grid_columns <- function() {
+  c("config_id", names(.cnn_param_space), names(.expand_dropout(0)))
+}
+
+.check_cnn_grid <- function(grid, verbose = TRUE) {
+  if (!is.data.frame(grid) || nrow(grid) == 0L) {
+    stop("tune_grid must be a data frame with one row per configuration; ",
+         "make_tune_grid() or make_manual_tune_grid() build one.", call. = FALSE)
+  }
+  canon <- .cnn_grid_columns()
+  sites <- names(.expand_dropout(0))
+  # The builder defaults these two for grids written before they existed, and
+  # `dropout` only feeds the five sites.
+  optional <- c("embed_pool", "conv_padding", "dropout")
+  have <- names(grid)
+  if (!any(sites %in% have) && "dropout" %in% have) {
+    d <- do.call(rbind, lapply(grid$dropout, function(x) as.data.frame(.expand_dropout(x))))
+    for (s in sites) grid[[s]] <- as.numeric(d[[s]])
+    have <- names(grid)
+    if (verbose) {
+      message("tune_grid: dropout expanded into its five sites (", paste(sites, collapse = ", "),
+              "), as make_tune_grid() does.")
+    }
+  } else if (any(sites %in% have) && !all(sites %in% have)) {
+    stop("tune_grid has some of the five dropout sites and not the others (missing: ",
+         paste(setdiff(sites, have), collapse = ", "), "). Give all five, or only `dropout` ",
+         "and let it be expanded.", call. = FALSE)
+  }
+  unknown <- setdiff(have, canon)
+  # Two names are one misspelt when they are at most two edits apart and those
+  # are under a third of the name: base_rl is base_lr, embed_pol embed_pool,
+  # and dropout_rate is not dropout. Whole names, not agrep()'s substrings.
+  near <- function(nm, pool) {
+    if (length(pool) == 0L) return(NA_character_)
+    d <- as.numeric(utils::adist(nm, pool))
+    i <- which.min(d)
+    if (d[i] <= 2 && d[i] <= 0.3 * max(nchar(nm), nchar(pool[i]))) pool[i] else NA_character_
+  }
+  missing <- setdiff(setdiff(canon, optional), have)
+  if (length(missing)) {
+    hint <- vapply(missing, function(m) {
+      u <- near(m, unknown)
+      if (is.na(u)) "" else sprintf(" (is '%s' it?)", u)
+    }, character(1))
+    stop("tune_grid lacks column(s) the network or its training reads: ",
+         paste0(missing, hint, collapse = ", "), ".\n  make_manual_tune_grid() fills every ",
+         "column from the parameter space.", call. = FALSE)
+  }
+  # An unknown column that looks like an optional one the grid lacks is a
+  # misspelling: under its own name its value would be left at the default.
+  lacking <- setdiff(optional, have)
+  typo <- Filter(function(u) !is.na(near(u, lacking)), unknown)
+  if (length(typo)) {
+    stop("tune_grid column(s) ", paste(sprintf("'%s' (%s?)", typo,
+                                               vapply(typo, near, character(1), pool = lacking)),
+                                       collapse = ", "),
+         " look misspelt: under their own name they would be left at the default.",
+         call. = FALSE)
+  }
+  if (length(unknown) && verbose) {
+    message("tune_grid: column(s) that are not parameters, carried along and not read: ",
+            paste(unknown, collapse = ", "), ".")
+  }
+
+  id <- as.character(grid$config_id)
+  if (anyNA(id) || any(!nzchar(id)) || anyDuplicated(id)) {
+    stop("tune_grid$config_id must be unique and not empty: the run names each ",
+         "configuration by it.", call. = FALSE)
+  }
+  whole <- function(v, lo) is.numeric(v) && all(is.finite(v)) && all(v == round(v)) && all(v >= lo)
+  for (col in c("window_sizes", "conv_channels")) {
+    if (!is.list(grid[[col]])) {
+      stop("tune_grid$", col, " must be a list-column, one integer vector a row: ",
+           "list(c(3L, 9L)).", call. = FALSE)
+    }
+  }
+  bad <- which(!vapply(grid$window_sizes, function(v)
+    length(v) %in% 1:2 && whole(v, 1) && all(v %% 2 == 1), logical(1)))
+  if (length(bad)) {
+    stop("tune_grid$window_sizes must hold one or two odd whole numbers a row -- a ",
+         "window has a centre pixel; row(s) ", paste(bad, collapse = ", "), ".", call. = FALSE)
+  }
+  bad <- which(!vapply(grid$conv_channels, function(v) length(v) >= 1L && whole(v, 1), logical(1)))
+  if (length(bad)) {
+    stop("tune_grid$conv_channels must hold whole numbers >= 1 a row; row(s) ",
+         paste(bad, collapse = ", "), ".", call. = FALSE)
+  }
+  choice <- function(col, known) {
+    if (!col %in% names(grid)) return(invisible(NULL))
+    v <- as.character(grid[[col]])
+    off <- setdiff(unique(v), known)
+    if (length(off)) {
+      stop("tune_grid$", col, " has value(s) the network does not know: ",
+           paste(off, collapse = ", "), ". Known: ", paste(known, collapse = ", "), ".",
+           call. = FALSE)
+    }
+  }
+  choice("gate_type", .valid_gate_types)
+  choice("embed_pool", .valid_embed_pools)
+  choice("conv_padding", .valid_conv_paddings_model)
+  choice("loss_fn", .cnn_param_space$loss_fn)
+  num <- function(col, ok, what) {
+    v <- grid[[col]]
+    if (!is.numeric(v) || anyNA(v) || !all(ok(v))) {
+      stop("tune_grid$", col, " must be ", what, ".", call. = FALSE)
+    }
+  }
+  num("base_lr", function(v) v > 0, "a learning rate > 0")
+  num("weight_decay", function(v) v >= 0, ">= 0")
+  num("batch_size", function(v) v >= 1 & v == round(v), "a whole number >= 1")
+  num("warmup_epochs", function(v) v >= 0 & v == round(v), "a whole number >= 0")
+  num("se_reduction", function(v) v >= 1 & v == round(v), "a whole number >= 1")
+  num("embedding_dim", function(v) v >= 1 & v == round(v), "a whole number >= 1")
+  for (s in sites) num(s, function(v) v >= 0 & v < 1, "a dropout rate in [0, 1)")
+  for (col in c("use_residual", "use_se_block")) {
+    if (!is.logical(grid[[col]]) || anyNA(grid[[col]])) {
+      stop("tune_grid$", col, " must be TRUE or FALSE.", call. = FALSE)
+    }
+  }
+  grid
+}

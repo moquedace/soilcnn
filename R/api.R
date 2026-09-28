@@ -501,6 +501,10 @@ dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
            ".\n  Training options for the CNN are: ",
            paste(sort(allowed), collapse = ", "), call. = FALSE)
     }
+    # A grid given by hand is checked against the parameter space here,
+    # before the plan: a missing or misspelt column used to surface at the
+    # first unit, or never (.check_cnn_grid()).
+    if (!is.null(tune_grid)) tune_grid <- .check_cnn_grid(tune_grid, verbose = verbose)
   }
 
   # The buffer is derived from the LARGEST window in play. With an explicit
