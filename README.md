@@ -24,219 +24,60 @@
 
 Traditional ML frameworks like `caret` make spatial prediction straightforward: provide a raster stack, a target variable, and a `tuneLength` — the framework handles the rest.
 
-This project brings the same philosophy to **convolutional neural networks**, covering the full pipeline from raw rasters to a ranked comparison of CNN architectures.
+This project brings the same philosophy to **convolutional neural networks**, from a folder of rasters and a table of soil profiles to a map with its uncertainty — four calls:
 
 ```
-Rasters (TIF stack)                 Soil profiles (GPKG)
-        │                                    │
-        └────────────┬───────────────────────┘
-                     ▼
-           01_prepare_dataset.R  →  dsm_prepare()
-           Extract · QC · predictor types · patch store, stored RAW,
-           one file per window, with the recipe inside.  Decides no roles.
-                     │
-                     ▼
-           03_run_tuning.R
-           plan <- spatial_folds(meta, k, test_frac, block_size, buffer)
-           make_tune_grid(tune_length = 30)  ←──  like caret's tuneLength
-                     │
-            ┌────────┴──────────┐
-            │  config × fold × seed │   the unit of work
-            └────────┬──────────┘
-                     ▼
-           comparison_by_config.csv
-           mean ± sd over repetitions, next to the seed noise floor
-                     │
-                     ▼
-           03b_run_baselines.R
-           rf(centre) · rf(centre+window means) · mlp(centre) · cnn
-           SAME folds, SAME seeds.  The gap between the context RF and the
-           CNN is what the convolution is worth.
-                     │
-                     ▼
-           04_final_model.R
-           Refit on everything but the test set, by the tuning plan's own
-           criterion.  The scaling is written next to the weights.
-                     │
-                     ▼
-           05_predict_spatial.R      ◄── single-tile worker, not run alone at scale
-           Block-streaming · seed ensemble · median map + uncertainty layers
-                     │
-                     ▼
-           05a_run_parallel.R
-           Orchestrates many 05 workers over a row × col tile grid, with
-           resume-on-restart. (05a_test.R: cheap dry-run on a few tiles first.)
-                     │
-                     ▼
-           05b_merge_spatial_parts.R
-           Mosaics all tiles into the final wall-to-wall rasters
-                     │
-                     ▼
-           07_area_of_applicability.R
-           Where the map should be believed at all
+Soil profiles (GPKG)               Rasters (a folder of aligned TIFs)
+        │                                       │
+        └───────────────┬───────────────────────┘
+                        ▼
+   dsm_prepare()    Extract · QC · predictor types → a patch store, stored RAW,
+                    one file per window, with its recipe.  Decides no roles.
+                        │
+                        ▼
+   dsm_train()      A fold plan — spatial_cv() · knndm_cv() · random_cv() ·
+                    region_cv() · holdout_cv() — and a grid (tune_length, like
+                    caret's tuneLength).  Every (config × fold × seed), mean ± sd
+                    against the seed noise floor.  rf, mlp or any caret model
+                    under the SAME folds.
+                        │
+                        ▼
+   dsm_final()      The config the run supports (one_se), refitted under N seeds
+                    side by side; the ensemble, the conformal interval, the
+                    smearing factor, and a declaration of every hyperparameter.
+                        │
+                        ▼
+   dsm_predict()    The map: median, mean, spread, intervals, DI and AOA bands —
+                    probed at the profiles first, resumable, as large as the
+                    world at 250 m.
 ```
 
-`05_predict_spatial.R` predicts a single rectangular tile — that's the whole
-point of the 2D-tiled design (bounded RAM per process, see
-[`docs/design_decisions.md`](docs/design_decisions.md)). For anything beyond
-a one-off test tile, `05a_run_parallel.R` is what you actually run: it splits
-the raster into a `n_row_shards × n_col_shards` grid and launches many `05`
-workers concurrently, tracking progress so an interrupted job resumes instead
-of restarting. `05c_estimate_eta.R` can be run at any time while a job is in
-flight to check progress. See the [applied example](#applied-example) below
-for the full script-by-script breakdown.
-
-For the global map, [`05_dsm_predict_global.R`](examples/soc_stock_0_5cm/05_dsm_predict_global.R)
-does all of this -- and 07's DI and AOA -- in one call to `dsm_predict()`.
+The worked example runs each step as one script — `01_prepare_dataset.R`,
+`03_run_tuning.R` (and `03b_run_baselines.R`), `04_final_model.R`,
+`05_dsm_predict_global.R` — on soil organic carbon stock; see the
+[applied example](#applied-example).
 
 ---
 
-## What the framework is careful about
-
-Three things cost this project real time before they were made structural.
-
-**The split is not stored with the data.** Stage 01 writes points, coordinates,
-the target and the predictor types — and nothing about who trains. A fold plan
-decides that in stage 03, from coordinates, in seconds:
+## Installation
 
 ```r
-plan <- holdout(meta, validation_frac = 0.15, test_frac = 0.15)
-plan <- random_folds(meta, k = 5, test_frac = 0.15)
-plan <- spatial_folds(meta, k = 5, test_frac = 0.15, block_size = 2, buffer = 0.034)
-plan <- region_folds(meta, group = meta$biome, test_frac = 0.15)
+# install.packages("remotes")
+remotes::install_github("moquedace/soilcnn")
+torch::install_torch()          # once: the C++ backend the torch package needs
 ```
 
-One criterion carves the test set **and** the folds, so the two numbers a run
-reports answer the same question. Changing the strategy costs seconds; before,
-it cost a five-hour re-extraction.
-
-**A repetition is a seed, and the noise is measured.** The unit of work is
-`(config, fold, seed)`, and the seed is shared across configs on purpose, so
-two configs within a repetition start from the same draw. What the spread
-across repetitions then measures is luck — reported as a noise floor, because a
-gap between configs smaller than it is not evidence. `one_se()` is available
-for when it is not: among configs within one standard error of the best, take
-the simplest.
-
-**A row is not always an independent observation.** In 3-D soil mapping one
-profile yields several rows — 0–5, 5–15, 15–30 cm — at identical coordinates,
-from the same pit. Split those across training and validation and the model is
-scored on a depth of a profile it already learned. `holdout()` and
-`random_folds()` keep a profile together by default (`group = "auto"`), and
-`check_fold_plan()` **proves** no group was split rather than trusting the
-constructor that was meant to prevent it.
-[Wang et al. 2025, *Geoderma*](https://www.sciencedirect.com/science/article/pii/S0016706125000618)
-
-**A map needs to say where it should be believed.** A prediction exists at
-every pixel, including pixels whose predictor combination the model never saw,
-and the cross-validated CCC does not describe those. `R/aoa.R` computes a
-dissimilarity index and the area of applicability — the DI expressed in units
-of the training set's own mean pairwise distance, and the threshold derived
-from distances **across** folds, which is what makes it mean "as dissimilar as
-something cross-validation coped with".
-[Meyer & Pebesma 2021, *MEE*](https://arxiv.org/pdf/2005.07939)
-
-**Identical inputs are a defect; nearby ones are not.** Two points in the same
-raster cell give the network the same patch, bit for bit, and one can be scored
-on what the other trained on — under any plan. Two *neighbouring* points
-sharing some surrounding pixels is not a defect: under a random split it is the
-condition being measured. The leakage report keeps the two apart.
-
----
-
-## The dual-branch idea
-
-Each soil profile is represented by **two spatial patches** extracted from a stack of raster layers:
-
-| Branch | Window | Processes captured |
-|--------|--------|--------------------|
-| Small  | 3 × 3 cells | Local topography, land cover, proximity effects |
-| Large  | 9 × 9 or 15 × 15 cells | Landscape position, parent material, local climate |
-
-A window's physical extent is `window_size × raster resolution`, so pixel sizes are chosen per resolution. At the example's 250 m they span ~0.75 km (3 × 3) to ~3.75 km (15 × 15).
-
-Patches are stored **raw** and scaled when a fold's tensors are built — z-score for continuous predictors, /100 for proportions, identity for dummies — from the training rows **of that fold**. This equalises gradient flow across channels of very different magnitude (elevation in thousands against vegetation indices in 0–1), and it is what lets one 16 GB patch store serve any number of folds: the alternative is one re-extraction per fold.
-
-The scaling therefore belongs to the **fitted model**, not to the dataset. Stage 04 writes it next to the weights, and prediction reads it from there.
-
-A learned **gate** fuses the two embeddings per sample — letting each location draw from whichever spatial scale is more informative for the target variable.
-
-<details>
-<summary>Architecture diagram (click to expand)</summary>
-
-```
-Input patches
-│
-├── Branch 1 (small)          ├── Branch 2 (large)
-│   N × C × w₁ × w₁          │   N × C × w₂ × w₂
-│   Conv blocks + SE          │   Conv blocks + SE
-│   → embedding (N × E)       │   → embedding (N × E)
-│                             │
-│           f₁                │           f₂
-│            └────────┬───────┘
-│                     │
-│           Gate network
-│           input: [f₁, f₂, |f₁−f₂|, f₁⊙f₂]
-│           output: gate ∈ (0,1)ᴱ
-│
-│           fused = gate·f₁ + (1−gate)·f₂
-│
-│           Head: [fused, |f₁−f₂|] → FC → prediction
-```
-
-See [`docs/architecture.md`](docs/architecture.md) for full detail.
-For the reasoning behind every architectural and training choice see [`docs/design_decisions.md`](docs/design_decisions.md).
-</details>
-
----
-
-## Framework files
-
-| File | Purpose |
-|------|---------|
-| [`R/utils.R`](R/utils.R) | Safe I/O helpers, torch device setup, `env_*()` overrides, `latest_run_dir()` — the newest *finished* run, by time |
-| [`R/checks.R`](R/checks.R) | `check_ledger()` · `ledger_check()` · `ledger_verdict()` — a ledger whose verdict refuses to pass while a promised check is missing |
-| [`R/metrics.R`](R/metrics.R) | `ccc()` · R² · MAE · NSE · RMSE · MQI · **signed bias**, per split and per quantile group |
-| [`R/cnn_architecture.R`](R/cnn_architecture.R) | Conv blocks, residual connections, SE attention, gate types, full model |
-| [`R/final.R`](R/final.R) | `dsm_final()`: the selected config refitted under N seeds, side by side with fixed threads per seed; the ensemble, the conformal interval, the smearing factor; and `final_report.md`, which declares every hyperparameter of the chosen CNN and whether the search chose it |
-| [`R/predict.R`](R/predict.R) | `dsm_predict()`: the map, for a grid as large as the world at 250 m -- row bands read once through a buffer that keeps its halo, the network fully convolutional where that is exact (`fcn_supported()`), workers side by side and resumable; the ensemble bands, the smeared mean, the constant and the level-and-DI conformal intervals and the AOA for every calibration source given (block, kNNDM), one VRT per band; and, first, a probe that must reproduce the final model's stored predictions at the profiles |
-| [`R/tune_grid.R`](R/tune_grid.R) | `make_tune_grid()` · `make_manual_tune_grid()` with documented parameter ranges |
-| [`R/patches.R`](R/patches.R) | One patch-indexing path, shared by extraction and prediction |
-| [`R/preprocess.R`](R/preprocess.R) | QC (fold-independent) split from scaling (fold-dependent) |
-| [`R/dataset.R`](R/dataset.R) | The patch store: one file per window, the split as an index |
-| [`R/prepare.R`](R/prepare.R) | `dsm_prepare()` — a point table and a folder of aligned rasters become a patch store, with the target transform, the predictor types and the QC rules written into it as a recipe; `dsm_load(store)` then needs nothing else |
-| [`R/resample.R`](R/resample.R) | Fold plans · distance buffering · `summarise_resamples()` · `seed_noise_floor()` · `one_se()` |
-| [`R/diagnostics.R`](R/diagnostics.R) | Checks about THIS RUN on real data: patch centres, overlap between splits, run snapshots |
-| [`R/train_cnn.R`](R/train_cnn.R) | `train_one_cnn()` · `run_cnn_tuning()` · `run_cnn_resample()` |
-| [`R/model_registry.R`](R/model_registry.R) | `model_spec()` · `register_model()` · `list_models()` |
-| [`R/baselines.R`](R/baselines.R) | `rf` · `mlp` · `cnn`, registered |
-| [`R/train_table.R`](R/train_table.R) | `run_table_resample()` — tabular models, same comparison table |
-| [`R/caret_adapter.R`](R/caret_adapter.R) | `caret_spec()` — borrow ~230 models, never caret's resampling |
-| [`R/aoa.R`](R/aoa.R) | Dissimilarity index · area of applicability |
-| [`R/knndm.R`](R/knndm.R) | `knndm_folds()` · `prediction_sample()` — folds whose geometry matches what prediction faces, not what a block grid happens to give |
-| [`R/conformal.R`](R/conformal.R) | `conformal_calibrate()` · `picp_report()` — intervals with a coverage guarantee, and the check that they keep it |
-| [`R/occlusion.R`](R/occlusion.R) | `spatial_occlusion()` — does the trained network use the neighbourhood, or only the centre pixel? |
-| [`R/smearing.R`](R/smearing.R) | `smearing_factor()` · `smear()` — the back-transform of a log-trained median, and the one surface that may be summed |
-| [`R/test_optimism.R`](R/test_optimism.R) | `freeze_selection()` · `score_test_grid()` — the test set, scored only after the choice is locked |
-| [`R/api.R`](R/api.R) | **The front end**: `dsm_load()` · `spatial_cv()` · `dsm_train()` |
-| [`R/zzz.R`](R/zzz.R) | `.onLoad()`: registers the built-in models, and fingerprints the code it loaded — every worker compares its own with it before it starts |
-
-Beside `R/`:
-
-| Where | What |
-|------|---------|
-| [`DESCRIPTION`](DESCRIPTION) · [`NAMESPACE`](NAMESPACE) | The package, `soilcnn`: what it imports, and the 64 functions it exports — the `dsm_*()` front end, the resampling specs and fold constructors, the model registry, and the tools applied to results (AOA, conformal intervals, smearing, metrics, noise floor, occlusion). The runners underneath `dsm_train()`, the patch store's plumbing and the scripts' helpers are internal (`soilcnn:::`); the scripts load the source tree, where every function is visible. NAMESPACE is what roxygen2 writes from the `@export` tags, and `tests/test_package_metadata.R` checks that it still is |
-| [`tests/run_all.R`](tests/run_all.R) | 31 files: 25 fast, then 6 slow ones that train, map, and build and install the package. The package is loaded once for the suite. Every accumulator is named and `.report()` refuses an empty, unnamed, NA-bearing or non-logical one. `test_sources_parse.R` runs first and is the authority on syntax. |
-| [`tools/`](tools/) | Three Python checks that need no R: `r_lint.py` (a top-level `else`, the native pipe — the two mistakes that have cost a round trip here; has a `--selftest`), `r_calls.py` (every project function a script calls exists, `do.call` targets included; named arguments match formals), `r_skeleton.py` (an edit touched only comments and strings). Run them after any edit made without an R session. |
-| [`utils/install_load_pkg.R`](utils/install_load_pkg.R) | Installs what is missing, then **stops** if a package will not load |
+`build_vignettes = TRUE` also builds the tour (`vignette("soilcnn")`); it needs
+knitr, rmarkdown and pandoc. To work on the source tree instead, clone the
+repository and load it with `pkgload::load_all("<clone>")` — which is what every
+script in `examples/` does.
 
 ---
 
 ## Quickstart
 
-The whole chain, one call per step. The vignette (`vignette("soilcnn")`, from
-[`vignettes/soilcnn.Rmd`](vignettes/soilcnn.Rmd)) walks it with the reasons, and
-[`examples/quickstart.R`](examples/quickstart.R) runs it on the SOC data.
+The whole chain, one call per step. The vignette ([`vignettes/soilcnn.Rmd`](vignettes/soilcnn.Rmd))
+walks it with the reasons, and [`examples/quickstart.R`](examples/quickstart.R) runs it on the SOC data.
 
 ```r
 library(soilcnn)                # or pkgload::load_all(".") on the source tree
@@ -277,6 +118,7 @@ written by `dsm_prepare()` carries its own tables and recipe, so
 
 ```r
 spatial_cv(k = 5)                        # blocks of ground, buffered
+knndm_cv(k = 5, predpoints = pts)        # folds at the distances the map predicts at
 random_cv(k = 10)                        # ignores geography, on purpose
 holdout_cv(validation_frac = 0.2)        # a single split
 region_cv(group = points$biome)          # leave-one-region-out
@@ -323,8 +165,104 @@ plan stays here, with its blocks and its buffer. `caret_spec()` calls
 `train(method = "none")` with a one-row grid, so two objects never both believe
 they own the split.
 
-See the full worked example in [`examples/soc_stock_0_5cm/`](examples/soc_stock_0_5cm/)
-and the tour in [`examples/quickstart.R`](examples/quickstart.R).
+---
+
+## What the framework is careful about
+
+Three things cost this project real time before they were made structural.
+
+**The split is not stored with the data.** `dsm_prepare()` writes points,
+coordinates, the target and the predictor types — and nothing about who trains.
+A fold plan decides that when training starts, from coordinates, in seconds:
+
+```r
+plan <- holdout(meta, validation_frac = 0.15, test_frac = 0.15)
+plan <- random_folds(meta, k = 5, test_frac = 0.15)
+plan <- spatial_folds(meta, k = 5, test_frac = 0.15, block_size = 2, buffer = 0.034)
+plan <- region_folds(meta, group = meta$biome, test_frac = 0.15)
+```
+
+One criterion carves the test set **and** the folds, so the two numbers a run
+reports answer the same question. Changing the strategy costs seconds; before,
+it cost a five-hour re-extraction.
+
+**A repetition is a seed, and the noise is measured.** The unit of work is
+`(config, fold, seed)`, and the seed is shared across configs on purpose, so
+two configs within a repetition start from the same draw. What the spread
+across repetitions then measures is luck — reported as a noise floor, because a
+gap between configs smaller than it is not evidence. `one_se()` is available
+for when it is not: among configs within one standard error of the best, take
+the simplest.
+
+**A row is not always an independent observation.** In 3-D soil mapping one
+profile yields several rows — 0–5, 5–15, 15–30 cm — at identical coordinates,
+from the same pit. Split those across training and validation and the model is
+scored on a depth of a profile it already learned. `holdout()` and
+`random_folds()` keep a profile together by default (`group = "auto"`), and
+`check_fold_plan()` **proves** no group was split rather than trusting the
+constructor that was meant to prevent it.
+[Wang et al. 2025, *Geoderma*](https://www.sciencedirect.com/science/article/pii/S0016706125000618)
+
+**A map needs to say where it should be believed.** A prediction exists at
+every pixel, including pixels whose predictor combination the model never saw,
+and the cross-validated CCC does not describe those. `R/aoa.R` computes a
+dissimilarity index and the area of applicability — the DI expressed in units
+of the training set's own mean pairwise distance, and the threshold derived
+from distances **across** folds, which is what makes it mean "as dissimilar as
+something cross-validation coped with". `dsm_predict()` writes both as bands.
+[Meyer & Pebesma 2021, *MEE*](https://arxiv.org/pdf/2005.07939)
+
+**Identical inputs are a defect; nearby ones are not.** Two points in the same
+raster cell give the network the same patch, bit for bit, and one can be scored
+on what the other trained on — under any plan. Two *neighbouring* points
+sharing some surrounding pixels is not a defect: under a random split it is the
+condition being measured. The leakage report keeps the two apart.
+
+---
+
+## The dual-branch idea
+
+Each soil profile is represented by **two spatial patches** extracted from a stack of raster layers:
+
+| Branch | Window | Processes captured |
+|--------|--------|--------------------|
+| Small  | 3 × 3 cells | Local topography, land cover, proximity effects |
+| Large  | 9 × 9 or 15 × 15 cells | Landscape position, parent material, local climate |
+
+A window's physical extent is `window_size × raster resolution`, so pixel sizes are chosen per resolution. At the example's 250 m they span ~0.75 km (3 × 3) to ~3.75 km (15 × 15).
+
+Patches are stored **raw** and scaled when a fold's tensors are built — z-score for continuous predictors, /100 for proportions, identity for dummies — from the training rows **of that fold**. This equalises gradient flow across channels of very different magnitude (elevation in thousands against vegetation indices in 0–1), and it is what lets one patch store serve any number of folds: the alternative is one re-extraction per fold.
+
+The scaling therefore belongs to the **fitted model**, not to the dataset. `dsm_final()` writes it next to the weights, and `dsm_predict()` reads it from there.
+
+A learned **gate** fuses the two embeddings per sample — letting each location draw from whichever spatial scale is more informative for the target variable.
+
+<details>
+<summary>Architecture diagram (click to expand)</summary>
+
+```
+Input patches
+│
+├── Branch 1 (small)          ├── Branch 2 (large)
+│   N × C × w₁ × w₁          │   N × C × w₂ × w₂
+│   Conv blocks + SE          │   Conv blocks + SE
+│   → embedding (N × E)       │   → embedding (N × E)
+│                             │
+│           f₁                │           f₂
+│            └────────┬───────┘
+│                     │
+│           Gate network
+│           input: [f₁, f₂, |f₁−f₂|, f₁⊙f₂]
+│           output: gate ∈ (0,1)ᴱ
+│
+│           fused = gate·f₁ + (1−gate)·f₂
+│
+│           Head: [fused, |f₁−f₂|] → FC → prediction
+```
+
+See [`docs/architecture.md`](docs/architecture.md) for full detail.
+For the reasoning behind every architectural and training choice see [`docs/design_decisions.md`](docs/design_decisions.md).
+</details>
 
 ---
 
@@ -341,7 +279,7 @@ with a timestamp and a commit — the whole grid *can* be scored on it, and that
 measures something worth publishing:
 
 ```r
-freeze_selection(run_dir, "cfg_014", rule = "one_se")   # stage 04 does this
+freeze_selection(run_dir, "cfg_014", rule = "one_se")   # dsm_final() does this
 score_test_grid(run_dir, data, device = device)         # afterwards, any time
 ```
 
@@ -363,7 +301,7 @@ prevent. Nothing is retrained: the checkpoints are already on disk.
 Two independent routes to the same question, which is the point — if they
 disagree, one of the measurements is wrong and that is worth knowing.
 
-*From the outside*, stage 03b races the CNN against a forest fed the same
+*From the outside*, the baselines race the CNN against a forest fed the same
 neighbourhood with the arrangement thrown away. *From the inside*,
 `spatial_occlusion()` hides part of the patch of a trained network and
 re-predicts:
@@ -397,12 +335,20 @@ picp_report(test$obs, iv$lower, iv$upper, group = test$block, alpha = 0.1)
 ```
 
 Split conformal gives `P(y ∈ interval) ≥ 1 − α` with no distributional
-assumption, from one pass over held-out residuals. Stage 04 calibrates on the
-validation rows and checks coverage on the **test** rows — a coverage measured
-on the points that calibrated it comes out right by arithmetic, not by evidence
-— and stage 05 reads that calibration to write `soc_pi90_lower` / `_upper`
-bands. It never recomputes: two code paths producing "the interval" is how a map
-ends up claiming a coverage nobody measured.
+assumption, from one pass over held-out residuals. `dsm_final()` calibrates on
+the tuning run's **cross-validated** residuals — every point predicted once, as
+validation, somewhere — and checks coverage on the **test** rows, which neither
+trained nor calibrated anything: a coverage measured on the points that
+calibrated it comes out right by arithmetic, not by evidence. The refit's own
+validation split is only the fallback, and in the worked example it was the
+wrong set: one fold from one region, it gave a 90% interval that covered 83.6%
+of the test set, against 87.8% from the cross-validated residuals.
+
+`dsm_predict()` calibrates each interval band the same way, for every
+calibration source it is given — block folds, kNNDM folds — and writes
+`pi90_constant_lower/upper_<source>` beside `pi90_level_di_lower/upper_<source>`,
+whose width follows the predicted level and the dissimilarity index. Every
+number that calibrated a band is in the run's `calibration.csv`.
 
 **PICP** turns uncertainty from an adjective into a number that can be wrong.
 Promise 90%, deliver 61%, and you can see it. And because the conformal
@@ -435,11 +381,11 @@ out-of-fold **ensemble** residuals the conformal interval uses — the deployed
 prediction is the ensemble median, so the calibrated residual has to be the
 ensemble's and not one seed's.
 
-**Nothing is replaced.** Stage 05 writes `soc_smeared_mean_ton_ha` *beside* the
-median band and labels both, because they answer different questions: the median
-is the typical stock at a pixel and minimises absolute error; the mean is the
-only one you may add up. Silently swapping one for the other trades a known bias
-for an unknown one.
+**Nothing is replaced.** `dsm_predict()` writes `smeared_mean_<source>` *beside*
+`ensemble_median` and labels both, because they answer different questions: the
+median is the typical stock at a pixel and minimises absolute error; the mean is
+the only one you may add up. Silently swapping one for the other trades a known
+bias for an unknown one.
 
 `print.smearing_cal()` also reports S by quintile of the prediction, because
 Duan's derivation assumes the residual is independent of the prediction and that
@@ -450,22 +396,29 @@ high end, which the print warns about rather than silently averaging away.
 
 ## Tuneable parameters
 
-The table below summarises the search space. See [`docs/tuning_guide.md`](docs/tuning_guide.md) for the rationale behind every range and its connection to digital soil mapping.
+The table below summarises the search space `make_tune_grid()` draws from. See [`docs/tuning_guide.md`](docs/tuning_guide.md) for the rationale behind every range and its connection to digital soil mapping.
 
 | Parameter | Options | Controls |
 |-----------|---------|---------|
-| `window_sizes` | `c(3)` · `c(9)` · `c(15)` · `c(3,9)` · `c(3,15)` · `c(9,15)` | Spatial scale(s) |
-| `conv_channels` | `c(32,64)` to `c(128,256,256)` | Network depth & width |
+| `window_sizes` | the store's windows, alone and in pairs — e.g. `c(3)` · `c(15)` · `c(3,15)` | Spatial scale(s) |
+| `conv_channels` | `c(32,64)` · `c(64,128)` · `c(64,128,128)` · `c(128,256)` · `c(128,256,256)` | Network depth & width |
 | `use_residual` | `TRUE` · `FALSE` | Skip connections (ResNet-style) |
 | `use_se_block` | `TRUE` · `FALSE` | Channel attention |
+| `se_reduction` | 16 (fixed by default) | The SE block's bottleneck ratio |
+| `conv_padding` | `same` · `valid_large` | `same` pads with zeros; `valid_large` keeps only measured pixels on the large branch |
 | `gate_type` | `vector_featurewise` · `scalar_per_sample` · `no_gate_concat` | Branch fusion strategy |
 | `embedding_dim` | 128 · 256 · 384 · 512 | Representation size |
 | `embed_pool` | `flatten` · `gap` | Pre-embedding reduction: keep every cell (params grow with window²) vs. global average pool (window-independent, ~25× lighter for 15×15) |
 | `dropout` | 0.0 · 0.1 · 0.2 · 0.3 | Overall regularisation (maps to 5 internal sites) |
-| `base_lr` | 1e-4 → 3e-3 | Peak learning rate (Adam + warmup) |
+| `base_lr` | 1e-4 · 3e-4 · 5e-4 · 1e-3 · 2e-3 · 3e-3 | Peak learning rate (Adam + warmup) |
+| `warmup_epochs` | 5 (fixed by default) | Epochs of linear warmup to `base_lr` |
 | `loss_fn` | `smooth_l1` · `mse` · `mae` | Training objective |
-| `weight_decay` | 0 → 1e-3 | L2 regularisation |
-| `batch_size` | 128 · 256 · 512 | Mini-batch size |
+| `weight_decay` | 0 · 1e-5 · 1e-4 · 1e-3 | L2 regularisation |
+| `batch_size` | 128 · 256 · 512 — those that give the smallest fold ≥ 4 steps an epoch | Mini-batch size |
+
+`dsm_final()` writes, for the configuration it refits, every one of these with
+its value, whether the search chose it or the grid fixed it, and the values the
+grid tried (`final_report.md`, `selected_hyperparameters.csv`).
 
 ---
 
@@ -487,23 +440,25 @@ All splits (train · validation · test) are evaluated with nine metrics, also b
 
 The last two were added late, and the reason is worth stating: every other metric on this list is blind to the *sign* of the error. MAE and RMSE are unsigned by construction; R², NSE and RPD are unmoved by a constant offset in the right circumstances; CCC penalises bias but mixes it with scatter, so a low CCC never says which one it is. This framework's own final model was under-predicting its test set by **24.4%** — more than half its MAE — and nothing in the tables could see it.
 
-Model selection across configs ranks by **validation CCC** (descending), then **validation MAE** (ascending) as a tiebreaker — or by `one_se()`, which takes the simplest config within one standard error of the best and is the default in stage 04.
+Model selection across configs ranks by **validation CCC** (descending), then **validation MAE** (ascending) as a tiebreaker — or by `one_se()`, which takes the simplest config within one standard error of the best and is the default of `dsm_final()`.
 
 **The test set is not scored during tuning at all** (`evaluate_test = FALSE`). The columns exist and hold `NA`, so the table has one shape either way. An earlier version computed them "as diagnostic reference"; there is no such thing. A test score sitting beside the selection metric is selection on the test set performed by whoever reads the table, and with 24 configs × 9 repetitions the *best* of 216 noisy test scores is higher than any one of them by construction — before anyone chooses anything.
 
-The test is scored once, in stage 04, on the config chosen without it.
+The test is scored once, by `dsm_final()`, on the config chosen without it.
 
 Early stopping uses **validation SmoothL1 loss** — keeping the stopping criterion consistent with the training objective.
 
 ### Multi-seed ensemble
 
-After architecture selection, the top config(s) are re-trained with N independent seeds (different weight initialisation + batch shuffling). Sources of run-to-run variance:
+After architecture selection, the chosen config(s) are re-trained with N independent seeds (different weight initialisation + batch shuffling). Sources of run-to-run variance:
 
 | Source | Effect |
 |--------|--------|
 | Weight initialisation | Different local minima after convergence |
 | Batch shuffle order | Different gradient path through the loss landscape |
 | Dropout masks | Different regularisation per forward pass |
+
+A seed's numbers depend on its seed **and on its thread count**, and on nothing else: not on which process trains it, nor on what trains beside it. `dsm_final()` trains the seeds side by side with a fixed number of threads each, and records it.
 
 Spatial prediction aggregates all seed models per pixel. The **median** is the recommended headline map: it is invariant to the monotone `expm1` back-transform (`median(expm1(z)) = expm1(median(z))`), robust to divergent seeds, and consistent with what SmoothL1 learns (a conditional median).
 
@@ -513,17 +468,60 @@ What the interval bands come from instead is [calibrated uncertainty](#calibrate
 
 ---
 
+## Framework files
+
+| File | Purpose |
+|------|---------|
+| [`R/api.R`](R/api.R) | **The front end**: `dsm_load()` · the resampling specs (`spatial_cv()` and the rest) · `dsm_train()` |
+| [`R/prepare.R`](R/prepare.R) | `dsm_prepare()` — a point table and a folder of aligned rasters become a patch store, with the target transform, the predictor types and the QC rules written into it as a recipe; `dsm_load(store)` then needs nothing else |
+| [`R/final.R`](R/final.R) | `dsm_final()`: the selected config refitted under N seeds, side by side with fixed threads per seed; the ensemble, the conformal interval, the smearing factor; and `final_report.md`, which declares every hyperparameter of the chosen CNN and whether the search chose it. A resume is held to the settings its run started with |
+| [`R/predict.R`](R/predict.R) | `dsm_predict()`: the map, for a grid as large as the world at 250 m -- row bands read once through a buffer that keeps its halo, the network fully convolutional where that is exact (`fcn_supported()`), workers side by side and resumable; the ensemble bands, the smeared mean, the constant and the level-and-DI conformal intervals and the AOA for every calibration source given (block, kNNDM), one VRT per band; and, first, a probe that must reproduce the final model's stored predictions at the profiles |
+| [`R/utils.R`](R/utils.R) | Safe I/O helpers, torch device setup, `env_*()` overrides, `latest_run_dir()` — the newest *finished* run, by time |
+| [`R/checks.R`](R/checks.R) | `check_ledger()` · `ledger_check()` · `ledger_verdict()` — a ledger whose verdict refuses to pass while a promised check is missing |
+| [`R/metrics.R`](R/metrics.R) | `ccc()` · R² · MAE · NSE · RMSE · MQI · **signed bias**, per split and per quantile group |
+| [`R/cnn_architecture.R`](R/cnn_architecture.R) | Conv blocks, residual connections, SE attention, gate types, full model |
+| [`R/tune_grid.R`](R/tune_grid.R) | `make_tune_grid()` · `make_manual_tune_grid()` with documented parameter ranges |
+| [`R/patches.R`](R/patches.R) | One patch-indexing path, shared by extraction and prediction |
+| [`R/preprocess.R`](R/preprocess.R) | QC (fold-independent) split from scaling (fold-dependent) |
+| [`R/dataset.R`](R/dataset.R) | The patch store: one file per window, the split as an index; a fold's tensors cut in slabs, with no whole-window copy |
+| [`R/resample.R`](R/resample.R) | Fold plans · distance buffering · `summarise_resamples()` · `seed_noise_floor()` · `one_se()` |
+| [`R/knndm.R`](R/knndm.R) | `knndm_folds()` · `prediction_sample()` — folds whose geometry matches what prediction faces, not what a block grid happens to give |
+| [`R/diagnostics.R`](R/diagnostics.R) | Checks about THIS RUN on real data: patch centres, overlap between splits, run snapshots |
+| [`R/train_cnn.R`](R/train_cnn.R) | `train_one_cnn()` · `run_cnn_tuning()` · `run_cnn_resample()` |
+| [`R/model_registry.R`](R/model_registry.R) | `model_spec()` · `register_model()` · `list_models()` |
+| [`R/baselines.R`](R/baselines.R) | `rf` · `mlp` · `cnn`, registered |
+| [`R/train_table.R`](R/train_table.R) | `run_table_resample()` — tabular models, same comparison table |
+| [`R/caret_adapter.R`](R/caret_adapter.R) | `caret_spec()` — borrow ~230 models, never caret's resampling |
+| [`R/aoa.R`](R/aoa.R) | Dissimilarity index · area of applicability |
+| [`R/conformal.R`](R/conformal.R) | `conformal_calibrate()` · `picp_report()` — intervals with a coverage guarantee, and the check that they keep it |
+| [`R/occlusion.R`](R/occlusion.R) | `spatial_occlusion()` — does the trained network use the neighbourhood, or only the centre pixel? |
+| [`R/smearing.R`](R/smearing.R) | `smearing_factor()` · `smear()` — the back-transform of a log-trained median, and the one surface that may be summed |
+| [`R/test_optimism.R`](R/test_optimism.R) | `freeze_selection()` · `score_test_grid()` — the test set, scored only after the choice is locked |
+| [`R/globals.R`](R/globals.R) | The column names dplyr resolves at run time, declared for `R CMD check` — each checked against its use |
+| [`R/zzz.R`](R/zzz.R) | `.onLoad()`: registers the built-in models, and fingerprints the code it loaded — every worker compares its own with it before it starts |
+
+Beside `R/`:
+
+| Where | What |
+|------|---------|
+| [`DESCRIPTION`](DESCRIPTION) · [`NAMESPACE`](NAMESPACE) | The package, `soilcnn`: what it imports, and the 64 functions it exports — the `dsm_*()` front end, the resampling specs and fold constructors, the model registry, and the tools applied to results (AOA, conformal intervals, smearing, metrics, noise floor, occlusion). The runners underneath `dsm_train()`, the patch store's plumbing and the scripts' helpers are internal (`soilcnn:::`); the scripts load the source tree, where every function is visible. NAMESPACE is what roxygen2 writes from the `@export` tags, and `tests/test_package_metadata.R` checks that it still is |
+| [`tests/run_all.R`](tests/run_all.R) | 31 files: 25 fast, then 6 slow ones that train, map, prepare a store, and build and install the package. The package is loaded once for the suite. Every accumulator is named and `.report()` refuses an empty, unnamed, NA-bearing or non-logical one. `test_sources_parse.R` runs first and is the authority on syntax. |
+| [`tools/`](tools/) | `check_package.R` runs `R CMD check` on a staged copy of the package's own files. Four Python checks need no R: `r_lint.py` (a top-level `else`, the native pipe — the mistakes that have cost a round trip here; has a `--selftest`), `r_calls.py` (every project function a script calls exists, `do.call` targets included; named arguments match formals), `r_skeleton.py` (an edit touched only comments and strings), `r_balance.py` (brackets balanced, with strings and comments understood). Run them after any edit made without an R session. |
+| [`utils/install_load_pkg.R`](utils/install_load_pkg.R) | Installs what is missing, then **stops** if a package will not load |
+| [`docs/`](docs/) | `architecture.md`, `design_decisions.md`, `tuning_guide.md`, `test_plan.md`, `status_and_roadmap.md`, and `project_log.md` — every change with its reason, in Portuguese. `docs/archive/` holds the records that are no longer current |
+
+---
+
 ## Dependencies
 
-The framework's own are `DESCRIPTION`'s Imports:
+The package's own are `DESCRIPTION`'s Imports:
 
 ```r
 install.packages(c(
   "torch", "coro",                          # deep learning
   "dplyr", "readr", "tibble", "purrr",      # data wrangling
   "terra", "matrixStats", "janitor",        # rasters, ensemble aggregation, names
-  "callr", "ps",                            # worker processes, and their memory
-  "pkgload"                                 # to load the package from its source tree
+  "callr", "ps"                             # worker processes, and their memory
 ))
 torch::install_torch()                      # ONCE: the C++ backend, ~200 MB
 ```
@@ -535,33 +533,40 @@ separate download that `library(torch)` asks for the first time. Until
 Its Suggests, each needed only by the part that says so when called:
 `sf` (points from a spatial file; kNNDM), `CAST` (kNNDM folds), `FNN` (a
 faster exact nearest neighbour for the AOA), `randomForest` or `ranger` (the
-RF baseline; ranger is far faster), `caret` (its model library).
+RF baseline; ranger is far faster), `caret` (its model library), `pkgload` (the
+source tree, loaded as it stands).
 
 The worked example (`examples/`) adds:
 
 ```r
 install.packages(c(
   "sf", "ggplot2", "stringr", "tidyr",      # 01 and 06
-  "DescTools", "processx",                  # 04b, 05a
-  "randomForest", "ranger", "caret"         # baselines (03b); ranger optional
+  "randomForest", "ranger", "caret",        # the baselines (03b); ranger optional
+  "processx"                                # checks/_b6, which kills a run to resume it
 ))
 ```
+
+and the test suite `DescTools`, which `tests/test_metrics_reporting.R` holds
+`ccc()` against.
 
 Every example script begins with `install_load_pkg(...)`, which installs what
 is missing and then **stops** if a package will not load — it used to say
 "completed" either way.
 
-### Loading it
+Everything here has run on a CPU. `dsm_train()` takes a torch device and can
+use a CUDA GPU; `dsm_final()` and `dsm_predict()` train and map in worker
+processes on the CPU, several side by side, each with a fixed number of threads
+(`setup_torch_device()` and `n_cores = NULL` use the physical cores minus one).
 
-The framework is an R package, `soilcnn`:
+### Loading it
 
 ```r
 pkgload::load_all("<project root>")         # the source tree, as it stands -- what the scripts do
 library(soilcnn)                            # an installed copy
 ```
 
-To install a copy, build the tarball first: `R CMD INSTALL` of the directory
-itself copies `data/` into the library, subdirectories and all.
+To install a copy from a clone, build the tarball first: `R CMD INSTALL` of the
+directory itself copies `data/` into the library, subdirectories and all.
 
 ```r
 tgz <- pkgbuild::build("<project root>", dest_path = tempdir())
@@ -578,7 +583,7 @@ starts: `R CMD build` lists every file under the directory, `outputs/` and
 of the package's own files builds in seconds and gives the same tarball: copy
 `DESCRIPTION`, `NAMESPACE`, `LICENSE`, `.Rbuildignore`, `R/`, `man/` and
 `vignettes/` into a folder named after the package, and build from that folder.
-`tests/test_package_install.R` does exactly this.
+`tests/test_package_install.R` and `tools/check_package.R` do exactly this.
 
 `dsm_final()` and `dsm_predict()` start worker processes, and each loads the
 framework the way its session did — the source tree, or that same installed
@@ -591,8 +596,6 @@ it — and they would answer every call in place of the package. The package
 refuses to attach while one is there, and says how to remove them:
 `rm(list = soilcnn:::.pkg_stale_copies(), envir = globalenv())`.
 
-A CUDA-capable GPU is strongly recommended. CPU training is supported but ~10–20× slower; `setup_torch_device()` uses every physical core but one unless told otherwise.
-
 ---
 
 ## Applied example
@@ -602,21 +605,17 @@ The [`examples/soc_stock_0_5cm/`](examples/soc_stock_0_5cm/) directory contains 
 | Script | What it does |
 |--------|-------------|
 | [`01_prepare_dataset.R`](examples/soc_stock_0_5cm/01_prepare_dataset.R) | The SOC settings, and one call to `dsm_prepare()`: GPKG + rasters → QC · predictor types · a patch store at 3×3, 9×9, 15×15, stored RAW, with its recipe. Decides no roles, and owns no scaling |
-| [`02_extract_patches.R`](examples/soc_stock_0_5cm/02_extract_patches.R) | Folded into 01 on 2026-09-26; now only says so |
-| [`03_run_tuning.R`](examples/soc_stock_0_5cm/03_run_tuning.R) | Choose a fold plan · generate the grid · train every (config, fold, seed) · report mean ± sd against the seed noise floor |
+| [`03_run_tuning.R`](examples/soc_stock_0_5cm/03_run_tuning.R) | Choose a fold plan (block folds, or kNNDM) · generate the grid · `dsm_train()` over every (config, fold, seed) · report mean ± sd against the seed noise floor |
+| [`03b_run_baselines.R`](examples/soc_stock_0_5cm/03b_run_baselines.R) | rf on the centre pixel, rf on the centre plus window means, and an mlp — under the SAME folds and seeds as 03 |
 | [`04_final_model.R`](examples/soc_stock_0_5cm/04_final_model.R) | The SOC settings, and one call to `dsm_final()`: the config the tuning run supports (one_se), refitted under ten seeds side by side on everything but the test set, by the tuning plan's own criterion · the scaling next to the weights · the ensemble, the conformal interval, the mean-surface factor · the declaration of every hyperparameter · resumable, and only with the settings a run started with |
-| [`05_predict_spatial.R`](examples/soc_stock_0_5cm/05_predict_spatial.R) | Worker: predicts **one** row × col tile · seed ensemble · median + uncertainty layers |
-| [`05a_test.R`](examples/soc_stock_0_5cm/05a_test.R) | Cheap dry-run on a handful of tiles — sanity-check geometry/RAM/throughput before committing to the full job |
-| [`05a_run_parallel.R`](examples/soc_stock_0_5cm/05a_run_parallel.R) | Orchestrator: splits the raster into a tile grid, runs many `05` workers concurrently, resumes on restart |
-| [`05b_merge_spatial_parts.R`](examples/soc_stock_0_5cm/05b_merge_spatial_parts.R) | Mosaics all finished tiles into the final wall-to-wall rasters |
-| [`05c_estimate_eta.R`](examples/soc_stock_0_5cm/05c_estimate_eta.R) | Re-runnable at any time while `05a_run_parallel.R` is in flight — reports progress and ETA |
-| [`05_dsm_predict_global.R`](examples/soc_stock_0_5cm/05_dsm_predict_global.R) | The global 250 m map in one `dsm_predict()` call: every band for both calibration sources (block, kNNDM), 249 units of 256 rows, resumable, the probe first; ~33 h at 2 workers x 7 threads (T3). For the global map it replaces 05, 05a, 05b, 05c and 07's rasters |
+| [`04b_final_report.R`](examples/soc_stock_0_5cm/04b_final_report.R) | The same declaration for the deployed model, which was fitted before `dsm_final()` existed (`dsm_report_final()`) |
+| [`05_dsm_predict_global.R`](examples/soc_stock_0_5cm/05_dsm_predict_global.R) | The global 250 m map in one `dsm_predict()` call: every band for both calibration sources (block, kNNDM), 249 units of 256 rows, resumable, the probe first; ~33 h at 2 workers × 7 threads |
 | [`06_graphical_evaluation.R`](examples/soc_stock_0_5cm/06_graphical_evaluation.R) | Graphical evaluation of the final model · it was this script, computing the bias itself, that first exposed the −24.4% back-transform defect |
-| [`07_area_of_applicability.R`](examples/soc_stock_0_5cm/07_area_of_applicability.R) | Dissimilarity index and AOA mask over the prediction grid |
 | [`99_check_pipeline.R`](examples/soc_stock_0_5cm/99_check_pipeline.R) | Numeric consistency across every artefact the pipeline wrote, against a saved snapshot |
 | [`99b_check_pipeline_visual.R`](examples/soc_stock_0_5cm/99b_check_pipeline_visual.R) | The same, but showing the actual thing on screen: where the profiles are, whether tuning improved anything, what the patches look like |
-| [`_capability_sweep.R`](examples/soc_stock_0_5cm/_capability_sweep.R) | Exercises the framework paths a second user would reach for first — reports *ran*, *asserted* and *measured* separately, because a path that ran without being asserted is the interesting row |
-| `_b1` … `_b6`, `_c1` | The tier B and C capability checks of [`docs/test_plan.md`](docs/test_plan.md): kNNDM on the real points, two configs in stage 04, augmentation on/off, sharded prediction and merge, resume after an interruption, the same grid under two validation designs |
+| [`_b1_knndm_folds.R`](examples/soc_stock_0_5cm/_b1_knndm_folds.R) | The prediction sample kNNDM folds are cut against — 03's kNNDM design reads it — and the measurement that block folds validate a job 52× easier than the map's |
+| [`_u2_knndm_residuals.R`](examples/soc_stock_0_5cm/_u2_knndm_residuals.R) | The deployed configuration under kNNDM folds: the residuals the global map's kNNDM bands are calibrated on |
+| [`checks/`](examples/soc_stock_0_5cm/checks/) | Checks worth running again after a change to what they check: `_p1` `dsm_prepare()` · `_p3` `dsm_final()`'s assembly · `_p4` `dsm_predict()` against stage 05's map · `_p5` a region at 250 m · `_b2` two configs in 04 · `_b6` resume after a killed process · `_t7` a training worker's memory · `_c1` one grid under two validation designs |
 
 ### Running it
 
@@ -632,8 +631,11 @@ Every script is run with `source("<full path>")` from an R console, in this
 order, with `tests/run_all.R` before anything expensive:
 
 ```
-01 → 99 → 03 → 03b → 99 → 04 → 05 (or 05a_test → 05a → 05b) → 07 → 06 → 99 / 99b
+01 → 99 → 03 → 03b → 99 → 04 → 05_dsm_predict_global → 06 → 99 / 99b
 ```
+
+`_b1` comes before a kNNDM tuning (03 with `soc_tuning_design = "knndm"`), and
+`_u2` before the global map's kNNDM bands.
 
 Each script clears the workspace, so a parameter cannot be passed as a
 variable; it is passed as an **environment variable**, read through
@@ -646,9 +648,12 @@ parse instead of turning it into `NA`:
 | `soc_tuning_design` | 03 | `spatial` (block folds, default) or `knndm` — needs `_b1`'s `predpoints.csv` |
 | `soc_tune_length`, `soc_tuning_n_seeds`, `soc_tuning_run_id` | 03 | grid size, seeds per unit, run directory name |
 | `soc_final_tuning_run_id`, `soc_final_config_ids`, `soc_final_seeds` | 04 | which tuning run to refit from, which config(s), which seeds |
-| `soc_row_shard_id`, `soc_col_shard_id`, `soc_n_row_shards`, `soc_n_col_shards`, `soc_max_concurrent` | 05, 05a, 05c | the tile grid and the concurrency |
-| `soc_predict_raster_dir` | 05, 05a, 05a_test, 07, `_b1` | predict over another raster directory (the 20 km wiring grid) |
-| `soc_b6_phase` | `_b6` | `prepare` or `verify` |
+| `soc_final_run_id` | 04 | a final run to resume, held to the settings it started with |
+| `soc_global_run_id`, `soc_global_n_cores`, `soc_global_threads`, `soc_global_min_free_gb` | 05 | the map's run directory, its cores and threads per worker, the free disk it refuses to start below |
+| `soc_predict_raster_dir` | `_b1`, `checks/_p4` | another raster directory to predict over (the 20 km wiring grid) |
+| `soc_b6_phase`, `soc_b6_interrupt` | `checks/_b6` | `prepare` or `verify`; how the run is interrupted |
+| `soc_p5_extent`, `soc_p5_n_cores`, `soc_p5_threads` | `checks/_p5` | the region to map, and its cores and threads |
+| `soc_t7_epochs` | `checks/_t7` | epochs per seed |
 
 `Sys.setenv(soc_tune_length = "8")` before the `source()`; `Sys.unsetenv()`
 after, or the next run inherits it. Every override announces itself with
