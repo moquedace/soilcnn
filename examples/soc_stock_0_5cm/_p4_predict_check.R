@@ -282,7 +282,9 @@ ledger_check(L, "p4_09", "a part by the patch engine is that part of the fully c
                      if (nv_part > 0L) rel(pm[is.finite(pm)], wm[is.finite(wm)]) else NA_real_,
                      max(abs(pdi - wdi), na.rm = TRUE)))
 
-# (info) stage 07's DI, when it was built on the same reference
+# (info) stage 07's DI raster, when one from the same reference is on disk
+# (07_area_of_applicability.R was removed on 2026-09-28: dsm_predict() writes
+# the DI and the AOA as bands)
 a07 <- file.path(ref07_dir, "aoa_summary.csv")
 if (file.exists(a07)) {
   s07 <- safe_read_csv2(a07)

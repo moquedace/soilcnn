@@ -1258,9 +1258,10 @@ if (identical(b6_phase, "verify")) {
   # WHAT THE YARDSTICK IS, AND WHY IT IS NOT A NUMBER TYPED HERE.
   #
   # The first version of B6-11 borrowed _b4_shard_merge_check.R's
-  # |x - y| <= 1e-6 + 1e-3 * |y|, and that was wrong twice over. _b4 compares
-  # two TILINGS OF ONE TRAINED MODEL -- deterministic inference, not two
-  # trainings -- and it anchors its relative term to the band's global maximum,
+  # |x - y| <= 1e-6 + 1e-3 * |y| (B4, removed with the tile flow on
+  # 2026-09-28), and that was wrong twice over. _b4 compared two TILINGS OF ONE
+  # TRAINED MODEL -- deterministic inference, not two trainings -- and it
+  # anchored its relative term to the band's global maximum,
   # never to the value in hand, so the allowance cannot collapse at the bottom
   # of the range. Here it collapses: val_bias is a signed mean residual that
   # sits near zero, 1e-3 * |y| is then worth about nothing, and the allowance

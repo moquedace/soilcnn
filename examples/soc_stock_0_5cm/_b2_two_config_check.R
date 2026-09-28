@@ -440,15 +440,17 @@ check_that("b2_11", "the throwaway copy is gone", !dir.exists(copy_dir),
 # THE TARGET IS DERIVED FROM DISK, NOT FROM THE HAPPY PATH.
 #
 # final_dir_made is only assigned after stage 04 exits 0 and after the "exactly
-# one new directory" check. But 04_final_model.R creates its output directory at
-# line 197, BEFORE its own validations at 201-203 and long before any training
-# -- so any failure past that line leaves a final_<timestamp> behind while
-# final_dir_made is still NA. This check used to report "none was made" and PASS
-# in exactly that case, with the directory sitting there.
+# one new directory" check. But the stage 04 this was written against created
+# its output directory BEFORE its own validations and long before any
+# training, so a failure past that point left a final_<timestamp> behind while
+# final_dir_made was still NA. This check used to report "none was made" and
+# PASS in exactly that case, with the directory sitting there. (dsm_final(),
+# which 04 is now, creates its directory only once its checks have passed.)
 #
-# That leftover is not inert: 05_predict_spatial.R resolves final_run_id =
+# That leftover was not inert: the stage 05 of the time resolved final_run_id =
 # "latest" by globbing ^final_ and taking the newest, so a half-built directory
-# from a failed B2 would become the model the next map is drawn from.
+# from a failed B2 became the model the next map was drawn from. latest_run_dir()
+# now takes only a finished run, and 05_dsm_predict_global.R resolves it so.
 #
 # finals_before was captured outside the tryCatch, so the difference is
 # computable here whatever happened. Nothing outside that set is touched --

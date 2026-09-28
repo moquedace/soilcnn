@@ -11,9 +11,9 @@
 #   valid_mask                            where the model predicted
 #
 # for two calibration sources: block CV (the tuning run's own folds) and
-# kNNDM (folds at the distances the map predicts at; U1/U2). For the global
-# map this replaces stage 05 (05_predict_spatial.R and its 05a/05b/05c
-# helpers) and the DI and AOA rasters of stage 07. bands.csv, in the run's
+# kNNDM (folds at the distances the map predicts at; U1/U2). It replaced stage
+# 05 (05_predict_spatial.R, tile by tile, with its 05a/05b/05c helpers) and
+# stage 07's DI and AOA rasters, all removed on 2026-09-28. bands.csv, in the run's
 # directory, says what every band is and calibration.csv every number that
 # calibrated it.
 #

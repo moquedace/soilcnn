@@ -80,7 +80,7 @@ a banner. The 250 m map has not been produced.
 | B1 kNNDM on the real points | done, 13/13 — produced the 52× finding |
 | B2 two configs in stage 04 | done, 13/13 |
 | B3 D4 augmentation on/off | **done** — paired +0.0300 CCC, 95% CI [+0.0014, +0.0587], smaller than the 0.0533 seed spread |
-| B4 2×2 shards + merge | done, mosaic equals the 1×1 map to 1e-4 t/ha |
+| B4 2×2 shards + merge | done, mosaic equals the 1×1 map to 1e-4 t/ha; the tile flow and B4 were removed on 2026-09-28, superseded by `dsm_predict()` |
 | B5 06 and 99b | done — 06 is what exposed the −24% bias |
 | B6 resume after a real interruption | **done**, 15/15 — process killed mid-unit; the resumed run matches the control to 0.2% of the seed spread |
 | C1 the same grid under two validation designs | **done**, 9/9 — the level moves 0.19 CCC, and neither design separates the configs |
@@ -141,9 +141,10 @@ found. Ordered by what a new user or a wrong result would hit first.)*
    map can be produced now, and the design decision changes its caption, not
    its pixels. **The interval bands are different** (see 5): their width comes
    from the residuals they are calibrated on, so the design decision reaches
-   those pixels. Start with `05a_test.R`, which measures RAM and throughput on a
-   few real shards — including a dense tropical one — and reports the safe
-   `max_concurrent` and the ETA before any of it is committed.
+   those pixels. The map is one `dsm_predict()` call,
+   `05_dsm_predict_global.R`: T3 measured 2 workers x 7 threads at ~21,200
+   valid px/s, ~33 h for the globe, and the script checks the free disk and
+   RAM and probes the profiles before it maps.
 
 5. **Uncertainty: decided 2026-09-26.** Seeds stay, for a stable ensemble
    median and as an optimiser diagnostic; the map's uncertainty comes from

@@ -213,11 +213,11 @@ fcn_predict_strip <- function(model, x_strip, centres, engine = c("fcn", "patch"
 # dsm_predict(): the map
 # ══════════════════════════════════════════════════════════════════════════════
 #
-# WHAT THIS REPLACES. Stage 05 of the SOC example -- 05_predict_spatial.R and
-# the scripts that ran it in parallel, merged its tiles and estimated its ETA
-# -- predicted one dataset's map. dsm_predict() is that stage with the dataset
-# taken out, and with what a 250 m global grid needs that stage 05 did not
-# have:
+# WHAT THIS REPLACED. Stage 05 of the SOC example -- 05_predict_spatial.R and
+# the scripts that ran it in parallel, merged its tiles and estimated its ETA,
+# all removed on 2026-09-28 and kept in git's history -- predicted one
+# dataset's map. dsm_predict() is that stage with the dataset taken out, and
+# with what a 250 m global grid needs that stage 05 did not have:
 #
 #   1. THE NETWORK RUN ONCE PER STRIP (above): ~100x less arithmetic.
 #

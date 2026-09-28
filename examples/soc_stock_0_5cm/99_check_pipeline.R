@@ -1017,10 +1017,11 @@ if (!dir.exists(final_model_base)) {
 # ══════════════════════════════════════════════════════════════════════════════
 # [Placeholder for future stages]
 #
-# Stages 05/06 (spatial prediction): the tiles' valid_fraction has not dropped
-# back towards zero -- the same logic as the stage 02 check, adapted to the
-# shard/merge logs. See also 05a_test.R and 05c_estimate_eta.R, which already
-# cover part of this for the 2D pipeline.
+# Stage 05 (the map, dsm_predict()): its run already checks itself -- the probe
+# at the profiles before the map, and the units' records after it -- and
+# writes prediction_manifest.csv. A section here would read that manifest: the
+# probe passed, no unit failed, and n_valid has not dropped back towards zero
+# against the store's footprint -- the same logic as the stage 02 check.
 # ══════════════════════════════════════════════════════════════════════════════
 
 # ══════════════════════════════════════════════════════════════════════════════

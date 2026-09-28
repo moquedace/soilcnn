@@ -82,9 +82,6 @@
 #   Sys.setenv(soc_predict_raster_dir =
 #     "D:/usuario_armazenamento/cassio/R/predictors_resolution_20000m")
 #   source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/examples/soc_stock_0_5cm/_b1_knndm_folds.R")
-#
-# _b4_shard_merge_check.R leaves that variable set deliberately, so after a B4
-# run it is already there.
 # ══════════════════════════════════════════════════════════════════════════════
 
 # WHERE THIS PROJECT IS, FOUND RATHER THAN REMEMBERED.
@@ -230,8 +227,8 @@ if (!requireNamespace("CAST", quietly = TRUE)) {
        "  install.packages(\"CAST\")", call. = FALSE)
 }
 
-# 2. WHERE THE MAP WILL BE PREDICTED, read the way 05_predict_spatial.R:115-118
-#    reads it. The rm(list = ls()) above erases any variable set before the
+# 2. WHERE THE MAP WILL BE PREDICTED: the raster directory dsm_predict() is
+#    given. The rm(list = ls()) above erases any variable set before the
 #    source(), so an environment variable is the only way to pass a parameter
 #    into a source()d run: Sys.setenv() survives that rm(), a workspace object
 #    does not.
@@ -290,14 +287,15 @@ check_that <- function(id, what, ok, measured) {
 # The verdict is not "nothing in the ledger is FALSE" -- an empty ledger
 # satisfies that, and a ledger missing the one expensive check satisfies it too.
 # This project has already been bitten by exactly that shape: tests/helper.R
-# carries the same guard for the same reason, and _b4_shard_merge_check.R exists
-# because a check turned itself off and still printed PASS. So the verdict
+# carries the same guard for the same reason, and B4 (the tile merge check,
+# removed with the tile flow) was written because a check turned itself off
+# and still printed PASS. So the verdict
 # requires every id below to be PRESENT and TRUE.
 required_checks <- c(
   "b1_01",  # the block plan belongs to this store
   "b1_02",  # the frozen test set is the one on disk
-  "b1_03",  # the predpoint grid is the grid 05 predicted on
-  "b1_04",  # that grid's footprint covers what 05 actually wrote
+  "b1_03",  # the predpoint grid is the grid the map was drawn on
+  "b1_04",  # that grid's footprint covers what the map actually wrote
   "b1_05",  # enough predpoints survived the NA mask
   "b1_06",  # check_fold_plan() accepts the kNNDM plan
   "b1_07",  # every fold has both training and validation points
@@ -449,15 +447,15 @@ message(sprintf("\nPoints: %d  |  pool %d  |  frozen test %d  |  k = %d",
 # is the method, not preparation for it. The directory itself was resolved and
 # checked at the top, before anything expensive ran.
 #
-# THE REMAPPING, DONE THE WAY 05 DOES IT.
+# THE REMAPPING, DONE THE WAY dsm_predict() DOES IT.
 #
-# 05_predict_spatial.R:321-337 matches predictors by FILE NAME into the override
-# directory, keeps the TRAINING channel order rather than the alphabetical order
-# a directory listing returns, and refuses if one is missing. The same pattern
+# dsm_predict() matches predictors by FILE NAME into a raster directory, keeps
+# the TRAINING channel order rather than the alphabetical order a directory
+# listing returns, and refuses if one is missing. The same pattern
 # is used here. The order does not matter for a footprint -- every channel has
 # to be present regardless of which is first -- but reproducing the refusal does:
 # a directory missing a predictor is a directory that describes a different
-# prediction area than the one 05 drew.
+# prediction area than the one the map is drawn on.
 raster_table <- safe_read_csv2(file.path(metadata_dir, "raster_table_used.csv"))
 predictor_cols <- raster_table$predictor
 n_channels     <- length(predictor_cols)
@@ -503,90 +501,88 @@ message(sprintf("Training grid  : %.8f/pixel", cell_size))
 
 # WHAT PROVES THIS IS THE GRID THE MAP WAS DRAWN ON.
 #
-# Nothing so far does. The directory could hold any raster set; b4 guards the
-# same risk with stopifnot(exp_ncol < 10000L), which catches the 250 m grid and
-# nothing else. 05 wrote down the grid it predicted, so that record is what this
-# is compared against -- the only source that cannot be satisfied by a plausible
-# wrong directory.
+# Nothing so far does: the directory could hold any raster set. A map of the
+# deployed model drawn on this directory, over its whole grid, recorded the
+# grid and the pixels it predicted -- dsm_predict() writes both into the run's
+# prediction_manifest.csv -- and that record is what this is compared against,
+# the only source a plausible wrong directory cannot satisfy. It used to be
+# stage 05's prediction_config.csv; at 20 km the two record the same 797 x 2004
+# grid and the same 358,537 valid pixels, and _p4_predict_check.R's whole map
+# (p4_20km) is such a run.
 #
-# Resolved exactly as 05, 05a and _b4_shard_merge_check.R resolve it, so all of
-# them agree on which run is meant.
+# The model is the one stage 05 maps: the newest finished final run.
 final_model_base <- file.path(project_root, "outputs", "final_model",
                               "soc_stock_modeling", target_label)
-final_dirs <- list.dirs(final_model_base, recursive = FALSE, full.names = FALSE)
-final_dirs <- final_dirs[grepl("^final_", final_dirs)]
-if (length(final_dirs) == 0L) {
-  stop("No final model run under: ", final_model_base,
-       "\nThe recorded prediction grid is read from the 05 run of that model, ",
-       "and it is what proves the predpoints below come from the grid the map ",
-       "was drawn on. Run 04 and 05 first.", call. = FALSE)
-}
 final_run_id <- latest_run_dir(final_model_base, prefix = "final_",
                                require_file = file.path("comparison", "final_run_summary.rds"),
                                label = "final_run_id")
-config_id <- selected_config_id(
-  readRDS(file.path(final_model_base, final_run_id, "comparison",
-                    "final_run_summary.rds")),
-  final_run_id)
-pred_cfg_file <- file.path(project_root, "outputs", "spatial_prediction",
-                           "soc_stock_modeling", target_label, config_id,
-                           "log", "prediction_config.csv")
-if (!file.exists(pred_cfg_file)) {
-  stop("05 has left no record of the grid it predicted: ", pred_cfg_file,
-       "\nWithout it nothing here can show that soc_predict_raster_dir points ",
-       "at the grid the map was drawn on, and 'the folds match prediction' is ",
-       "the only claim this script makes.\n",
-       "  Run 05_predict_spatial.R with soc_predict_raster_dir set to this ",
-       "same directory, then source this file again.", call. = FALSE)
+map_root <- file.path(project_root, "outputs", "spatial_prediction",
+                      "soc_stock_modeling", target_label, "dsm_predict")
+same_dir <- function(a, b) {
+  identical(tolower(normalizePath(a, winslash = "/", mustWork = FALSE)),
+            tolower(normalizePath(b, winslash = "/", mustWork = FALSE)))
 }
-pred_cfg <- safe_read_csv2(pred_cfg_file)
-# The unsuffixed file belongs to the unpartitioned run: 05 appends a shard
-# suffix whenever it is partitioned. Asserted rather than assumed, because a
-# tile's r_nrow/r_ncol are the whole grid's but its n_valid is not.
-if (!isTRUE(pred_cfg$n_row_shards[1] == 1L && pred_cfg$n_col_shards[1] == 1L)) {
-  stop("prediction_config.csv records a partitioned run (", pred_cfg$n_row_shards[1],
-       " x ", pred_cfg$n_col_shards[1], "). The unsuffixed file should be the ",
-       "1x1 run; this one is not, so its n_valid describes a tile.",
+maps <- list.files(map_root, pattern = "^prediction_manifest[.]csv$",
+                   recursive = TRUE, full.names = TRUE)
+maps <- Filter(function(f) {
+  m <- safe_read_csv2(f)
+  if (!all(c("rasters", "final_run", "rows", "cols", "grid_nrow", "grid_ncol") %in% names(m))) {
+    return(FALSE)
+  }
+  same_dir(m$rasters[1], predict_raster_dir) &&
+    identical(basename(as.character(m$final_run[1])), final_run_id) &&
+    identical(as.character(m$rows[1]), paste0("1-", m$grid_nrow[1])) &&
+    identical(as.character(m$cols[1]), paste0("1-", m$grid_ncol[1]))
+}, maps)
+if (length(maps) == 0L) {
+  stop("No whole-grid map of ", final_run_id, " drawn on ", predict_raster_dir,
+       " under ", map_root, ".\nWithout its record nothing here can show that ",
+       "soc_predict_raster_dir points at the grid the map was drawn on, and ",
+       "'the folds match prediction' is the only claim this script makes.\n",
+       "  Map that directory with dsm_predict(<final run>, data, rasters = <it>) ",
+       "-- checks/_p4_predict_check.R does, at 20 km -- then source this file again.",
        call. = FALSE)
 }
+map_file <- maps[which.max(file.info(maps)$mtime)]
+map_rec  <- safe_read_csv2(map_file)
 
 check_that(
-  "b1_03", "predpoint grid is the grid 05 predicted",
-  pred_cfg$r_nrow[1] == r_nrow && pred_cfg$r_ncol[1] == r_ncol,
-  sprintf("this stack %d x %d, 05 recorded %d x %d (config %s)",
-          r_nrow, r_ncol, pred_cfg$r_nrow[1], pred_cfg$r_ncol[1], config_id))
+  "b1_03", "predpoint grid is the grid the map was drawn on",
+  map_rec$grid_nrow[1] == r_nrow && map_rec$grid_ncol[1] == r_ncol,
+  sprintf("this stack %d x %d, the map recorded %d x %d (%s)",
+          r_nrow, r_ncol, map_rec$grid_nrow[1], map_rec$grid_ncol[1],
+          basename(dirname(map_file))))
 if (!.b1_checks[["b1_03"]]$ok) {
-  stop("soc_predict_raster_dir points at a different grid than the one 05 ",
-       "predicted on. Point it at that grid, or re-run 05 on this one.",
-       call. = FALSE)
+  stop("soc_predict_raster_dir points at a different grid than the one the map ",
+       "was drawn on. Point it at that grid, or map this one.", call. = FALSE)
 }
 
 # ── 3. The footprint, and the predpoints drawn from it ────────────────────────
 #
 # WHERE THE MAP HAS VALUES IS NOT WHERE THE RASTERS COVER.
 #
-# 05 predicts a pixel only when every channel is FINITE at its centre
-# (05_predict_spatial.R:652, `quick_ok`), and then only when a full patch can be
-# built around it. The first condition is reproduced here; the second is not,
+# The map predicts a pixel only when every channel is FINITE at its centre, and
+# then only when a full patch can be built around it (dsm_predict(), as stage
+# 05 before it). The first condition is reproduced here; the second is not,
 # because it depends on the config's window and on build_patches_multi()'s own
 # validity rule, and a second implementation of that rule is a second chance to
 # differ from it.
 #
-# `is.na` here against 05's `is.finite`: the two differ only on an infinity
+# `is.na` here against the map's `is.finite`: the two differ only on an infinity
 # stored in a GeoTIFF, which nothing in this predictor set does and which would
 # have broken the scaling in stage 02 long before reaching here. The difference
 # is named rather than hidden because it is the reason the check below is a
 # bound rather than an equality -- one of two reasons, the other being the rim.
 #
-# So this footprint is a SUPERSET of what 05 wrote, by the thin rim where a
+# So this footprint is a SUPERSET of what the map wrote, by the thin rim where a
 # patch does not fit -- which is why the check below is a bound and not an
 # equality. An equality check here would fail a correct run, and the natural
 # repair (loosening it to a tolerance) would be a check that no longer decides
 # anything.
 #
-# The alternative considered and discarded: sample 05's own valid_patch_mask
-# raster, which is exactly the footprint and costs one file read. Discarded
-# because it makes B1 depend on the OUTPUT of a 05 run rather than on the
+# The alternative considered and discarded: sample the map's own valid_mask
+# band, which is exactly the footprint and costs one file read. Discarded
+# because it makes B1 depend on the OUTPUT of a map rather than on the
 # predictor directory, and the point of honouring soc_predict_raster_dir is that
 # the prediction area is defined by the rasters, not by what was done with them.
 message("\nBuilding the prediction footprint (all ", n_channels,
@@ -601,19 +597,19 @@ n_footprint <- as.numeric(terra::global(footprint, "sum", na.rm = TRUE)[1, 1])
 if (!is.finite(n_footprint) || n_footprint <= 0) {
   stop("No cell in ", predict_raster_dir, " carries all ", n_channels,
        " channels, so there is no prediction area to match the folds to.\n",
-       "  Check that these rasters share one grid -- 05 refuses the same case ",
-       "with a compareGeom() report.", call. = FALSE)
+       "  Check that these rasters share one grid -- dsm_predict() refuses the ",
+       "same case with a compareGeom() check.", call. = FALSE)
 }
 message(sprintf("  %.1f min | %s of %s cells carry every channel (%.1f%%)",
                 as.numeric(difftime(Sys.time(), t0, units = "mins")),
                 format(n_footprint, big.mark = ","),
                 format(n_cell, big.mark = ","), 100 * n_footprint / n_cell))
 
-n_valid_recorded <- as.numeric(pred_cfg$n_valid[1])
+n_valid_recorded <- as.numeric(map_rec$n_valid[1])
 check_that(
-  "b1_04", "footprint covers what 05 wrote",
+  "b1_04", "footprint covers what the map wrote",
   n_footprint >= n_valid_recorded && n_footprint <= n_cell,
-  sprintf("footprint %s >= 05's %s valid pixels (the %s difference is the rim where a patch does not fit)",
+  sprintf("footprint %s >= the map's %s valid pixels (the %s difference is the rim where a patch does not fit)",
           format(n_footprint, big.mark = ","),
           format(n_valid_recorded, big.mark = ","),
           format(n_footprint - n_valid_recorded, big.mark = ",")))
