@@ -1159,12 +1159,19 @@ print.dsm_prediction <- function(x, ...) {
 # share of the RAM budget -- with no budget, 25% above the RAM model's
 # estimate -- exits, and the run starts a fresh one in its place
 # (.predict_run_units()). A restart costs seconds; a unit of the global map,
-# minutes. Never below the estimate itself: a worker estimated above its share
-# (the plan warned) would otherwise restart after every unit.
+# minutes.
+#
+# THE SHARE, NOT THE ESTIMATE. The first version took the tighter of the two,
+# 1.25 x the estimate, and P5 showed what that does: over Brazil, with 15
+# threads, a fresh worker already held ~9.5 GB after its first unit where the
+# RAM model said 7.6, and a healthy worker was restarted 27 times in 69 units.
+# The estimate is a model, and sizes the plan; the share is what the plan
+# promised to stay inside, and the only thing a restart should defend. Never
+# below the estimate itself: a worker estimated above its share (the plan
+# warned) would otherwise restart after every unit.
 .predict_recycle_gb <- function(work) {
-  est <- 1.25 * work$per_worker_gb
   share <- work$budget_gb / max(1L, work$n_workers)
-  if (is.finite(share)) max(work$per_worker_gb, min(est, share)) else est
+  if (is.finite(share)) max(work$per_worker_gb, share) else 1.25 * work$per_worker_gb
 }
 
 .predict_units <- function(rows, cols, unit_rows) {
@@ -1394,6 +1401,13 @@ print.dsm_prediction <- function(x, ...) {
                     uid, job$units$r0[u], job$units$r1[u], job$units$c0[u], job$units$c1[u],
                     job$worker, job$threads))
     rec <- tryCatch(.predict_unit(job$units[u, , drop = FALSE], env, job), error = function(e) e)
+    # A full collection, then the working set it leaves: what the worker holds
+    # between units, which the record keeps (rss_gb) and a restart is judged
+    # on. A peak says only how high a unit once went, with whatever garbage
+    # sat between two collections -- over Brazil, fresh workers' first-unit
+    # peaks spread from 8.9 to 11.1 GB on units alike (P5).
+    invisible(gc(verbose = FALSE))
+    rss <- .predict_rss_gb()
     if (inherits(rec, "error")) {
       message("  ERROR in ", uid, ": ", conditionMessage(rec))
       safe_save_rds(list(unit_id = uid, status = "failed", error = conditionMessage(rec),
@@ -1406,6 +1420,7 @@ print.dsm_prediction <- function(x, ...) {
       # The process too: a slot's worker is replaced after a restart, and a
       # resumed map starts new ones, so memory is followed by process.
       rec$pid     <- Sys.getpid()
+      rec$rss_gb  <- rss
       # The record LAST: its existence is what says the unit is finished.
       safe_save_rds(rec, done, compress = FALSE)
       s <- rec$seconds
@@ -1413,8 +1428,6 @@ print.dsm_prediction <- function(x, ...) {
                       format(rec$n_valid, big.mark = ","), format(rec$n_cells, big.mark = ","),
                       rec$total_s, s[["read"]], s[["net"]], s[["di"]], s[["bands"]], s[["write"]]))
     }
-    invisible(gc(verbose = FALSE))
-    rss <- .predict_rss_gb()
     if (is.finite(rss) && is.finite(job$recycle_gb %||% NA_real_) && rss > job$recycle_gb) {
       message(sprintf("  working set %.1f GB after %s, above %.1f GB: this worker exits, and a fresh one takes its place.",
                       rss, uid, job$recycle_gb))
@@ -2045,7 +2058,8 @@ print.dsm_prediction <- function(x, ...) {
     write_s = r$seconds[["write"]], total_s = r$total_s,
     valid_px_per_s = r$n_valid / max(1e-9, r$total_s), worker = r$worker %||% NA_integer_,
     threads = r$threads %||% NA_integer_, step_rows = r$step_rows, chunk_cols = r$chunk_cols,
-    peak_gb = r$peak_gb %||% NA_real_, pid = r$pid %||% NA_integer_,
+    peak_gb = r$peak_gb %||% NA_real_, rss_gb = r$rss_gb %||% NA_real_,
+    pid = r$pid %||% NA_integer_,
     finished_at = as.character(r$finished_at))))
 }
 
