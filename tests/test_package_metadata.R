@@ -206,7 +206,7 @@ kept_out <- function(path) {
   any(vapply(ign, function(p) grepl(p, path, perl = TRUE, ignore.case = TRUE), logical(1)))
 }
 user_parts <- c("data", "outputs", "examples", "tests", "docs", "tools", "utils",
-                "README.md", "LICENSE.md", "_setup_packages_r46.R")
+                "README.md", "LICENSE.md")
 package_parts <- c("DESCRIPTION", "NAMESPACE", "LICENSE", "R", "man", "vignettes")
 ok["buildignore_keeps_the_user_parts_out"] <- all(vapply(user_parts, kept_out, logical(1)))
 ok["buildignore_keeps_the_package_in"] <- !any(vapply(package_parts, kept_out, logical(1)))

@@ -6,8 +6,6 @@
 ^tools$
 ^utils$
 ^tests$
-^_test_gpu$
-^_setup_packages_r46\.R$
 ^README\.md$
 ^LICENSE\.md$
 ^\.Rhistory$

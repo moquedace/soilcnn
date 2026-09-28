@@ -67,7 +67,7 @@ pkgload::load_all(project_root)
 # and readr's reader moved 13% of them by one unit in the last place. The
 # function keeps them in memory, and they now equal the GPKG exactly.)
 #
-# Stage 02 is folded in here; 02_extract_patches.R now only says so.
+# Stage 02 -- cutting the patches -- is folded in here.
 # ══════════════════════════════════════════════════════════════════════════════
 
 # ── Run profile ───────────────────────────────────────────────────────────────
