@@ -263,6 +263,13 @@ of the package that were `source()`d from `R/`.
   `Status: OK`.
 - **The repository is `moquedace/soilcnn`** on GitHub (renamed 2026-09-28;
   the old name redirects), and `DESCRIPTION` names it (e0720de).
+- ~~**The repository, tidied**~~ — **done 2026-09-28**. The tile-by-tile map
+  (05, 05a, 05b, 05c, B4) and stage 07 are gone, replaced by `dsm_predict()`,
+  and so are the placeholders and one-off scripts. The one-off measurements
+  whose results are in the log went too. The checks worth re-running are in
+  `examples/soc_stock_0_5cm/checks/`, and the historical records are in
+  `docs/archive/`. The README describes the package as it is. Every removed
+  file's last commit is in `project_log.md`.
 - ~~The docs that predate the package~~ — **done 2026-09-28**.
   - `architecture.md` has conv_padding and the fully convolutional map.
   - `tuning_guide.md` has embed_pool, conv_padding and the grid dsm_train()

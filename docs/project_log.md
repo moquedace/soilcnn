@@ -6159,3 +6159,111 @@ e `rows[<fatia>]` é o R base indexando um vetor com uma lista.
   - as threads à mão;
   - o repositório `soilcnn`.
 - Fica para a próxima medida o laço de dobras do `dsm_train()`.
+
+
+## 2026-09-28 — O repositório arrumado: fluxos superados fora, checagens em `checks/`, o README como o pacote é
+
+O usuário pediu uma revisão geral do que está no GitHub antes de avançar:
+"coisas erradas lá, arquivos ociosos antigos, fluxos que não fazem mais
+sentido". O levantamento cruzou cada script com o que o referencia (quem
+depende de quem) e com as funções que o `R/` já definiu no histórico, para
+achar chamadas a funções removidas. Só um script chamava função removida (o
+T6, que já tinha um guarda). O problema eram fluxos inteiros superados e
+arquivos soltos. As quatro decisões foram do usuário, todas as recomendadas.
+
+### 1. Os fluxos superados saíram (30827ef, 6906f28)
+
+| arquivo | último commit | por quê |
+|---|---|---|
+| `05_predict_spatial.R` | 0fa496c | o mapa tile a tile; o `dsm_predict()` o substituiu (P4: 2e-5 no mapa de 20 km) |
+| `05a_run_parallel.R`, `05a_test.R`, `05b_merge_spatial_parts.R`, `05c_estimate_eta.R` | bcd3b0b | a grade de tiles, o ensaio, o mosaico e o ETA desse fluxo |
+| `_b4_shard_merge_check.R` | bcd3b0b | o B4, que testava os tiles e o mosaico |
+| `07_area_of_applicability.R` | bcd3b0b | os rasters de DI e AOA; o `dsm_predict()` os escreve como bandas, por fonte de calibração |
+| `02_extract_patches.R` | 61aeb03 | um marcador desde que o 02 foi para dentro do 01 |
+| `_setup_packages_r46.R` | 4273cd0 | a reinstalação pontual para o R 4.6.1 |
+| `tests/_diag_torch_save_limit.R` | bcd3b0b | o diagnóstico do limite de 2^31 bytes do `torch_save()`, fora da suíte |
+| `tools/check_headers.py` | 903c9fc | a checagem da reescrita dos cabeçalhos de 21/09 |
+| `tools/extraction_io_model.py` | 73f9c95 | o modelo dos tempos de extração do P1 (27/09) |
+
+Qualquer um volta com `git show <commit>:<caminho>`.
+
+**Uma correção ao que eu disse ao usuário.** O `_diag_torch_save_limit.R` não
+tratava de uma teoria refutada. Ele estabeleceu um limite real: o
+`torch_save()` quebra acima de 2^31 bytes. É esse limite que o
+`test_patch_store_io` guarda ("torch_save limit: 2,147,483,648 bytes"), e por
+isso o script podia sair sem levar o conhecimento junto. Refutada foi outra
+teoria: a de que o vazamento de memória do mapa fosse esse limite (T5, T6).
+
+**Uma dependência que o levantamento achou.** O `_b1_knndm_folds.R`, que é
+pré-requisito do desenho kNNDM do 03, provava a grade de predição contra o
+`prediction_config.csv`, um registro que só o 05 antigo escrevia. Sem o 05, o
+B1 não poderia mais rodar do zero.
+
+- Agora ele lê os mesmos fatos do `prediction_manifest.csv` do
+  `dsm_predict()`: um mapa da grade inteira, do modelo final mais novo, sobre
+  a mesma pasta de rasters.
+- A 20 km, o `p4_20km` do P4 registra a mesma grade (797 × 2004) e os mesmos
+  358.537 pixels válidos que o registro do 05.
+- A lógica nova foi conferida contra os arquivos, mas ainda não rodou no R.
+  Sem mapa correspondente, ela para e diz como produzir um.
+
+### 2. As 22 medições: 2 ficam, 8 vão para `checks/`, 11 saem (69f2537)
+
+- **Ficam onde estão, porque são pré-requisitos:**
+  - `_b1_knndm_folds.R`, os pontos de predição do kNNDM;
+  - `_u2_knndm_residuals.R`, os resíduos kNNDM que o mapa global usa.
+- **Vão para `examples/soc_stock_0_5cm/checks/`, com o nome inalterado**, as
+  checagens que valem de novo depois de mudar o que elas checam: P1, P3, P4,
+  P5, B2, B6, T7 e C1.
+  - Todas acham a raiz subindo três níveis.
+  - O B6, que se relança pelo caminho, aponta o novo.
+  - O `test_sources_parse.R` e o `r_lint.py` passaram a ler `checks/` e o
+    `quickstart.R` (lint: 0 achados em 80 arquivos).
+- **Saem**, porque os resultados estão neste log: B3, a varredura de
+  capacidades, o diagnóstico de lacunas, a medida do kNNDM, T1 a T6 e U1
+  (bcd3b0b; o B3 em 0fa496c).
+
+A mensagem final do U2 mandava rodar o U1; agora diz que o mapa global usa o
+que o U2 escreveu. Os comentários que citavam os removidos estão no passado.
+
+### 3. Os quatro registros históricos foram para `docs/archive/` (7fed8fc)
+
+São o `execution_plan.md`, o `b2_two_configs_decision.md`, o
+`reference_performance.md` e o `revisao_e_prospeccao_2026_09.md`. O conteúdo
+é o mesmo, e o `git mv` guarda o histórico. Os links foram atualizados.
+
+### 4. O comentário sobre achar a raiz: de 7 linhas para 2, em 20 scripts (08cfeb8)
+
+A história do caminho fixo (substituído em 21/09) fica neste log; os scripts
+ficam com o que o trecho faz. O esqueleto de código de cada arquivo (sem
+comentários, com as strings vazias) é idêntico antes e depois.
+
+### 5. O README, que é a página do GitHub (46b0e86)
+
+Ele descrevia o fluxo de tiles como o jeito de fazer um mapa. Também:
+
+- não tinha instalação;
+- dava nomes de bandas que não existem;
+- dizia que o intervalo era calibrado na validação do refit e que o mapa
+  "nunca recalcula";
+- não listava `conv_padding`, `se_reduction` e `warmup_epochs`;
+- recomendava GPU sem medida nenhuma;
+- tinha uma tabela de scripts, uma ordem de execução e variáveis de ambiente
+  que não correspondiam mais aos arquivos.
+
+Agora o README mostra as quatro chamadas e a instalação com
+`remotes::install_github()`. Os intervalos estão como o `dsm_final()` e o
+`dsm_predict()` os calibram, e as bandas estão com os nomes certos. As 35
+funções chamadas nos blocos de código foram conferidas contra o `NAMESPACE`:
+todas exportadas.
+
+### 6. O que cabe ao usuário, na página do repositório
+
+O GitHub guarda três coisas nos ajustes, fora dos arquivos:
+
+- a descrição ("Convolutional neural network approach for digital soil
+  mapping and spatial prediction.");
+- os tópicos, hoje nenhum;
+- o wiki, habilitado e vazio.
+
+Sugeri alinhá-los ao pacote.
