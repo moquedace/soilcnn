@@ -642,6 +642,7 @@ parse instead of turning it into `NA`:
 
 | Variable | Read by | Meaning |
 |---|---|---|
+| `soc_torch_threads` | 03, 03b | torch's threads; unset, the physical cores minus one |
 | `soc_tuning_design` | 03 | `spatial` (block folds, default) or `knndm` — needs `_b1`'s `predpoints.csv` |
 | `soc_tune_length`, `soc_tuning_n_seeds`, `soc_tuning_run_id` | 03 | grid size, seeds per unit, run directory name |
 | `soc_final_tuning_run_id`, `soc_final_config_ids`, `soc_final_seeds` | 04 | which tuning run to refit from, which config(s), which seeds |

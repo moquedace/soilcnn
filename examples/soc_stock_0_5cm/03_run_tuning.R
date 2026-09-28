@@ -60,7 +60,14 @@ torch::torch_manual_seed(42)
 
 # ── Torch device ──────────────────────────────────────────────────────────────
 
-device <- setup_torch_device(n_threads = 30, use_cuda = TRUE)
+# THE THREADS COME FROM THE MACHINE: setup_torch_device() uses the physical
+# cores minus one. This was a hand-typed 30; T1 measured 30 and 15 a wash on
+# this workstation. soc_torch_threads overrides it. Resuming a run begun with
+# another count mixes units computed two ways -- the thread count changes the
+# numbers the way a seed does (T1) -- so resume with the count the run started
+# with, or start another run_id.
+device <- setup_torch_device(n_threads = env_int("soc_torch_threads", NULL),
+                             use_cuda = TRUE)
 
 # ── Training hyperparameters ──────────────────────────────────────────────────
 # These are fixed across all configs in the grid.
