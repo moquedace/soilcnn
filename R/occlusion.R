@@ -51,6 +51,7 @@
 #'
 #' @param w Window side.
 #' @return A w x w integer matrix of ring indices.
+#' @noRd
 patch_ring_index <- function(w) {
   w <- as.integer(w)
   if (w %% 2L != 1L) {
@@ -75,6 +76,7 @@ patch_ring_index <- function(w) {
 #' @param method "permute" (default) or "zero".
 #' @param seed   Draw seed for the permutation.
 #' @return A new tensor; `x` is not modified.
+#' @noRd
 occlude_patch_array <- function(x, mask, method = c("permute", "zero"),
                                 seed = 42L) {
   method <- match.arg(method)
@@ -139,7 +141,7 @@ occlude_patch_array <- function(x, mask, method = c("permute", "zero"),
 #' @param cache     The fold cache (from build_fold_cache()$cache).
 #' @param cfg       The config row the model was built from.
 #' @param points_valid ONE role's metadata tibble -- fold_points_valid() returns
-#'   a named list, so this is fold_points_valid(store, index)[[role]].
+#'   a named list, so this is `fold_points_valid(store, index)[[role]]`.
 #' @param role      Which split to measure on. Validation by default: the test
 #'   set is frozen, and occlusion is a diagnostic, not a result.
 #' @param transform Inverse of the target transformation.
@@ -259,6 +261,11 @@ spatial_occlusion <- function(model, cache, cfg, points_valid,
 }
 
 #' Say what the occlusion found, including when it found nothing.
+#'
+#' @param x   A `spatial_occlusion`, from [spatial_occlusion()].
+#' @param ... Ignored.
+#' @return `x`, invisibly.
+#' @keywords internal
 #' @export
 print.spatial_occlusion <- function(x, ...) {
   cat("\nSpatial occlusion --", x$role, "| windows",
@@ -351,6 +358,8 @@ print.spatial_occlusion <- function(x, ...) {
 #' @param config_id Which config.
 #' @param fold,seed_i Which unit of it.
 #' @param ...       Passed to spatial_occlusion().
+#' @inheritParams spatial_occlusion
+#' @return A `spatial_occlusion`, as spatial_occlusion() returns.
 #' @export
 occlusion_report <- function(run_dir, data, config_id, fold = 1L, seed_i = 1L,
                              role = "validation", transform = identity,

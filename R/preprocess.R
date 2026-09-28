@@ -46,6 +46,7 @@
 #'   where the rule was keyed on a name suffix).
 #' @return A tibble with one row per predictor: predictor, na_below,
 #'   clamp_lower, clamp_upper.
+#' @noRd
 make_qc_table <- function(predictors,
                           na_below     = NULL,
                           clamp_range  = character(0),
@@ -79,6 +80,7 @@ make_qc_table <- function(predictors,
 #'
 #' @param values Numeric vector of raw values for one channel.
 #' @param rule   One row of make_qc_table().
+#' @noRd
 qc_band_values <- function(values, rule) {
   if (!is.na(rule$na_below)) {
     bad <- !is.na(values) & is.finite(values) & values <= rule$na_below
@@ -108,6 +110,7 @@ qc_band_values <- function(values, rule) {
 #' @param pct_scale  Divisor for percentage predictors (default 100).
 #' @return A tibble: predictor, scaling_method, center, scale — in channel
 #'   order, ready for scale_patches().
+#' @noRd
 fit_scaling <- function(points, type_table, rows, pct_scale = 100) {
   if (length(rows) < 2L) {
     stop("This fold has ", length(rows), " training row(s); a mean and sd ",
@@ -154,6 +157,7 @@ fit_scaling <- function(points, type_table, rows, pct_scale = 100) {
 #'   a tensor nothing else holds a reference to, and FALSE whenever the caller
 #'   still needs the raw values.
 #' @return The scaled tensor (the same object when `inplace`).
+#' @noRd
 scale_patches <- function(x, scaling, inplace = FALSE) {
   n_ch <- x$shape[[2]]
   if (nrow(scaling) != n_ch) {
@@ -185,6 +189,7 @@ scale_patches <- function(x, scaling, inplace = FALSE) {
 #'
 #' @param mat     Numeric matrix, columns in channel order.
 #' @param scaling From fit_scaling(), rows in the SAME channel order.
+#' @noRd
 scale_patches_matrix <- function(mat, scaling) {
   if (ncol(mat) != nrow(scaling)) {
     stop("matrix has ", ncol(mat), " columns but scaling has ", nrow(scaling),

@@ -175,6 +175,7 @@ fcn_supported <- function(model) {
 #' @param gc_hook NULL, or a function called after every batch and branch --
 #'   the map passes one that collects R's garbage (see .predict_gc_hook()).
 #' @return A numeric vector, one prediction per centre.
+#' @noRd
 fcn_predict_strip <- function(model, x_strip, centres, engine = c("fcn", "patch"),
                               batch = 4096L, gather_mb = 256, gc_hook = NULL) {
   engine <- match.arg(engine)
@@ -311,6 +312,7 @@ fcn_predict_strip <- function(model, x_strip, centres, engine = c("fcn", "patch"
 #'   time. NULL sizes the first two from the RAM.
 #' @param probe   Predict the profiles' own pixels first and compare with the
 #'   final run's stored predictions (see above). A failure stops the map.
+#' @param verbose Report progress, and print the result.
 #' @return A `dsm_prediction`, printed.
 #' @export
 dsm_predict <- function(final, data, rasters = NULL, qc_table = NULL, extent = NULL,
@@ -513,6 +515,12 @@ dsm_predict <- function(final, data, rasters = NULL, qc_table = NULL, extent = N
   invisible(out)
 }
 
+#' Print a `dsm_prediction`
+#'
+#' @param x   A `dsm_prediction`, from [dsm_predict()].
+#' @param ... Ignored.
+#' @return `x`, invisibly.
+#' @keywords internal
 #' @export
 print.dsm_prediction <- function(x, ...) {
   m <- x$manifest

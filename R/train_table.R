@@ -35,6 +35,7 @@
 #' @param dataset_role "train", "validation" or "test".
 #' @param transform    Inverse of the target transform, e.g. expm1.
 #' @param clamp        Range applied in native space.
+#' @noRd
 predict_table <- function(pred_raw, points_valid, dataset_role,
                           transform = identity, clamp = c(0, Inf)) {
   check_point_contract(points_valid, what = "points_valid")
@@ -73,6 +74,7 @@ predict_table <- function(pred_raw, points_valid, dataset_role,
 #' @param transform  Inverse of the target transform.
 #' @param n_seeds    Repetitions per (config, fold). One gives no error bar.
 #' @return list(comparison, by_config, run_dir, plan).
+#' @noRd
 run_table_resample <- function(model, tune_grid = NULL, store, points,
                                type_table, plan,
                                features    = c("centre", "window_mean"),

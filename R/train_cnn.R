@@ -23,6 +23,7 @@
 #'   that legitimately goes negative (a centred variable, a log-ratio, a
 #'   temperature) -- clamping one of those at zero destroys half the
 #'   predictions silently, and the metrics still come out looking plausible.
+#' @noRd
 predict_loader <- function(model, data_loader, points_valid, dataset_role,
                            transform = identity, device, clamp = c(0, Inf)) {
   if (length(clamp) != 2L || anyNA(clamp) || clamp[1] > clamp[2]) {
@@ -77,6 +78,7 @@ predict_loader <- function(model, data_loader, points_valid, dataset_role,
 #' @param pred_t Predicted values in transform space (model raw output).
 #' @param obs_t  Observed values in transform space.
 #' @param loss_fn_name One of "smooth_l1", "mse", "mae".
+#' @noRd
 transform_space_loss <- function(pred_t, obs_t, loss_fn_name) {
   d <- as.numeric(pred_t) - as.numeric(obs_t)
   switch(loss_fn_name,
@@ -91,6 +93,7 @@ transform_space_loss <- function(pred_t, obs_t, loss_fn_name) {
 # ── Gate analysis helper ──────────────────────────────────────────────────────
 
 #' Extract gate values and branch norms for interpretability.
+#' @noRd
 extract_gate_analysis <- function(model, data_loader, points_valid,
                                   dataset_role, device) {
   if (model$n_branches < 2L || model$gate_type == "no_gate_concat") {
@@ -184,6 +187,7 @@ extract_gate_analysis <- function(model, data_loader, points_valid,
 #'   gate, best_epoch, runtime, config. The trained model is NOT returned --
 #'   only `best_state` is, so the caller cannot accidentally keep a whole
 #'   model alive across grid iterations.
+#' @noRd
 train_one_cnn <- function(
   cfg,
   n_channels,
@@ -476,6 +480,7 @@ train_one_cnn <- function(
 # authority on the hyperparameters and is loaded right there. The remaining
 # columns are few and known -- identifiers and status are text, counters are
 # integers, and what is left are metrics, which are numeric.
+#' @noRd
 .comparison_from_csv <- function(path, tune_grid) {
   cmp <- readr::read_csv2(path, show_col_types = FALSE)
 
@@ -947,6 +952,7 @@ run_cnn_tuning <- function(
 #'   optimism itself -- never to choose anything.
 #' @param ...          Passed through to run_cnn_tuning() and train_one_cnn().
 #' @return list(comparison, by_config, run_dir, plan)
+#' @noRd
 run_cnn_resample <- function(tune_grid, store, points, type_table, plan,
                              transform  = identity,
                              output_dir = "./outputs/tuning",
@@ -1087,6 +1093,7 @@ run_cnn_resample <- function(tune_grid, store, points, type_table, plan,
 #' Window keys come from patch_window_key(), the same helper the patch store
 #' uses for its filenames – one naming rule, so a window can never be looked
 #' up under a name nothing ever wrote.
+#' @noRd
 .make_loaders_from_cache <- function(cache, cfg) {
   ws       <- cfg$window_sizes[[1]]
   bs_train <- cfg$batch_size

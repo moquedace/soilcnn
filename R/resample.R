@@ -240,6 +240,7 @@ with_local_seed <- function(seed, expr) {
 # @param group "auto", NULL/"row" for one group per row, a column name, or a
 #   vector of group labels with one entry per row.
 # @return character vector of group labels, with attr "note" describing it.
+#' @noRd
 .resolve_row_group <- function(meta, group = "auto") {
   n <- nrow(meta)
   rows_as_groups <- function(note) {
@@ -301,6 +302,24 @@ with_local_seed <- function(seed, expr) {
   g
 }
 
+#' A single train/validation/test split of a point table.
+#'
+#' The fold constructor behind holdout_cv(). Whole groups are drawn, never
+#' single rows (see `group`), so the rows of one profile never straddle the
+#' split.
+#'
+#' @param meta            Point table (the patch store's meta): needs
+#'   sample_id, and profile_id for `group = "auto"` to have anything to do.
+#' @param validation_frac Share of the non-test pool that validates.
+#' @param test_frac       Share held out as the test set, drawn first.
+#' @param test_ids        Sample ids that ARE the test set, in place of
+#'   `test_frac`: a test set drawn again on every run is not a test set.
+#' @param seed            Seed for this split only; the training seeds do not
+#'   move it.
+#' @param group           "auto" keeps the rows of one profile_id together when
+#'   the table repeats profiles; NULL or "row" makes each row its own unit; a
+#'   column name, or a vector with one label per row, names the groups.
+#' @return A `fold_plan` with one fold.
 #' @export
 holdout <- function(meta, validation_frac = 0.15, test_frac = 0.15,
                     test_ids = NULL, seed = 42L, group = "auto") {
@@ -355,6 +374,8 @@ holdout <- function(meta, validation_frac = 0.15, test_frac = 0.15,
 #' @param k    Number of folds.
 #' @param seed Seed for the partition only (see with_local_seed): a fixed plan
 #'   reproduces even when the training seeds change.
+#' @inheritParams holdout
+#' @return A `fold_plan` with `k` folds.
 #' @export
 random_folds <- function(meta, k = 5L, test_frac = 0, test_ids = NULL,
                         seed = 42L, group = "auto") {
@@ -428,6 +449,7 @@ random_folds <- function(meta, k = 5L, test_frac = 0, test_ids = NULL,
 #' @param block_sizes Sizes to evaluate, in the units of x/y.
 #' @return A tibble: one row per size, with the block count and the share of
 #'   points held by the largest block.
+#' @noRd
 block_share <- function(meta, block_sizes = c(0.25, 0.5, 1, 2, 3)) {
   x <- as.numeric(meta$x); y <- as.numeric(meta$y)
   n <- length(x)
@@ -457,6 +479,7 @@ block_share <- function(meta, block_sizes = c(0.25, 0.5, 1, 2, 3)) {
 #'   has something to balance WITH.
 #' @param candidates  Sizes to consider, ascending.
 #' @return The chosen size, with the evaluation table attached as "table".
+#' @noRd
 suggest_block_size <- function(meta, k = 5L, max_share = 0.10,
                                min_blocks_per_fold = 10L,
                                candidates = c(0.1, 0.25, 0.5, 1, 2, 3, 5)) {
@@ -483,6 +506,7 @@ suggest_block_size <- function(meta, k = 5L, max_share = 0.10,
 }
 
 #' Print what suggest_block_size() measured.
+#' @noRd
 print_block_choice <- function(chosen) {
   tab <- attr(chosen, "table")
   ms  <- attr(chosen, "max_share")
@@ -500,6 +524,24 @@ print_block_choice <- function(chosen) {
   invisible(chosen)
 }
 
+#' Spatially blocked folds of a point table.
+#'
+#' The fold constructor behind spatial_cv(): the points are binned into square
+#' blocks, whole blocks go to one fold, and the buffer then drops the training
+#' points too close to a validation or test point.
+#'
+#' @param meta            Point table: needs x, y and sample_id.
+#' @param k               Number of folds.
+#' @param block_size      Side of a block, in the units of x/y. NULL sizes it
+#'   from the extent, for `blocks_per_fold` blocks per fold.
+#' @param buffer          Distance within which a training point is dropped
+#'   from a fold, in the units of x/y; NULL for none.
+#' @param buffer_metric   "chebyshev" (the default) or "euclidean". Chebyshev
+#'   is exact for square patches: two patches share a pixel when their
+#'   centres are within the window in both axes.
+#' @param blocks_per_fold Blocks per fold, for a `block_size` of NULL.
+#' @inheritParams holdout
+#' @return A `fold_plan` with `k` folds.
 #' @export
 spatial_folds <- function(meta, k = 5L, test_frac = 0, block_size = NULL,
                           buffer = NULL,
@@ -578,6 +620,8 @@ spatial_folds <- function(meta, k = 5L, test_frac = 0, block_size = NULL,
 #' @param meta  Patch store meta.
 #' @param group Group labels, one per row of `meta`.
 #' @param k     Number of folds; defaults to one per group.
+#' @inheritParams holdout
+#' @return A `fold_plan`.
 #' @export
 region_folds <- function(meta, group, k = NULL, test_frac = 0,
                         test_ids = NULL, seed = 42L) {
@@ -671,6 +715,7 @@ region_folds <- function(meta, group, k = NULL, test_frac = 0,
 #' @param buffer Exclusion radius in the units of x/y. NULL or 0 returns the
 #'   plan unchanged.
 #' @return The plan, with buffered training sets and a `buffer_dropped` tibble.
+#' @noRd
 apply_buffer <- function(plan, meta, buffer,
                          metric = c("chebyshev", "euclidean"),
                          protect = c("validation", "test")) {
@@ -807,6 +852,8 @@ apply_buffer <- function(plan, meta, buffer,
 #' @param meta      Patch store meta with x/y.
 #' @param cell_size Raster resolution, in the units of x/y.
 #' @param windows   Window sizes to report overlap for.
+#' @return A tibble with a `fold` column: the overlap shares per role and
+#'   window, fold by fold.
 #' @export
 fold_leakage_report <- function(plan, meta, cell_size, windows = c(3L, 9L, 15L)) {
   stopifnot(inherits(plan, "fold_plan"))
@@ -853,6 +900,7 @@ fold_leakage_report <- function(plan, meta, cell_size, windows = c(3L, 9L, 15L))
 #' @return Integer row positions to keep, with attributes describing what was
 #'   drawn -- a subsample whose composition cannot be reported is a subsample
 #'   whose results cannot be interpreted.
+#' @noRd
 block_subsample <- function(x, y, frac, block_size, seed = 42L) {
   stopifnot(length(x) == length(y), frac > 0, frac <= 1, block_size > 0)
   n <- length(x)
@@ -880,6 +928,7 @@ block_subsample <- function(x, y, frac, block_size, seed = 42L) {
 }
 
 #' One line describing a block_subsample() result, for logs and metadata.
+#' @noRd
 describe_subsample <- function(idx) {
   sprintf(
     "%s of %s points (%.1f%%, requested %.1f%%) from %s of %s blocks of %s",
@@ -911,6 +960,7 @@ describe_subsample <- function(idx) {
 #' @param meta            The same point table.
 #' @param validation_frac Share of the non-test rows used to stop training.
 #' @return A one-fold `fold_plan`.
+#' @noRd
 refit_split <- function(plan, meta, validation_frac = 0.15) {
   stopifnot(inherits(plan, "fold_plan"))
   test_pos <- plan$folds[[1]]$test
@@ -956,6 +1006,10 @@ refit_split <- function(plan, meta, validation_frac = 0.15) {
 #' property that makes the k metrics a partition of the pool rather than an
 #' arbitrary set of overlapping subsets.
 #'
+#' @param plan  A `fold_plan`.
+#' @param meta  The point table the plan was made for. Given, the grouping is
+#'   proven against it: no group may be split across train and validation.
+#' @param group How the rows group, as in holdout().
 #' @return tibble, one row per fold.
 #' @export
 check_fold_plan <- function(plan, meta = NULL, group = "auto") {
@@ -1050,6 +1104,11 @@ check_fold_plan <- function(plan, meta = NULL, group = "auto") {
 }
 
 #' Print a fold plan, with its per-fold sizes.
+#'
+#' @param x   A `fold_plan`, from [resolve_resampling()] or a fold constructor.
+#' @param ... Ignored.
+#' @return `x`, invisibly.
+#' @keywords internal
 #' @export
 print.fold_plan <- function(x, ...) {
   cat("<fold_plan> ", x$method, " | ", x$n_folds, " fold(s) | ",
@@ -1334,6 +1393,11 @@ one_se <- function(by_config, metric = "val_ccc", complexity = "n_params",
 }
 
 #' Say what one_se() did, including when it did nothing.
+#'
+#' @param pick   From one_se().
+#' @param metric The metric it selected on, for the report.
+#' @param digits Digits of the threshold.
+#' @return `pick`, invisibly.
 #' @export
 print_one_se <- function(pick, metric = "val_ccc", digits = 4L) {
   n_tied <- attr(pick, "within_one_se")
@@ -1350,6 +1414,10 @@ print_one_se <- function(pick, metric = "val_ccc", digits = 4L) {
 }
 
 #' Print a noise-floor report in the terms it should be read in.
+#'
+#' @param nf     From seed_noise_floor().
+#' @param digits Digits of the numbers.
+#' @return `nf`, invisibly; NULL when no floor could be estimated.
 #' @export
 print_noise_floor <- function(nf, digits = 4L) {
   if (nf$n_comparable == 0L) {
@@ -1498,6 +1566,12 @@ paired_family_test <- function(a, b, metric = "val_ccc",
   grepl("(^|_)(mae|rmse|mse|loss|bias|error)($|_)", tolower(metric))
 }
 
+#' Print a `paired_comparison`
+#'
+#' @param x   A `paired_comparison`, from [paired_family_test()].
+#' @param ... Ignored.
+#' @return `x`, invisibly.
+#' @keywords internal
 #' @export
 print.paired_comparison <- function(x, ...) {
   cat("\nPaired comparison --", x$metric, "\n")

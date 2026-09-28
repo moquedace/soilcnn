@@ -309,13 +309,13 @@ make_tune_grid <- function(tune_length = 20L, seed = NULL, fixed = list(),
 #' @param ...  Named arguments, each a vector or list of values to cross.
 #'   Only the provided parameters are varied; all others use their first
 #'   (default) value from the parameter space.
-#'
-#' Example:
-#'   make_manual_tune_grid(
-#'     embedding_dim = c(256L, 384L),
-#'     gate_type     = c("vector_featurewise", "no_gate_concat"),
-#'     base_lr       = c(0.001, 0.0005)
-#'   )
+#' @return A tibble, one configuration per row, with a config_id column.
+#' @examples
+#' make_manual_tune_grid(
+#'   embedding_dim = c(256L, 384L),
+#'   gate_type     = c("vector_featurewise", "no_gate_concat"),
+#'   base_lr       = c(0.001, 0.0005)
+#' )
 #' @export
 make_manual_tune_grid <- function(...) {
   overrides <- list(...)

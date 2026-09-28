@@ -33,21 +33,11 @@
 # index. The whole report is inference, which is why this can be an
 # afterthought rather than a budget.
 
-#' Record which config was chosen, and when.
-#'
-#' Writes the selection into the run directory so a later test-set report can
-#' prove the choice preceded it. Call it at the moment the choice is made.
-#'
-#' @param run_dir   Tuning run directory (the one holding comparison/).
-#' @param config_id The chosen config (or configs, one per family).
-#' @param rule      How it was chosen, e.g. "one_se" or "rank1".
-#' @param metric    The selection metric.
-#' @param note      Anything a reader would need to reconstruct the decision.
-#' @return The selection record, invisibly.
 #' The short commit of the work tree a given directory belongs to, or NA.
 #'
 #' `-C` is the whole point: without it git answers for the process's working
 #' directory, which has nothing to do with the file being written.
+#' @noRd
 .git_commit_at <- function(dir) {
   out <- tryCatch(
     suppressWarnings(system2("git", c("-C", shQuote(normalizePath(dir,
@@ -62,6 +52,17 @@
   trimws(out[1])
 }
 
+#' Record which config was chosen, and when.
+#'
+#' Writes the selection into the run directory so a later test-set report can
+#' prove the choice preceded it. Call it at the moment the choice is made.
+#'
+#' @param run_dir   Tuning run directory (the one holding comparison/).
+#' @param config_id The chosen config (or configs, one per family).
+#' @param rule      How it was chosen, e.g. "one_se" or "rank1".
+#' @param metric    The selection metric.
+#' @param note      Anything a reader would need to reconstruct the decision.
+#' @return The selection record, invisibly.
 #' @export
 freeze_selection <- function(run_dir, config_id, rule = "one_se",
                              metric = "val_ccc", note = NA_character_) {
@@ -236,6 +237,11 @@ score_test_grid <- function(run_dir, data, transform = identity, device,
 }
 
 #' Say what the grid did on the test set, and what that does and does not mean.
+#'
+#' @param x   A `test_optimism`, from [score_test_grid()].
+#' @param ... Ignored.
+#' @return `x`, invisibly.
+#' @keywords internal
 #' @export
 print.test_optimism <- function(x, ...) {
   cat("\nTest-set scores across the grid\n")

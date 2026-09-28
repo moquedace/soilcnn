@@ -56,6 +56,7 @@
 #' @return A `dsm_data` object. `$transform` is the target transform the store
 #'   was built under -- name, forward and inverse -- or NULL when the store did
 #'   not record one.
+#' @param verbose      Print the loaded data.
 #' @export
 dsm_load <- function(patch_dir, points = NULL, type_table = NULL, windows = NULL,
                      cell_size = NULL, raster_table = NULL, target_col = NULL,
@@ -178,6 +179,12 @@ dsm_load <- function(patch_dir, points = NULL, type_table = NULL, windows = NULL
   out
 }
 
+#' Print a `dsm_data`
+#'
+#' @param x   A `dsm_data`, from [dsm_load()].
+#' @param ... Ignored.
+#' @return `x`, invisibly.
+#' @keywords internal
 #' @export
 print.dsm_data <- function(x, ...) {
   cat("<dsm_data>\n")
@@ -260,6 +267,10 @@ print.dsm_data <- function(x, ...) {
 #' @param test_frac  Share held out entirely, carved by the same criterion.
 #' @param max_share  Balance constraint for "auto": the largest share of the
 #'   points one block may hold.
+#' @inheritParams spatial_folds
+#' @inheritParams holdout
+#' @return A `resample_spec`. resolve_resampling() turns it into folds
+#'   against the points, and dsm_train() does that itself.
 #' @export
 spatial_cv <- function(k = 5L, block_size = "auto", buffer = "auto",
                        test_frac = 0.15, max_share = 0.10,
@@ -290,6 +301,9 @@ spatial_cv <- function(k = 5L, block_size = "auto", buffer = "auto",
 #'
 #' Needs the CAST and sf packages. See R/knndm.R for the projection question,
 #' which is not optional on lon/lat data.
+#'
+#' @inheritParams knndm_folds
+#' @return A `resample_spec`, as spatial_cv() returns.
 #' @export
 knndm_cv <- function(k = 5L, predpoints = NULL, hold_out_test = FALSE,
                      crs = 4326,
@@ -305,6 +319,10 @@ knndm_cv <- function(k = 5L, predpoints = NULL, hold_out_test = FALSE,
 #' Right when the rows really are independent, and the cleanest way to MEASURE
 #' what geography is worth: run it against spatial_cv() on the same points and
 #' the gap is the spatial optimism.
+#'
+#' @inheritParams random_folds
+#' @inheritParams holdout
+#' @return A `resample_spec`, as spatial_cv() returns.
 #' @export
 random_cv <- function(k = 5L, test_frac = 0.15, group = "auto", seed = 42L) {
   .resample_spec(.kind = "random", k = .check_k(k, "random_cv"),
@@ -313,6 +331,9 @@ random_cv <- function(k = 5L, test_frac = 0.15, group = "auto", seed = 42L) {
 }
 
 #' A single train/validation/test split.
+#'
+#' @inheritParams holdout
+#' @return A `resample_spec`, as spatial_cv() returns.
 #' @export
 holdout_cv <- function(validation_frac = 0.15, test_frac = 0.15,
                        group = "auto", seed = 42L) {
@@ -327,12 +348,23 @@ holdout_cv <- function(validation_frac = 0.15, test_frac = 0.15,
 }
 
 #' Leave-region-out, on a grouping that already exists (biome, catchment, ...).
+#'
+#' @inheritParams region_folds
+#' @inheritParams holdout
+#' @return A `resample_spec`, as spatial_cv() returns.
 #' @export
 region_cv <- function(group, k = NULL, test_frac = 0.15, seed = 42L) {
   .resample_spec(.kind = "region", group = group, k = .check_k(k, "region_cv", allow_null = TRUE),
                  test_frac = .check_frac(test_frac, "region_cv", "test_frac"), seed = seed)
 }
 
+#' Print a `resample_spec`
+#'
+#' @param x   A `resample_spec`, from [spatial_cv()], [knndm_cv()], [random_cv()],
+#'   [holdout_cv()] or [region_cv()].
+#' @param ... Ignored.
+#' @return `x`, invisibly.
+#' @keywords internal
 #' @export
 print.resample_spec <- function(x, ...) {
   cat("<resample_spec> ", x$kind, "\n", sep = "")
@@ -356,6 +388,8 @@ print.resample_spec <- function(x, ...) {
 #' @param test_ids Sample ids to force into the test set, so a frozen test set
 #'   survives a change of method.
 #' @param windows  Windows the grid will use, for `buffer = "auto"`.
+#' @param verbose  Print the block size that `block_size = "auto"` chose.
+#' @return A `fold_plan`, already checked with check_fold_plan().
 #' @export
 resolve_resampling <- function(spec, data, test_ids = NULL, windows = NULL,
                                verbose = TRUE) {
@@ -458,6 +492,20 @@ resolve_resampling <- function(spec, data, test_ids = NULL, windows = NULL,
 #'   resolve_cores()) -- except that a `device` passed in keeps the threads it
 #'   was set up with unless n_cores is given too.
 #' @param test_ids   Sample ids forced into the test set.
+#' @param output_dir Where runs go; each run is a directory under it.
+#' @param run_id     The run's directory name. Reusing one resumes that run
+#'   (see `resume`); the default, a timestamp, always starts a fresh one.
+#' @param base_seed  Repetition s of every configuration trains under the
+#'   seed base_seed + s - 1, the same for every configuration, so that two
+#'   configurations differ by their hyperparameters and not by their luck.
+#' @param resume     Keep the units of `run_id` that already finished,
+#'   matched by their hyperparameters rather than their label. A fold plan
+#'   or a clamp other than the run's is refused.
+#' @param evaluate_test Score the test set on every unit? FALSE, and
+#'   deliberately so: a frozen test set stops being frozen once its score
+#'   sits in the tuning table. It is scored once, after the choice, by
+#'   freeze_selection() and score_test_grid().
+#' @param verbose    Report progress.
 #' @param ...        Passed to the underlying runner (n_epochs, patience, ...).
 #' @return The runner's result, plus the plan and the data it used.
 #' @export
@@ -726,6 +774,12 @@ dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
   grid
 }
 
+#' Print a `dsm_fit`
+#'
+#' @param x   A `dsm_fit`, from [dsm_train()].
+#' @param ... Ignored.
+#' @return `x`, invisibly.
+#' @keywords internal
 #' @export
 print.dsm_fit <- function(x, ...) {
   cat("\n<dsm_fit> model: ", x$model, " | ", x$plan$method, " | ",

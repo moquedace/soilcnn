@@ -117,6 +117,7 @@
 #' @param run_id     NULL for final_<timestamp>. Give an existing one with
 #'   resume = TRUE to finish an interrupted fit.
 #' @param resume     Skip seeds whose checkpoint and record are already there.
+#' @param verbose    Report progress, and print the result.
 #' @return A `dsm_final`, printed with the report.
 #' @export
 dsm_final <- function(tuning, data = NULL, config = "auto",
@@ -343,6 +344,12 @@ dsm_final <- function(tuning, data = NULL, config = "auto",
   invisible(out)
 }
 
+#' Print a `dsm_final`
+#'
+#' @param x   A `dsm_final`, from [dsm_final()] or [dsm_report_final()].
+#' @param ... Ignored.
+#' @return `x`, invisibly.
+#' @keywords internal
 #' @export
 print.dsm_final <- function(x, ...) {
   cat("\n<dsm_final> ", x$run_dir, "\n", sep = "")
@@ -386,6 +393,7 @@ print.dsm_final <- function(x, ...) {
 #' @param run_dir    The final-model run (it holds comparison/final_run_summary.rds).
 #' @param tuning_dir The tuning run it was selected from.
 #' @param conformal_alpha As the run was calibrated; stage 04 used c(0.1, 0.05).
+#' @param verbose    Print the result.
 #' @return A `dsm_final` describing the run, printed with the declaration.
 #' @export
 dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05),

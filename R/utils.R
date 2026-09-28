@@ -33,6 +33,7 @@
 }
 
 #' Write a CSV (semicolon-separated) safely, removing old file first if needed.
+#' @noRd
 safe_write_csv2 <- function(data, path) {
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   .refuse_locked(path)
@@ -48,6 +49,7 @@ safe_write_csv2 <- function(data, path) {
 # through the report -- and the notice is about the locale WE chose, so it
 # tells nobody anything. Silenced here, once, instead of repeating
 # suppressMessages() at every call site in the pipeline.
+#' @noRd
 safe_read_csv2 <- function(path, ...) {
   suppressMessages(readr::read_csv2(path, show_col_types = FALSE, ...))
 }
@@ -71,6 +73,7 @@ safe_save_rds <- function(object, path, compress = FALSE) {
 #' fire in normal use -- but if it ever does, it must be loud, because the
 #' alternative is a plausible-looking wrong result. For anything large, store
 #' plain R arrays with saveRDS (see save_patch_window() in R/dataset.R).
+#' @noRd
 safe_torch_save <- function(object, path) {
   .torch_save_limit <- 2^31
 
@@ -125,6 +128,7 @@ safe_torch_save <- function(object, path) {
 #' @param x    A data frame / tibble.
 #' @param need Which contract columns are required here.
 #' @param what Label used in the error message.
+#' @noRd
 check_point_contract <- function(x, need = names(.point_contract),
                                  what = "points") {
   need <- intersect(need, names(.point_contract))
@@ -143,6 +147,7 @@ check_point_contract <- function(x, need = names(.point_contract),
 # ── Directory helpers ─────────────────────────────────────────────────────────
 
 #' Create a set of directories and verify they exist.
+#' @noRd
 create_output_dirs <- function(dirs) {
   purrr::walk(dirs, ~ dir.create(.x, recursive = TRUE, showWarnings = FALSE))
   check <- tibble::tibble(
@@ -182,6 +187,7 @@ create_output_dirs <- function(dirs) {
 #'   system), or a whole number >= 1.
 #' @param what    What the cores are for, for the message.
 #' @return An integer >= 1.
+#' @noRd
 resolve_cores <- function(n_cores = NULL, what = "this step") {
   phys <- .physical_cores()
   if (is.null(n_cores)) return(max(1L, phys - 1L))
@@ -385,11 +391,13 @@ setup_torch_device <- function(n_threads = NULL, use_cuda = TRUE) {
 # ── Misc ──────────────────────────────────────────────────────────────────────
 
 #' Deep-clone a model state dict (detach + clone every tensor).
+#' @noRd
 clone_state_dict <- function(state_dict) {
   lapply(state_dict, function(x) x$detach()$clone())
 }
 
 #' Set learning rate on all param groups of an optimizer.
+#' @noRd
 set_optimizer_lr <- function(optimizer, lr) {
   for (i in seq_along(optimizer$param_groups)) {
     optimizer$param_groups[[i]]$lr <- lr
@@ -398,6 +406,7 @@ set_optimizer_lr <- function(optimizer, lr) {
 }
 
 #' Return SiLU activation if available, otherwise ReLU.
+#' @noRd
 make_activation <- function() {
   if ("nn_silu" %in% getNamespaceExports("torch")) torch::nn_silu() else torch::nn_relu()
 }
@@ -417,6 +426,7 @@ make_activation <- function() {
 #'
 #' @param x A 4D torch tensor.
 #' @param k Integer 1–8 selecting the symmetry.
+#' @noRd
 apply_d4 <- function(x, k) {
   switch(k,
     x,                                                    # 1: identity
@@ -449,6 +459,7 @@ apply_d4 <- function(x, k) {
 #' whole batch 8 times and selecting.
 #'
 #' @param tensor_list List of 4D torch tensors (one per branch), dims (N, C, H, W).
+#' @noRd
 augment_d4_batch <- function(tensor_list) {
   n      <- tensor_list[[1]]$shape[[1]]
   ks     <- sample.int(8L, n, replace = TRUE)   # one symmetry per sample
@@ -681,7 +692,7 @@ check_plan_unchanged <- function(plan, run_dir, resume = TRUE) {
 
 #' The most recent run under `base`, by time, and only if it finished.
 #'
-#' WHY THIS IS NOT sort(dirs, decreasing = TRUE)[1].
+#' WHY THIS IS NOT `sort(dirs, decreasing = TRUE)[1]`.
 #'
 #' That expression means "last alphabetically", which equals "most recent" only
 #' while every run id is a timestamp sharing one prefix. Runs given names broke
@@ -812,6 +823,7 @@ latest_run_dir <- function(base, prefix, require_file = NULL,
 }
 
 #' Read a string override, or the default.
+#' @noRd
 env_chr <- function(name, default) {
   v <- .env_raw(name)
   if (is.null(v)) return(default)
@@ -821,6 +833,7 @@ env_chr <- function(name, default) {
 
 #' Read a positive integer override, or the default. Refuses anything else:
 #' a thread count or a seed that silently became NA is worse than not starting.
+#' @noRd
 env_int <- function(name, default, min = 1L) {
   v <- .env_raw(name)
   if (is.null(v)) return(default)
@@ -840,6 +853,7 @@ env_int <- function(name, default, min = 1L) {
 #' treat as "nothing selected" and proceed with. With as_int = TRUE every item
 #' must parse, and the ones that do not are named -- a seed list with one bad
 #' entry must not become a shorter seed list.
+#' @noRd
 env_csv <- function(name, default, as_int = FALSE) {
   v <- .env_raw(name)
   if (is.null(v)) return(default)
@@ -869,6 +883,10 @@ env_csv <- function(name, default, as_int = FALSE) {
 # first row can be the runner-up. selected_config_ids is the chosen list in the
 # order it was chosen (written from 2026-09-18 on). Three copies of this rule
 # existed, two of them still reading the grid order; one home.
+#' The configuration a final run deployed.
+#'
+#' Read from the list of configurations in the order they were chosen -- not
+#' from the grid's order, in which a runner-up can come first.
 #'
 #' @param summary the list read from comparison/final_run_summary.rds.
 #' @param label   what to call the run in messages.

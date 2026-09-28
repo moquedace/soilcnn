@@ -481,6 +481,7 @@ dual_branch_cnn <- torch::nn_module(
 #'
 #' @param cfg        One row of a tune grid.
 #' @param n_channels Number of predictor channels.
+#' @noRd
 count_model_params <- function(cfg, n_channels) {
   m <- build_cnn_from_config(cfg, n_channels)
   n <- sum(vapply(m$parameters, function(p) prod(dim(p)), numeric(1)))

@@ -133,6 +133,7 @@ di_reference <- function(x_train, weights = NULL, max_pairs = 2e6, seed = 42L) {
 #' @param folds_train Fold label of each training row; required with `exclude`.
 #' @param chunk   Rows of x handled at a time. Distance is computed exactly,
 #'   which is n_train * p per row; the chunk bounds the temporary matrix.
+#' @noRd
 .di_nn_dist <- function(ref, x, exclude = NULL, folds_train = NULL,
                         chunk = 2000L) {
   x <- as.matrix(x)
@@ -187,6 +188,8 @@ di_reference <- function(x_train, weights = NULL, max_pairs = 2e6, seed = 42L) {
 #' @return Numeric vector, one DI per row. 0 means identical to a training
 #'   point; 1 means as far from the training data as two training points are
 #'   from each other on average.
+#' @param chunk Rows of `x` compared at a time. It bounds the memory a call
+#'   takes and does not change the result.
 #' @export
 dissimilarity_index <- function(ref, x, chunk = 2000L) {
   stopifnot(inherits(ref, "di_reference"))
@@ -241,6 +244,14 @@ aoa_threshold <- function(ref, folds, k_iqr = 1.5) {
 inside_aoa <- function(di, threshold) as.numeric(di) <= as.numeric(threshold)
 
 #' Report what an AOA covers.
+#'
+#' Prints the threshold, the share of cells inside it and the quantiles of
+#' the DI, and says so plainly when less than half the map is inside.
+#'
+#' @param di        Dissimilarity index of the cells, from dissimilarity_index().
+#' @param threshold From aoa_threshold().
+#' @param label     What the cells are, for the report.
+#' @return The logical mask of the cells inside (inside_aoa()), invisibly.
 #' @export
 print_aoa <- function(di, threshold, label = "prediction area") {
   inside <- inside_aoa(di, threshold)
@@ -267,6 +278,12 @@ print_aoa <- function(di, threshold, label = "prediction area") {
   invisible(inside)
 }
 
+#' Print a `di_reference`
+#'
+#' @param x   A `di_reference`, from [di_reference()].
+#' @param ... Ignored.
+#' @return `x`, invisibly.
+#' @keywords internal
 #' @export
 print.di_reference <- function(x, ...) {
   cat("<di_reference> ", x$n, " training row(s) x ", x$p, " predictor(s)",

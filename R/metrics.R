@@ -152,6 +152,7 @@ calc_metrics <- function(obs, pred) {
 #'
 #' @param pred_obs_data A tibble with columns: model, target_version,
 #'   dataset_role, obs, pred.
+#' @noRd
 make_performance_table <- function(pred_obs_data) {
   pred_obs_data %>%
     dplyr::group_by(model, target_version, dataset_role) %>%
@@ -169,6 +170,7 @@ make_performance_table <- function(pred_obs_data) {
 #' the SAME bin edges to every split, so a "Q95_Q99" row means the same range of
 #' observed values in train, validation and test and the splits stay comparable.
 #' Call this per model if you instead want split-specific edges.
+#' @noRd
 make_quantile_performance <- function(pred_obs_data) {
   pred_obs_data %>%
     dplyr::mutate(
@@ -195,6 +197,7 @@ make_quantile_performance <- function(pred_obs_data) {
 # hot path.
 
 #' Compute weighted-average loss over all batches of a DataLoader.
+#' @noRd
 compute_loader_loss <- function(model, data_loader, loss_fn, device) {
   model$eval()
   loss_sum <- 0

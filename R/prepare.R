@@ -91,7 +91,7 @@ target_transform_spec <- function(name) {
 #' @param profile_id Column that identifies an observation. Rows sharing it are
 #'   de-duplicated (the first is kept) and later kept in the same fold. Absent,
 #'   every row is its own profile.
-#' @param coords, crs For a data.frame: the coordinate columns and their CRS.
+#' @param coords,crs For a data.frame: the coordinate columns and their CRS.
 #'   NULL crs means the coordinates are already in the rasters' CRS.
 #' @param percentage Regular expressions over the CLEANED raster names for
 #'   channels in 0-100. Anchor them (^pnv_, ^peatland_extent$) to avoid
@@ -116,11 +116,20 @@ target_transform_spec <- function(name) {
 #' @param max_ram_gb RAM the extraction may use in total. NULL for 70% of what
 #'   is available when it starts (read with the ps package; without it, no
 #'   cap). Decides how many of the `n_cores` workers actually run.
-#' @param read_gap, read_max_cols How the points of a row chunk are grouped
+#' @param read_gap,read_max_cols How the points of a row chunk are grouped
 #'   into reads: windows closer than `read_gap` columns share a read, and no
 #'   read is wider than `read_max_cols`. Performance knobs only -- the store
 #'   and the point table are identical whatever they are, and the test suite
 #'   proves it.
+#' @param store_dir,metadata_dir,points_file Where each part goes when it is
+#'   not under `out_dir`: the store, the tables for a human, the point table.
+#' @param target_label Name of the target in reports. NULL uses `target`.
+#' @param target_unit  Unit of the target, for reports. NULL leaves it
+#'   unrecorded.
+#' @param raster_pattern Regular expression the raster file names must match.
+#' @param chunk_nrows  Raster rows read per chunk. A performance knob: the
+#'   store does not depend on it.
+#' @param verbose    Report progress.
 #' @param overwrite  A store_dir that already holds a store is refused unless
 #'   TRUE, in which case that store's files are removed first.
 #' @return A `dsm_store`, which dsm_load() accepts directly.
@@ -730,6 +739,12 @@ dsm_prepare <- function(points, target, raster_dir, windows,
   invisible(out)
 }
 
+#' Print a `dsm_store`
+#'
+#' @param x   A `dsm_store`, from [dsm_prepare()].
+#' @param ... Ignored.
+#' @return `x`, invisibly.
+#' @keywords internal
 #' @export
 print.dsm_store <- function(x, ...) {
   r <- x$recipe

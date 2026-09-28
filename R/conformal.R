@@ -115,6 +115,7 @@ conformal_calibrate <- function(obs, pred, alpha = 0.1, difficulty = NULL) {
 #' @param lower_limit Floor for the lower bound, e.g. 0 for a stock. Clipping a
 #'   bound at a physical limit can only INCREASE coverage, so the guarantee
 #'   survives it.
+#' @return A tibble: pred, lower, upper and width, one row per prediction.
 #' @export
 conformal_interval <- function(cal, pred, difficulty = NULL,
                                lower_limit = -Inf) {
@@ -151,6 +152,7 @@ conformal_interval <- function(cal, pred, difficulty = NULL,
 #' @param obs          Observations.
 #' @param lower,upper  Interval bounds.
 #' @return A one-row tibble: n, picp, mean_width, median_width.
+#' @noRd
 picp <- function(obs, lower, upper) {
   stopifnot(length(obs) == length(lower), length(obs) == length(upper))
   keep <- is.finite(obs) & is.finite(lower)
@@ -193,6 +195,12 @@ picp_report <- function(obs, lower, upper, group = NULL, alpha = 0.1) {
             class = "picp_report")
 }
 
+#' Print a `picp_report`
+#'
+#' @param x   A `picp_report`, from [picp_report()].
+#' @param ... Ignored.
+#' @return `x`, invisibly.
+#' @keywords internal
 #' @export
 print.picp_report <- function(x, ...) {
   target <- 1 - x$alpha
@@ -241,6 +249,12 @@ print.picp_report <- function(x, ...) {
   invisible(x)
 }
 
+#' Print a `conformal_cal`
+#'
+#' @param x   A `conformal_cal`, from [conformal_calibrate()].
+#' @param ... Ignored.
+#' @return `x`, invisibly.
+#' @keywords internal
 #' @export
 print.conformal_cal <- function(x, ...) {
   cat("\n<conformal_cal> ", sprintf("%.0f%% intervals", 100 * (1 - x$alpha)),
@@ -426,6 +440,7 @@ conformal_scaled_calibrate <- function(obs, pred, covariates, alpha = 0.1,
 #'   predictions -- the level, and the dissimilarity index computed the same
 #'   way as the calibration points' was.
 #' @param lower_limit Floor of the lower bound (0 for a stock).
+#' @return A tibble: pred, lower, upper and width, one row per prediction.
 #' @export
 conformal_scaled_interval <- function(cal, pred, covariates, lower_limit = -Inf) {
   stopifnot(inherits(cal, "conformal_scaled"))
@@ -437,6 +452,12 @@ conformal_scaled_interval <- function(cal, pred, covariates, lower_limit = -Inf)
     width = pmin(as.numeric(pred) + half, Inf) - pmax(as.numeric(pred) - half, lower_limit))
 }
 
+#' Print a `conformal_scaled`
+#'
+#' @param x   A `conformal_scaled`, from [conformal_scaled_calibrate()].
+#' @param ... Ignored.
+#' @return `x`, invisibly.
+#' @keywords internal
 #' @export
 print.conformal_scaled <- function(x, ...) {
   cat("\n<conformal_scaled> ", sprintf("%.0f%% intervals", 100 * (1 - x$alpha)),

@@ -38,6 +38,7 @@
 #'   the same arithmetic, so agreement should be exact; the tolerance exists
 #'   only to absorb CSV round-tripping of the point table.
 #' @return list(ok, n_points, n_channels, n_mismatch, worst, by_channel)
+#' @noRd
 check_patch_centres <- function(patch_dir, points, predictors,
                                 window = NULL, tol = 1e-6) {
 
@@ -123,6 +124,7 @@ check_patch_centres <- function(patch_dir, points, predictors,
 #' @return A tibble, one row per (split, criterion), with a `matters` flag:
 #'   TRUE for identical patches (a defect under any split) and FALSE for shared
 #'   pixels between neighbours (not a defect -- see the note above).
+#' @noRd
 spatial_overlap_report <- function(row_ids, col_ids, split,
                                    windows = c(3L, 9L, 15L),
                                    reference = "train") {
@@ -206,6 +208,7 @@ spatial_overlap_report <- function(row_ids, col_ids, split,
 #' @param values  Named list/vector of scalars (numeric or character).
 #' @param dir     Where snapshots live.
 #' @param label   Snapshot name; defaults to a timestamp.
+#' @noRd
 write_run_snapshot <- function(values, dir, label = NULL) {
   dir.create(dir, recursive = TRUE, showWarnings = FALSE)
   if (is.null(label)) label <- format(Sys.time(), "%Y%m%d_%H%M%S")
@@ -242,6 +245,7 @@ write_run_snapshot <- function(values, dir, label = NULL) {
 #' @return list(has_previous, previous_file, diff) where `diff` is a tibble of
 #'   every key with old value, new value and a status: `=`, `changed`, `new`,
 #'   `gone`.
+#' @noRd
 compare_run_snapshot <- function(values, dir, exclude = character(0)) {
   # BY TIME, NOT BY NAME. This was sort(..., decreasing = TRUE) -- the same
   # mistake latest_run_dir() carried until it picked an unfinished run, and
@@ -286,6 +290,7 @@ compare_run_snapshot <- function(values, dir, exclude = character(0)) {
 # cat(), not message(): message() writes to stderr and print() to stdout, and
 # in the RStudio console the two land on the SAME line ("...changed:# A
 # tibble"). Report output has to leave through one channel to keep its order.
+#' @noRd
 print_snapshot_diff <- function(cmp, n_show = 40L) {
   if (!cmp$has_previous) {
     cat("  No previous snapshot -- this run becomes the reference.\n")
@@ -350,6 +355,7 @@ print_snapshot_diff <- function(cmp, n_show = 40L) {
 #'   used, or the window reaches back into the part still descending.
 #' @param loss_col    Column holding the validation loss.
 #' @return A tibble, one row per unit, plus the attribute "summary".
+#' @noRd
 early_stopping_bias <- function(history_dir, plateau = 20L,
                                 loss_col = NULL) {
   files <- list.files(history_dir, pattern = "_history\\.csv$", full.names = TRUE)
@@ -481,6 +487,7 @@ early_stopping_bias <- function(history_dir, plateau = 20L,
 }
 
 #' Print the verdict from early_stopping_bias().
+#' @noRd
 print_early_stopping_bias <- function(bias, threshold_rel = 0.02) {
   s <- attr(bias, "summary")
   cat("\n-- Optimism of early stopping (from histories, nothing retrained) --\n")
@@ -545,6 +552,7 @@ print_early_stopping_bias <- function(bias, threshold_rel = 0.02) {
 #' @param ... Passed to early_stopping_bias().
 #' @return A tibble: one row per width, with the median relative bias and how
 #'   many units were still descending at that width.
+#' @noRd
 early_stopping_bias_sweep <- function(history_dir,
                                       plateaus = c(6L, 10L, 20L, 40L, 80L),
                                       ...) {
@@ -566,6 +574,7 @@ early_stopping_bias_sweep <- function(history_dir,
 }
 
 #' Print the sweep, and say which explanation it supports.
+#' @noRd
 print_bias_sweep <- function(sweep) {
   cat("\n-- Bias against plateau width (nothing retrained) --\n")
   print_wide(dplyr::mutate(

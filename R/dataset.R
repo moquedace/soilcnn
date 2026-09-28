@@ -19,6 +19,7 @@
 # ── naming ────────────────────────────────────────────────────────────────────
 
 #' Storage key for a window size. Also the filename stem in the patch store.
+#' @noRd
 patch_window_key <- function(window_size) {
   paste0("w", sprintf("%02d", as.integer(window_size)))
 }
@@ -47,6 +48,7 @@ patch_window_key <- function(window_size) {
 # tensor the model actually consumes.
 
 #' Path of a window file inside a patch store.
+#' @noRd
 patch_window_path <- function(patch_dir, window_size) {
   file.path(patch_dir, paste0("patches_", patch_window_key(window_size), ".rds"))
 }
@@ -55,6 +57,7 @@ patch_window_path <- function(patch_dir, window_size) {
 #'
 #' Used to spot a truncated or half-written file without reading it back --
 #' reading a multi-GB file just to check it is itself a risk.
+#' @noRd
 patch_window_bytes <- function(n_points, n_channels, window_size) {
   as.numeric(n_points) * n_channels * window_size * window_size * 8
 }
@@ -65,6 +68,7 @@ patch_window_bytes <- function(n_points, n_channels, window_size) {
 #' @param patch_dir   Store directory.
 #' @param window_size Odd integer.
 #' @return A one-row tibble describing what was written.
+#' @noRd
 save_patch_window <- function(arr, patch_dir, window_size) {
   f <- patch_window_path(patch_dir, window_size)
   d <- dim(arr)
@@ -91,6 +95,7 @@ save_patch_window <- function(arr, patch_dir, window_size) {
 #'
 #' The double array is released before returning, so the caller is left
 #' holding half the memory it took to get there.
+#' @noRd
 load_patch_window <- function(patch_dir, window_size, expect_points = NULL,
                               expect_channels = NULL) {
   f <- patch_window_path(patch_dir, window_size)
@@ -134,6 +139,7 @@ load_patch_window <- function(patch_dir, window_size, expect_points = NULL,
 #'   windows the manifest says were extracted.
 #' @param verbose      Print what was loaded and how big it is.
 #' @return list(windows, meta, manifest, predictors, n_channels)
+#' @noRd
 load_patch_store <- function(patch_dir, window_sizes = NULL, verbose = TRUE) {
 
   manifest_path <- file.path(patch_dir, "patch_manifest.rds")
@@ -240,6 +246,7 @@ load_patch_store <- function(patch_dir, window_sizes = NULL, verbose = TRUE) {
 #' @param store From load_patch_store().
 #' @return list(predictors, windows, target_col, target_transform, cell_size),
 #'   with NA for anything a store written before this was recorded.
+#' @noRd
 store_spec <- function(store) {
   m <- store$manifest
   get1 <- function(nm) if (nm %in% names(m)) m[[nm]][1] else NA
@@ -269,6 +276,7 @@ store_spec <- function(store) {
 #' @param cell_size   Raster resolution now, or NULL to skip.
 #' @param strict      TRUE (default) stops; FALSE returns the messages, which
 #'   is what a reporting script wants.
+#' @noRd
 check_store_spec <- function(store, predictors = NULL, windows = NULL,
                              target_col = NULL, cell_size = NULL,
                              strict = TRUE) {
@@ -343,6 +351,7 @@ check_store_spec <- function(store, predictors = NULL, windows = NULL,
 #' @param points Point-value table (see .point_contract).
 #' @param meta   The patch store's meta tibble.
 #' @return `points` reordered and subset to exactly match `meta` row for row.
+#' @noRd
 align_points_to_meta <- function(points, meta) {
   check_point_contract(points, need = "sample_id", what = "points")
   check_point_contract(meta,   need = "sample_id", what = "patch store meta")
@@ -402,6 +411,7 @@ align_points_to_meta <- function(points, meta) {
 #'   from the fold's training rows, which is the point of the whole design.
 #' @return list(cache, scaling) where `cache[[role]][[key]]` is a tensor and
 #'   `cache[[role]]$y` the target column.
+#' @noRd
 build_fold_cache <- function(store, points, type_table, index,
                              window_sizes = NULL, scaling = NULL,
                              verbose = TRUE) {
@@ -514,6 +524,7 @@ build_fold_cache <- function(store, points, type_table, index,
 #' @param features   Any of "centre", "window_mean".
 #' @return Named list by role: list(x = matrix, y = numeric). Column names are
 #'   `<predictor>` for the centre and `<predictor>_mean_w<W>` for the means.
+#' @noRd
 fold_table_view <- function(cache, predictors, windows = NULL,
                             features = c("centre", "window_mean")) {
   features <- match.arg(features, several.ok = TRUE)

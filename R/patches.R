@@ -30,6 +30,7 @@
 #' @param n_cols      Columns in the strip (row-major stride).
 #' @param window_size Odd integer patch side.
 #' @return An (n_centres x window_size^2) integer matrix of linear indices.
+#' @noRd
 patch_cell_index <- function(centre_row, centre_col, n_cols, window_size) {
   if (window_size %% 2L != 1L) {
     stop("window_size must be odd (a patch has one centre pixel), got ",
@@ -61,6 +62,7 @@ patch_cell_index <- function(centre_row, centre_col, n_cols, window_size) {
 #' @param cell_index  Matrix from patch_cell_index().
 #' @param window_size Odd integer patch side.
 #' @return list(array = [n_centres, w, w], valid = logical vector per centre).
+#' @noRd
 patch_band_assemble <- function(band_values, cell_index, window_size) {
   n     <- nrow(cell_index)
   n_pos <- ncol(cell_index)
@@ -84,6 +86,7 @@ patch_band_assemble <- function(band_values, cell_index, window_size) {
 #' @param cell_index  Matrix from patch_cell_index().
 #' @param n_channels  Number of channels (columns of cell_values).
 #' @return list(values = array [n_pos, n_centres, n_channels], valid = logical).
+#' @noRd
 patch_gather <- function(cell_values, cell_index, n_channels) {
   n     <- nrow(cell_index)
   n_pos <- ncol(cell_index)
@@ -102,6 +105,7 @@ patch_gather <- function(cell_values, cell_index, n_channels) {
 #' @param keep       Integer vector of centre positions to keep.
 #' @param n_channels Number of channels.
 #' @param window_size Odd integer patch side.
+#' @noRd
 patch_finish <- function(values, keep, n_channels, window_size) {
   if (length(keep) == 0L) {
     return(array(0, dim = c(0L, n_channels, window_size, window_size)))
@@ -117,6 +121,7 @@ patch_finish <- function(values, keep, n_channels, window_size) {
 #' The framework's rule everywhere: a centre needs half_w cells of margin on
 #' every side, otherwise the patch would read outside the strip and silently
 #' wrap into the adjacent row.
+#' @noRd
 patch_centre_in_bounds <- function(centre_row, centre_col, n_rows, n_cols,
                                    window_size) {
   half_w <- (window_size - 1L) %/% 2L

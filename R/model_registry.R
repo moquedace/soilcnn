@@ -131,6 +131,7 @@ model_spec <- function(name, input, fit, predict,
 #' @param overwrite FALSE (default) refuses to replace an existing name. A
 #'   silent replacement is how two different models come to answer to the same
 #'   name in the same session, and the results carry no mark of which ran.
+#' @return `spec`, invisibly.
 #' @export
 register_model <- function(spec, overwrite = FALSE) {
   stopifnot(inherits(spec, "model_spec"))
@@ -145,6 +146,7 @@ register_model <- function(spec, overwrite = FALSE) {
 #' Fetch a registered model.
 #'
 #' @param name Registered name.
+#' @return The `model_spec` registered under `name`.
 #' @export
 get_model <- function(name) {
   if (!exists(name, envir = .model_registry, inherits = FALSE)) {
@@ -155,6 +157,9 @@ get_model <- function(name) {
 }
 
 #' Every registered model, as a table.
+#'
+#' @return A tibble: name, input ("table" or "patches"), tunable (whether it
+#'   draws its own grid) and description.
 #' @export
 list_models <- function() {
   nms <- sort(ls(.model_registry))
@@ -171,6 +176,12 @@ list_models <- function() {
   )
 }
 
+#' Print a `model_spec`
+#'
+#' @param x   A `model_spec`, from [model_spec()].
+#' @param ... Ignored.
+#' @return `x`, invisibly.
+#' @keywords internal
 #' @export
 print.model_spec <- function(x, ...) {
   cat("<model_spec> ", x$name, "\n", sep = "")

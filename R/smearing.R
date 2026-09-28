@@ -169,7 +169,7 @@ smearing_factor <- function(obs_transform, pred_transform,
 #' @param pred_transform Predictions in transform space.
 #' @param cal A smearing_cal, or a bare positive number to use as the factor.
 #' @param lower_limit Floor, e.g. 0 for a stock. Applied after the correction.
-#' @return Numeric, in native units: an estimate of E[y | x] rather than of its
+#' @return Numeric, in native units: an estimate of `E[y | x]` rather than of its
 #'   median.
 #' @export
 smear <- function(pred_transform, cal, lower_limit = 0) {
@@ -188,6 +188,12 @@ smear <- function(pred_transform, cal, lower_limit = 0) {
   out
 }
 
+#' Print a `smearing_cal`
+#'
+#' @param x   A `smearing_cal`, from [smearing_factor()].
+#' @param ... Ignored.
+#' @return `x`, invisibly.
+#' @keywords internal
 #' @export
 print.smearing_cal <- function(x, ...) {
   cat("\n<smearing_cal> ", x$transform, " back-transform\n", sep = "")
@@ -257,6 +263,7 @@ print.smearing_cal <- function(x, ...) {
 #' @param run_dir   Tuning run directory.
 #' @param config_id Which config's residuals.
 #' @param role      Which role. "validation" is the point.
+#' @inheritParams smearing_factor
 #' @return A smearing_cal, or NULL when the run wrote no usable predictions.
 #' @export
 smearing_from_run <- function(run_dir, config_id, role = "validation",

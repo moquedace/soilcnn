@@ -58,6 +58,7 @@
 #'
 #' @param method A caret method name, e.g. "ranger", "xgbTree", "glmnet".
 #' @return The modelInfo list.
+#' @noRd
 caret_model_info <- function(method) {
   .need_caret()
   mi <- caret::getModelInfo(method, regex = FALSE)
@@ -86,6 +87,7 @@ caret_model_info <- function(method) {
 #'   "random". Random is usually the better spend at equal budget once more
 #'   than two parameters are in play -- the same reason make_tune_grid() draws
 #'   rather than crosses.
+#' @noRd
 caret_grid <- function(method, tune_length = 6L, seed = 42L, x, y,
                        search = c("grid", "random")) {
   search <- match.arg(search)
@@ -211,6 +213,12 @@ caret_available <- function(pattern = NULL) {
   )
 }
 
+#' Print a `caret_fitted`
+#'
+#' @param x   A `caret_fitted`, fitted through [caret_spec()].
+#' @param ... Ignored.
+#' @return `x`, invisibly.
+#' @keywords internal
 #' @export
 print.caret_fitted <- function(x, ...) {
   cat("<caret_fitted> method \"", x$method, "\" | ", length(x$features),

@@ -56,6 +56,7 @@
 #' @param n_features  Number of columns in the table, so mtry can be expressed
 #'   as a FRACTION. An mtry written as a count is wrong the moment the feature
 #'   set changes -- and adding the window means triples it.
+#' @noRd
 rf_grid <- function(tune_length = 4L, seed = 42L, n_features = NULL) {
   tune_length <- max(1L, as.integer(tune_length))
 
@@ -106,6 +107,7 @@ rf_grid <- function(tune_length = 4L, seed = 42L, n_features = NULL) {
 }
 
 #' The Random Forest baseline.
+#' @noRd
 rf_spec <- function() {
   model_spec(
     name  = "rf",
@@ -206,6 +208,7 @@ rf_spec <- function() {
 # and answer nothing.
 
 #' Grid for the MLP baseline.
+#' @noRd
 mlp_grid <- function(tune_length = 6L, seed = 42L) {
   with_local_seed(seed, {
     hidden  <- sample(c("256_128", "512_256", "512_256_128", "128_64"),
@@ -254,6 +257,7 @@ mlp_grid <- function(tune_length = 6L, seed = 42L) {
 #'
 #' @param n_epochs Maximum epochs.
 #' @param patience Early-stopping patience, in epochs.
+#' @noRd
 mlp_spec <- function(n_epochs = 300L, patience = 40L) {
   model_spec(
     name  = "mlp",
@@ -435,6 +439,12 @@ cnn_spec <- function() {
 # Typing the object used to dump the backend's own print -- a randomForest
 # call, or an nn_module with every layer -- and the two things a reader
 # wants first (what was it fitted on, how big is it) were not on the screen.
+#' Print a `rf_fitted`
+#'
+#' @param x   A `rf_fitted`, fitted by the random forest baseline (`get_model("rf")`).
+#' @param ... Ignored.
+#' @return `x`, invisibly.
+#' @keywords internal
 #' @export
 print.rf_fitted <- function(x, ...) {
   n_tree <- tryCatch(
@@ -447,6 +457,12 @@ print.rf_fitted <- function(x, ...) {
   invisible(x)
 }
 
+#' Print a `mlp_fitted`
+#'
+#' @param x   A `mlp_fitted`, fitted by the MLP baseline (`get_model("mlp")`).
+#' @param ... Ignored.
+#' @return `x`, invisibly.
+#' @keywords internal
 #' @export
 print.mlp_fitted <- function(x, ...) {
   cat("<mlp_fitted> ", length(x$features), " feature(s) | best epoch ",
