@@ -74,10 +74,16 @@
 #'   parameters, used as the complexity axis in one_se(). NULL means the model
 #'   cannot report it and one_se() falls back to its other rule.
 #' @param description  One line, printed by list_models().
+#' @param fit_args     The arguments a caller may hand fit() through
+#'   dsm_train()'s `...`. NULL derives them from fit()'s formals, less the ones
+#'   the framework supplies itself (x, y, cfg, x_val, y_val, device, n_cores,
+#'   points_valid, transform, model_name) and `...`. dsm_train() refuses any
+#'   other: a misspelt option for a table model used to vanish into fit()'s
+#'   `...` and train as if it had not been given.
 #' @return A model_spec.
 model_spec <- function(name, input, fit, predict,
                        default_grid = NULL, count_params = NULL,
-                       description = "") {
+                       description = "", fit_args = NULL) {
   input <- match.arg(input, c("table", "patches"))
 
   # Checked here rather than at fit time: a typo in an argument name is
@@ -97,13 +103,26 @@ model_spec <- function(name, input, fit, predict,
          call. = FALSE)
   }
 
+  if (is.null(fit_args)) {
+    fit_args <- setdiff(names(formals(fit)), c(.framework_fit_args, "..."))
+  } else if (!is.character(fit_args)) {
+    stop("fit_args must be the names of arguments fit() takes, as a character vector.",
+         call. = FALSE)
+  }
+
   structure(
     list(name = name, input = input, fit = fit, predict = predict,
          default_grid = default_grid, count_params = count_params,
-         description = description),
+         description = description, fit_args = fit_args),
     class = "model_spec"
   )
 }
+
+# What the runners hand a model's fit() themselves -- the data, the config,
+# the validation rows, the device, the threads -- and so what a caller may not
+# pass through dsm_train()'s `...`.
+.framework_fit_args <- c("x", "y", "cfg", "x_val", "y_val", "device", "n_cores",
+                         "points_valid", "transform", "model_name")
 
 #' Add a model to the registry.
 #'

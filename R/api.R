@@ -505,6 +505,23 @@ dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
     # before the plan: a missing or misspelt column used to surface at the
     # first unit, or never (.check_cnn_grid()).
     if (!is.null(tune_grid)) tune_grid <- .check_cnn_grid(tune_grid, verbose = verbose)
+  } else {
+    # A TABLE MODEL'S `...` IS CHECKED TOO. It went to the runner, and from the
+    # runner into fit()'s own `...`, where a misspelt option -- ntree for rf,
+    # n_epochs for the MLP, whose epochs are mlp_spec()'s -- vanished and the
+    # model trained as if it had not been given. What may pass is the
+    # runner's one option dsm_train() does not set, and what the model
+    # declares (model_spec(fit_args)).
+    dots <- names(list(...)) %||% character(0)
+    dots[!nzchar(dots)] <- "(unnamed)"
+    allowed <- c("windows", model$fit_args %||% character(0))
+    bad <- setdiff(dots, allowed)
+    if (length(bad) > 0L) {
+      stop("dsm_train() does not know argument(s): ", paste(bad, collapse = ", "),
+           ".\n  Options for '", model$name, "' are: ", paste(sort(allowed), collapse = ", "),
+           ". Its hyperparameters go in tune_grid, and its own settings in its spec ",
+           "(mlp_spec(n_epochs = ...), caret_spec(method, ...)).", call. = FALSE)
+    }
   }
 
   # The buffer is derived from the LARGEST window in play. With an explicit

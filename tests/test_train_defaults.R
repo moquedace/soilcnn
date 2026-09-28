@@ -201,6 +201,29 @@ if (requireNamespace("torch", quietly = TRUE)) {
   invisible(suppressMessages(set_torch_threads(before)))
 }
 
+# ── 4b. a table model's options ──────────────────────────────────────────────
+#
+# dsm_train()'s `...` went to the runner and on into fit()'s own `...`, where
+# a misspelt option vanished: rf trained its default forest with ntree = 500
+# given, the MLP 300 epochs with n_epochs = 100. Now what may pass is the
+# runner's `windows` and what the model declares, derived from fit()'s own
+# arguments less the ones the framework supplies.
+ok["the_forest_and_the_mlp_declare_no_caller_options"] <-
+  identical(get_model("rf")$fit_args, character(0)) &&
+  identical(get_model("mlp")$fit_args, character(0))
+m_alpha <- model_spec("with_alpha", "table",
+                      fit = function(x, y, cfg, alpha = 1, n_cores = NULL, ...) NULL,
+                      predict = function(object, x, ...) 0)
+ok["a_models_own_fit_options_are_derived"] <- identical(m_alpha$fit_args, "alpha")
+ok["a_misspelt_forest_option_is_refused_at_the_door"] <- {
+  m <- err(dsm_train(d_bare, model = "rf", ntree = 500L, verbose = FALSE))
+  grepl("does not know argument\\(s\\): ntree", m) && grepl("tune_grid", m)
+}
+ok["the_mlps_epochs_are_its_specs_not_dsm_trains"] <-
+  grepl("mlp_spec", err(dsm_train(d_bare, model = "mlp", n_epochs = 100L, verbose = FALSE)))
+ok["an_option_the_model_declares_goes_through"] <-
+  !grepl("does not know", err(dsm_train(d_bare, model = m_alpha, alpha = 2, verbose = FALSE)))
+
 # ── 5. a grid given by hand, checked against the parameter space ─────────────
 #
 # A missing or misspelt column used to surface at the first unit -- after the
