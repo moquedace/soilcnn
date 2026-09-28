@@ -5763,3 +5763,31 @@ saiu do git (e07a149): mudava a cada lint.
 
 Perdeu: reescrever os registros. Eles valem pelo que diziam na data em que
 foram escritos.
+
+### A primeira rodada do roxygen2, e o que ela mostrou
+
+- **roxygen2 8.1.0 escreveu as 84 páginas** (96525db). O `NAMESPACE` saiu
+  idêntico ao escrito à mão, e o `DESCRIPTION` ganhou
+  `Config/roxygen2/version` no lugar do `RoxygenNote`.
+  - Os avisos de "link não resolvido" para os nossos próprios tópicos são de
+    primeira rodada: as páginas saíram com os links certos.
+  - Os de verdade eram formatos de array, como `[n, channels, w, w]`, lidos
+    como link. Eles foram para crases.
+  - Os `.Rd` ganharam fim de linha LF no `.gitattributes` (507913a). Sem isso,
+    todo `roxygenise()` reescreveria as 84 páginas para não mudar nada.
+- **Os 36 avisos de todo `run_all` eram uma chamada só** (9254868).
+  - O `test_train_defaults` entrega de propósito ao `dsm_train()` um
+    `dsm_data` sem store, só para ver uma opção passar pela porta.
+  - O `resolve_resampling()` media então o tamanho de bloco "auto" sobre
+    nenhum ponto: 7 tamanhos × 5 avisos de `min()`/`max()` de vetor vazio, e
+    depois "nenhum tamanho serve".
+  - Agora ele recusa antes, dizendo que `data` não tem pontos.
+- **O build com a vinheta passou**, e o 06 renomeado rodou inteiro: as figuras
+  foram para `outputs/graphical_evaluation` (CCC do ensemble 0,475).
+- **O build gastou 4m40s só no "preparing"** (3f65e8d). O `R CMD build` lista
+  todos os arquivos do diretório, inclusive `outputs/` e `data/`, antes de
+  aplicar o `.Rbuildignore`.
+  - O teste de instalação agora constrói a partir de uma cópia das peças do
+    pacote. O tarball é o mesmo.
+  - O que o build do diretório inteiro garantia (os dados do usuário fora) é
+    checado no `test_package_metadata`, pela mesma regra do `R CMD build`.
