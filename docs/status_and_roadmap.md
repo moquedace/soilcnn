@@ -176,16 +176,21 @@ Section 3 says what was done overnight. What remains, in the order a new user
 would hit it:
 
 1. ~~The example headers~~ — **done 2026-09-21**, 26 files. See below.
-2. **`clamp` as a documented formal of `dsm_train()`.** It is the one
-   argument that can silently destroy predictions and it lives in `...`.
-   Additive, safe, not done overnight because it touches the signature.
-3. **A `.check_k()` helper** for the five resampling constructors: `k = 2.5`
-   or `k = "5"` currently fails somewhere below the constructor.
-4. **`dsm_train()` validation of a user-supplied grid** beyond windows: the
-   column set of `make_tune_grid()`, derived from the parameter space rather
-   than hardcoded.
-5. **Table-model `...`:** `model_spec()` could record `fit_args` so a typo
-   for `rf` is refused at the door as the CNN's now is.
+2. ~~`clamp` as a documented formal of `dsm_train()`~~ — **done 2026-09-28**
+   (08d6184): checked at the door for its shape and against the data (an
+   observed target outside it is refused), kept by the run (`clamp.rds`; a
+   resume with another is refused), and inherited by `dsm_final()`, whose
+   summary is what `dsm_predict()` reads.
+3. ~~A `.check_k()` helper~~ — **done 2026-09-28** (c2616ea): every
+   constructor wants a whole `k` of at least 2 (`region_cv()` may leave it
+   NULL) and fractions in [0, 1), and names itself when refusing.
+4. ~~`dsm_train()` validation of a user-supplied grid~~ — **done 2026-09-28**
+   (0ec26aa): `.check_cnn_grid()`, the columns derived from the parameter
+   space; missing and misspelt columns refused with the near name offered,
+   `dropout` alone expanded into its five sites, values and ranges checked.
+5. ~~Table-model `...`~~ — **done 2026-09-28** (e16fdca): `model_spec()`
+   records `fit_args`, derived from `fit()`'s formals; `dsm_train()` refuses
+   any other option for a table model at the door.
 6. **Two Portuguese file names** kept by decision (`06_avaliacao_grafica.R`
    and its output slugs); rename when the package boundary is drawn.
 

@@ -5429,3 +5429,67 @@ dela: 0,1 GB a mais por milhão de pixels válidos.
 - **Na rodada global,** com 33 GB livres a regra escolhe 1 × 15, ~39 h. Para
   o 2 × 7 (~33 h), é preciso começar de uma sessão do R nova, com os outros
   programas fechados, para ter pelo menos 42 GB livres.
+
+
+## 2026-09-28 — Robustez: o que um usuário novo erra é recusado na entrada, com o conserto dito
+
+Os quatro itens pendentes da lista da auditoria (roadmap, "Robustness and ease
+of use", itens 2–5). Todos têm a mesma forma: um erro que antes aparecia
+tarde, no meio da rodada, ou nunca, agora para na entrada e diz o que fazer.
+
+- **`clamp` virou argumento documentado do `dsm_train()`** (08d6184). É o
+  único argumento de treino que destrói predições em silêncio: toda predição
+  nativa é cortada para dentro dele antes de ser avaliada. Um alvo que pode
+  ser negativo (temperatura, log-razão), cortado no zero padrão, perde metade
+  das predições, e as métricas continuam com cara de plausíveis. Ele vivia no
+  `...`. Agora:
+  - é checado na forma e **contra os dados**: um alvo observado fora dele é
+    recusado, com a faixa dos dados na mensagem;
+  - a rodada o guarda (`clamp.rds`, antes da primeira unidade), e retomá-la
+    com outro é recusado, porque as unidades seriam avaliadas de dois jeitos;
+  - o `dsm_final()` refaz com o da rodada de ajuste. Outro, dado em
+    `training`, é recusado; uma rodada que não guardou nenhum (o estágio 03)
+    queria o padrão. O resumo do final o carrega, e é isso que o
+    `dsm_predict()` lê.
+- **`.check_k()` e `.check_frac()` nos construtores de validação cruzada**
+  (c2616ea). Antes, `k = 2.5` virava 2 folds sem aviso, `k = "5"` dava 5 por
+  sorte, e `test_frac = 15` (querendo 15%) passava sem checagem. Agora:
+  - `k` precisa ser inteiro ≥ 2 (`region_cv()` aceita NULL);
+  - as frações precisam estar em [0, 1);
+  - `holdout_cv()` precisa deixar algo para treinar;
+  - cada construtor que recusa diz o próprio nome.
+- **O grid da CNN dado à mão é checado contra o espaço de parâmetros**
+  (0ec26aa, `.check_cnn_grid()`). Uma coluna faltando ou com nome errado
+  aparecia só na primeira unidade, depois do plano e do cache. Uma coluna
+  opcional com nome errado nunca aparecia: ficava no padrão. Agora:
+  - as colunas saem do próprio espaço, então um parâmetro novo lá passa a ser
+    exigido aqui sem uma segunda lista para manter;
+  - uma coluna faltando é recusada, com o nome parecido sugerido (`base_rl` →
+    `base_lr`);
+  - uma coluna desconhecida a até duas edições de uma opcional ausente é
+    recusada como erro de digitação;
+  - outras colunas extras, como as métricas de um resumo, passam adiante com
+    aviso;
+  - `dropout` sozinho é expandido nos cinco sítios, como faz o gerador;
+  - IDs, janelas ímpares, valores categóricos e faixas numéricas também são
+    checados.
+- **Modelos de tabela: o `model_spec()` registra `fit_args`** (e16fdca). O
+  `...` do `dsm_train()` ia para o `...` do `fit()`, onde uma opção com nome
+  errado sumia. O `rf` treinava a floresta padrão com `ntree = 500` dado; o
+  MLP, 300 épocas com `n_epochs = 100` (as épocas dele são do
+  `mlp_spec()`). Agora os argumentos aceitos saem dos formais do `fit()`,
+  menos os que o framework fornece, e qualquer outro é recusado na entrada.
+  A mensagem diz onde vão os hiperparâmetros (`tune_grid`) e onde vão as
+  configurações do modelo (o spec).
+
+**Ficou para quando o pacote for delimitado:** os dois nomes de arquivo em
+português (`06_avaliacao_grafica.R` e as saídas dele).
+
+**Testes:**
+
+- `test_api.R`: construtores, `clamp` na entrada, registro do `clamp`,
+  retomada;
+- `test_train_defaults.R`: doze casos de grid, e as opções dos modelos de
+  tabela;
+- `test_final.R`: o final herda o `clamp`, e outro é recusado;
+- `test_api_run.R`: a rodada guarda o `clamp` que recebeu.
