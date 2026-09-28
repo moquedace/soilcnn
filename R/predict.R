@@ -1055,13 +1055,17 @@ print.dsm_prediction <- function(x, ...) {
 # for 1 s -- P4 measured that rate for the deployed network -- and a cache
 # capped at the 1 GB light-collection threshold; see .predict_gc_hook()).
 #
-# And 0.25 GB for every thread above 7, MEASURED RATHER THAN DERIVED. With 7
+# And 0.35 GB for every thread above 7, MEASURED RATHER THAN DERIVED. With 7
 # threads the model met T3's peak (14.7 GB against 14.6); with 15 it fell
-# short, by 1.3 GB at full width (T3) and by ~1.9 GB over Brazil, where a
-# fresh worker held a median 9.45 GB after its first unit against 7.6 (P5).
-# mimalloc keeps what a thread frees in that thread's own heap (T6), so what 7
-# threads share 15 hold apart: the likely cause, not a proven one. The term
-# puts every run measured so far within the 25% t3_03 and p5_03 allow.
+# short, by 1.3 GB at full width (T3) and by 4.5 GB over Brazil, where one
+# worker mapped all 69 units and peaked at 12.1 GB against 7.6 (P5). mimalloc
+# keeps what a thread frees in that thread's own heap (T6), so what 7 threads
+# share 15 hold apart: the likely cause, not a proven one. 0.25 GB a thread
+# was first fitted to fresh workers' first units (P5's first run, where
+# restarts kept every worker young); 0.35 is fitted to a worker's whole life,
+# the peak the plan must hold. It puts every run measured so far within the
+# 25% t3_03 and p5_03 allow: Brazil 12.1 of 10.4, T3 15.9 of 17.4 and 14.7 of
+# 14.6, P5's small box 8.0 of 9.6, P4 6.6 of 8.5.
 #
 # The first version counted neither the halo's clone nor the R vectors, and a
 # band's copies as three doubles; on full-width rows T3 measured 24-32 GB
@@ -1075,7 +1079,7 @@ print.dsm_prediction <- function(x, ...) {
     g * w_buf * 20 +
     2 * (g + 2 * h) * (min(chunk_cols, w_out) + 2 * h) * (n_ch + 4 * conv_sum) * 4 +
     g * w_out * (8 * (2 * n_seeds + n_bands + 4 * n_iv) + 16)
-  bytes / 1e9 + 0.5 + 2 + 3.5 + 0.25 * max(0, threads - 7)
+  bytes / 1e9 + 0.5 + 2 + 3.5 + 0.35 * max(0, threads - 7)
 }
 
 .predict_work_plan <- function(grid, inp, cfg, band_tbl, n_cores, tpw, max_ram_gb,
