@@ -437,6 +437,13 @@ resolve_resampling <- function(spec, data, test_ids = NULL, windows = NULL,
 #'   store was built under, which dsm_load() read (`data$transform`). A
 #'   function is the inverse to use instead, and is refused if it disagrees
 #'   with the store's.
+#' @param clamp      c(lower, upper), the plausible range of the target in
+#'   native units: every prediction is clipped into it before it is scored.
+#'   c(0, Inf) suits a stock or a concentration. A target that can be
+#'   negative -- a temperature, a log-ratio -- needs c(-Inf, Inf): clipped at
+#'   zero it loses half its predictions, and the metrics still look plausible.
+#'   Refused if the data itself falls outside it. The run keeps it, and
+#'   dsm_final() refits with the same.
 #' @param features   For tabular models: "centre", "window_mean", or both.
 #' @param device     A torch device. NULL builds one with setup_torch_device().
 #' @param n_cores    Cores for training: torch's threads for the CNN and the
@@ -448,7 +455,7 @@ resolve_resampling <- function(spec, data, test_ids = NULL, windows = NULL,
 #' @return The runner's result, plus the plan and the data it used.
 dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
                       tune_grid = NULL, tune_length = 20L, n_seeds = 3L,
-                      transform = NULL,
+                      transform = NULL, clamp = c(0, Inf),
                       features = c("centre", "window_mean"),
                       output_dir = "./outputs/tuning",
                       run_id = format(Sys.time(), "%Y%m%d_%H%M%S"),
@@ -480,12 +487,13 @@ dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
   # The transform and the cores are checked at the door too: both cost a
   # second here, and the run's first unit to get wrong.
   transform <- .resolve_train_transform(transform, data, verbose = verbose)
+  clamp <- .check_train_clamp(clamp, data)
   if (!is.null(n_cores)) n_cores <- suppressMessages(resolve_cores(n_cores, what = "training"))
 
   if (identical(model$input, "patches")) {
     dots <- names(list(...))
     internal <- c("cfg", "n_channels", "loaders", "points_valid", "transform",
-                  "device")
+                  "device", "clamp")
     allowed <- c(setdiff(names(formals(train_one_cnn)), internal), "release_store")
     bad <- setdiff(dots, allowed)
     if (length(bad) > 0L) {
@@ -540,25 +548,28 @@ dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
     } else if (!is.null(n_cores)) {
       set_torch_threads(n_cores)
     }
+    .train_clamp_record(file.path(output_dir, run_id), clamp, resume)
     res <- run_cnn_resample(
       tune_grid = tune_grid, store = data$store, points = data$points,
       type_table = data$type_table, plan = plan, transform = transform,
       output_dir = output_dir, device = device, run_id = run_id,
       base_seed = base_seed, n_seeds = n_seeds, resume = resume,
-      evaluate_test = evaluate_test, ...)
+      evaluate_test = evaluate_test, clamp = clamp, ...)
   } else {
     # A torch model on the table path (the MLP) gets its threads the same way;
     # the forest reads n_cores itself, through the runner's `...`.
     if (!is.null(n_cores) && isNamespaceLoaded("torch")) set_torch_threads(n_cores)
+    .train_clamp_record(file.path(output_dir, run_id), clamp, resume)
     res <- run_table_resample(
       model = model, tune_grid = tune_grid, store = data$store,
       points = data$points, type_table = data$type_table, plan = plan,
       features = features, transform = transform, output_dir = output_dir,
       run_id = run_id, base_seed = base_seed, n_seeds = n_seeds,
       tune_length = tune_length, device = device, resume = resume,
-      evaluate_test = evaluate_test, n_cores = n_cores, ...)
+      evaluate_test = evaluate_test, clamp = clamp, n_cores = n_cores, ...)
   }
 
+  res$clamp <- clamp
   res$model <- model$name
   res$data  <- data
   class(res) <- c("dsm_fit", class(res))
@@ -606,6 +617,52 @@ dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
          "in the wrong space.", call. = FALSE)
   }
   transform
+}
+
+# THE CLAMP IS AT THE DOOR, NOT IN `...`. It is the one training argument that
+# destroys predictions silently: every native prediction is clipped into it
+# before it is scored, so a target that can be negative -- a temperature, a
+# log-ratio -- clipped at the default zero loses half its predictions while
+# the metrics still come out plausible. A formal now, checked for its shape,
+# and checked against the data: an observed target outside the clamp is a
+# clamp that would clip what the data itself says is possible.
+.check_train_clamp <- function(clamp, data) {
+  if (!is.numeric(clamp) || length(clamp) != 2L || anyNA(clamp) || clamp[1] > clamp[2]) {
+    stop("clamp must be c(lower, upper) with lower <= upper and no NA: c(0, Inf) for a ",
+         "stock or a concentration, c(-Inf, Inf) for a target that can be negative.",
+         call. = FALSE)
+  }
+  y <- data$store$meta$target_native
+  y <- y[is.finite(y)]
+  out <- y < clamp[1] | y > clamp[2]
+  if (any(out)) {
+    stop(sprintf("clamp = c(%s, %s) would clip the data itself: %d of %d observed target value(s) lie outside it (the data runs from %s to %s). Every prediction is clipped into the clamp before it is scored -- widen it, e.g. clamp = c(-Inf, Inf).",
+                 format(clamp[1]), format(clamp[2]), sum(out), length(y),
+                 format(signif(min(y), 4)), format(signif(max(y), 4))),
+         call. = FALSE)
+  }
+  as.numeric(clamp)
+}
+
+# The clamp a run scored its units with is part of the run. Resumed with
+# another, its early units and its late ones would be two metrics in one
+# table, and the selection and the calibration residuals would mix them. So
+# it is written before the first unit, a resume with a different one is
+# refused, and dsm_final() refits with it (.final_clamp()).
+.train_clamp_record <- function(run_dir, clamp, resume) {
+  f <- file.path(run_dir, "clamp.rds")
+  if (isTRUE(resume) && file.exists(f)) {
+    old <- as.numeric(readRDS(f))
+    if (!identical(old, as.numeric(clamp))) {
+      stop(sprintf("This run was started with clamp = c(%s, %s) and is being resumed with c(%s, %s): its units would be scored two ways. Resume with the same clamp, or start another run_id.",
+                   format(old[1]), format(old[2]), format(clamp[1]), format(clamp[2])),
+           call. = FALSE)
+    }
+    return(invisible(f))
+  }
+  create_output_dirs(run_dir)
+  safe_save_rds(as.numeric(clamp), f, compress = FALSE)
+  invisible(f)
 }
 
 # A default grid drawn over what the store and the plan can serve. The

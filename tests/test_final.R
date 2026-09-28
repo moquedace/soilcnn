@@ -198,6 +198,17 @@ ok["an_existing_run_is_not_overwritten_silently"] <-
   grepl("already exists", refuse(run_id = "par", resume = FALSE))
 ok["a_seed_count_means_42_onwards"] <- identical(.final_seeds(3L), 42:44)
 
+# THE CLAMP IS THE TUNING RUN'S. dsm_train() recorded the one it scored its
+# units with -- the default here -- the refit took it without being told, and
+# the summary a map reads carries it; another, given in `training`, is refused.
+ok["the_tuning_run_keeps_its_clamp"] <-
+  identical(readRDS(file.path(fit$run_dir, "clamp.rds")), c(0, Inf)) && identical(fit$clamp, c(0, Inf))
+ok["the_refit_clamps_as_the_tuning_did"] <- identical(as.numeric(sm$training$clamp), c(0, Inf))
+ok["a_refit_clamp_the_tuning_did_not_use_is_refused"] <-
+  grepl("Leave it out", refuse(training = list(n_epochs = 3L, clamp = c(-Inf, Inf))))
+ok["a_tuning_run_that_kept_no_clamp_meant_the_default"] <-
+  identical(.final_clamp(file.path(out_root, "no_such_run"), NULL), c(0, Inf))
+
 # ── 7. the declaration of a model fitted before dsm_final() existed ──────────
 #
 # A stage-04 run: the same files, but no record of threads, schedule or

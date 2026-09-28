@@ -235,6 +235,8 @@ n_train_min <- min(vapply(plan$folds, function(f) length(f$train), integer(1)))
 ok["the_default_grid_batches_fit_the_smallest_fold"] <-
   all(floor(n_train_min / cmp_def$batch_size) >= 4)
 ok["n_cores_set_torchs_threads"] <- torch::torch_get_num_threads() == 1L
+ok["dsm_train_keeps_the_clamp_it_was_given"] <- identical(fit_def$clamp, c(-Inf, Inf)) &&
+  identical(readRDS(file.path(out_root, "api_cnn_default", "clamp.rds")), c(-Inf, Inf))
 
 pred_def <- safe_read_csv2(file.path(out_root, "api_cnn_default", "predictions",
                                      paste0(cmp_def$unit_id[1], "_pred_all.csv")))

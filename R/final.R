@@ -69,6 +69,24 @@
   augment              = TRUE
 )
 
+# THE CLAMP IS THE TUNING RUN'S. Its units were scored with it -- the
+# selection, and the cross-validated residuals the intervals are calibrated
+# on -- so the refit clamps the same way, and so does a map (dsm_predict()
+# reads the refit's). Given in `training`, it must agree. A tuning run that
+# recorded none (stage 03, or before dsm_train() kept it) meant the default.
+.final_clamp <- function(tuning_dir, given) {
+  f <- file.path(tuning_dir, "clamp.rds")
+  tuned <- if (file.exists(f)) as.numeric(readRDS(f)) else NULL
+  if (is.null(given)) return(tuned %||% c(0, Inf))
+  given <- as.numeric(given)
+  if (!is.null(tuned) && !identical(tuned, given)) {
+    stop(sprintf("training$clamp = c(%s, %s), but the tuning run scored its units -- the selection and the calibration residuals -- with c(%s, %s). Leave it out to refit with the tuning run's.",
+                 format(given[1]), format(given[2]), format(tuned[1]), format(tuned[2])),
+         call. = FALSE)
+  }
+  given
+}
+
 #' Refit the configuration a tuning run selects, under N seeds.
 #'
 #' @param tuning     A `dsm_fit` from dsm_train(), or the directory of a tuning
@@ -142,6 +160,7 @@ dsm_final <- function(tuning, data = NULL, config = "auto",
          paste(bad, collapse = ", "), call. = FALSE)
   }
   training  <- utils::modifyList(.final_training_defaults, training)
+  training$clamp <- .final_clamp(tuning_dir, training$clamp)
   transform <- .resolve_train_transform(transform, data, verbose = verbose)
   n_cores   <- resolve_cores(n_cores, what = "the final fit")
   tpu <- suppressWarnings(as.integer(threads_per_unit))

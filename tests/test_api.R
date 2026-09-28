@@ -271,6 +271,34 @@ ok["dsm_train_needs_dsm_data"] <- inherits(
   tryCatch(dsm_train(list(a = 1), model = "rf"), error = function(e) e),
   "error")
 
+# THE CLAMP IS AT THE DOOR. Every prediction is clipped into it before it is
+# scored, so one that cuts into the data itself is refused before the plan is
+# resolved -- the fixture's targets run from ~5 to ~60, and c(0, 10) would
+# clip most of them. A table model built here, since this file registers none.
+dummy_table <- model_spec("dummy_table", input = "table",
+                          fit = function(x, y, cfg, ...) NULL,
+                          predict = function(object, x, ...) rep(0, nrow(x)))
+ok["a_malformed_clamp_is_refused"] <-
+  grepl("clamp must be c\\(lower, upper\\)",
+        spec_err(suppressMessages(dsm_train(fake_data, model = dummy_table, clamp = c(1, 0)))))
+ok["a_clamp_that_clips_the_data_is_refused"] <-
+  grepl("would clip the data itself",
+        spec_err(suppressMessages(dsm_train(fake_data, model = dummy_table, clamp = c(0, 10)))))
+ok["the_data_passes_its_own_range"] <-
+  identical(.check_train_clamp(c(0, Inf), fake_data), c(0, Inf))
+
+# The run keeps the clamp it scored its units with: a resume with another is
+# refused, and dsm_final() refits with the tuning run's.
+cl_dir <- file.path(tempdir(), "dlc_clamp_record")
+unlink(cl_dir, recursive = TRUE)
+invisible(.train_clamp_record(cl_dir, c(-Inf, Inf), resume = TRUE))
+ok["a_run_records_its_clamp"] <- identical(readRDS(file.path(cl_dir, "clamp.rds")), c(-Inf, Inf))
+ok["a_resume_with_another_clamp_is_refused"] <-
+  grepl("scored two ways", spec_err(.train_clamp_record(cl_dir, c(0, Inf), resume = TRUE)))
+ok["a_resume_with_the_same_clamp_goes_on"] <-
+  identical(spec_err(.train_clamp_record(cl_dir, c(-Inf, Inf), resume = TRUE)), "")
+unlink(cl_dir, recursive = TRUE)
+
 # A grid asking for a window the data was not loaded with must name the fix.
 if ("cnn" %in% list_models()$name) {
   small <- fake_data
