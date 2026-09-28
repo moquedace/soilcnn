@@ -50,7 +50,6 @@
 # Fold construction must not consume draws from the stream that initialises
 # model weights: otherwise changing k would silently change every model's
 # initialisation too, and the comparison between plans would be confounded.
-#' @export
 with_local_seed <- function(seed, expr) {
   if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
     old <- get(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
@@ -912,7 +911,6 @@ describe_subsample <- function(idx) {
 #' @param meta            The same point table.
 #' @param validation_frac Share of the non-test rows used to stop training.
 #' @return A one-fold `fold_plan`.
-#' @export
 refit_split <- function(plan, meta, validation_frac = 0.15) {
   stopifnot(inherits(plan, "fold_plan"))
   test_pos <- plan$folds[[1]]$test

@@ -32,7 +32,6 @@
 #' @return an object of class "check_ledger"; pass it to ledger_check() and
 #'   ledger_verdict(). It is an environment, so recording mutates it in place
 #'   and no `<<-` is needed at the call sites.
-#' @export
 check_ledger <- function(label) {
   L <- new.env(parent = emptyenv())
   L$label <- label
@@ -54,7 +53,6 @@ check_ledger <- function(label) {
 #' @param measured what was seen, printed beside the flag. Ignored when `ok`
 #'   returned a list carrying its own.
 #' @return the recorded row, invisibly.
-#' @export
 ledger_check <- function(L, id, what, ok, measured = NULL) {
   stopifnot(inherits(L, "check_ledger"), is.character(id), length(id) == 1L)
   r <- tryCatch(force(ok), error = function(e) {
@@ -92,7 +90,6 @@ ledger_check <- function(L, id, what, ok, measured = NULL) {
 #'   the code.
 #' @param report_csv optional path; the ledger is written there (PT-BR csv).
 #' @return invisibly, a list: pass (logical), table, missing, failed.
-#' @export
 ledger_verdict <- function(L, required, report_csv = NULL) {
   stopifnot(inherits(L, "check_ledger"), is.character(required), length(required) > 0L)
   tbl <- if (length(L$rows) == 0L) {

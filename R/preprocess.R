@@ -79,7 +79,6 @@ make_qc_table <- function(predictors,
 #'
 #' @param values Numeric vector of raw values for one channel.
 #' @param rule   One row of make_qc_table().
-#' @export
 qc_band_values <- function(values, rule) {
   if (!is.na(rule$na_below)) {
     bad <- !is.na(values) & is.finite(values) & values <= rule$na_below
@@ -186,7 +185,6 @@ scale_patches <- function(x, scaling, inplace = FALSE) {
 #'
 #' @param mat     Numeric matrix, columns in channel order.
 #' @param scaling From fit_scaling(), rows in the SAME channel order.
-#' @export
 scale_patches_matrix <- function(mat, scaling) {
   if (ncol(mat) != nrow(scaling)) {
     stop("matrix has ", ncol(mat), " columns but scaling has ", nrow(scaling),

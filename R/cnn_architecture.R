@@ -492,7 +492,6 @@ count_model_params <- function(cfg, n_channels) {
 # Builds a dual_branch_cnn from a single named config list (as produced by
 # make_tune_grid), making it easy to loop over grid rows.
 
-#' @export
 build_cnn_from_config <- function(cfg, n_channels) {
   # embed_pool is a newer field; tolerate older grids/configs that lack it
   # (a model trained before this option existed used "flatten"). Use [[ ]] and

@@ -184,7 +184,6 @@ extract_gate_analysis <- function(model, data_loader, points_valid,
 #'   gate, best_epoch, runtime, config. The trained model is NOT returned --
 #'   only `best_state` is, so the caller cannot accidentally keep a whole
 #'   model alive across grid iterations.
-#' @export
 train_one_cnn <- function(
   cfg,
   n_channels,
@@ -521,7 +520,6 @@ write_comparison <- function(comparison, csv_path, rds_path) {
   invisible(comparison)
 }
 
-#' @export
 run_cnn_tuning <- function(
   tune_grid,
   n_channels,
@@ -949,7 +947,6 @@ run_cnn_tuning <- function(
 #'   optimism itself -- never to choose anything.
 #' @param ...          Passed through to run_cnn_tuning() and train_one_cnn().
 #' @return list(comparison, by_config, run_dir, plan)
-#' @export
 run_cnn_resample <- function(tune_grid, store, points, type_table, plan,
                              transform  = identity,
                              output_dir = "./outputs/tuning",

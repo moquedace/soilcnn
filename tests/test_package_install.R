@@ -125,7 +125,11 @@ got <- callr::r(function(lib) {
   list(
     api = c("dsm_prepare", "dsm_load", "spatial_cv", "knndm_cv", "dsm_train",
             "one_se", "dsm_final", "dsm_predict") %in% exports,
-    internal_hidden = !any(c(".pkg_loader", ".predict_worker", ".check_cnn_grid") %in% exports),
+    # The dot helpers, and the plumbing the export list keeps out: a runner
+    # (dsm_train() drives it), the store's own reader, a script's writer.
+    internal_hidden = !any(c(".pkg_loader", ".predict_worker", ".check_cnn_grid",
+                             "run_cnn_resample", "load_patch_store",
+                             "safe_write_csv2") %in% exports),
     models = sort(list_models()$name),
     # From the global environment, where print.dsm_fit is not visible: only a
     # REGISTERED method is found from here, and only a registered one

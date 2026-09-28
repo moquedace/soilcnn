@@ -33,7 +33,6 @@
 }
 
 #' Write a CSV (semicolon-separated) safely, removing old file first if needed.
-#' @export
 safe_write_csv2 <- function(data, path) {
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   .refuse_locked(path)
@@ -49,12 +48,10 @@ safe_write_csv2 <- function(data, path) {
 # through the report -- and the notice is about the locale WE chose, so it
 # tells nobody anything. Silenced here, once, instead of repeating
 # suppressMessages() at every call site in the pipeline.
-#' @export
 safe_read_csv2 <- function(path, ...) {
   suppressMessages(readr::read_csv2(path, show_col_types = FALSE, ...))
 }
 
-#' @export
 safe_save_rds <- function(object, path, compress = FALSE) {
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   .refuse_locked(path)
@@ -74,7 +71,6 @@ safe_save_rds <- function(object, path, compress = FALSE) {
 #' fire in normal use -- but if it ever does, it must be loud, because the
 #' alternative is a plausible-looking wrong result. For anything large, store
 #' plain R arrays with saveRDS (see save_patch_window() in R/dataset.R).
-#' @export
 safe_torch_save <- function(object, path) {
   .torch_save_limit <- 2^31
 
@@ -147,7 +143,6 @@ check_point_contract <- function(x, need = names(.point_contract),
 # ── Directory helpers ─────────────────────────────────────────────────────────
 
 #' Create a set of directories and verify they exist.
-#' @export
 create_output_dirs <- function(dirs) {
   purrr::walk(dirs, ~ dir.create(.x, recursive = TRUE, showWarnings = FALSE))
   check <- tibble::tibble(
@@ -487,7 +482,6 @@ augment_d4_batch <- function(tensor_list) {
 #
 # @param x The table to print.
 # @param n Rows to show; NULL leaves the tibble default (10).
-#' @export
 print_wide <- function(x, n = NULL) {
   x <- tibble::as_tibble(x)
   if (is.null(n)) print(x, width = Inf) else print(x, n = n, width = Inf)
@@ -613,7 +607,6 @@ print_wide <- function(x, n = NULL) {
 # Compared by fold MEMBERSHIP, not by the plan object: params differ for
 # irrelevant reasons (a new field, a rounded buffer) while the split is
 # identical, and the split is what training actually consumed.
-#' @export
 check_plan_unchanged <- function(plan, run_dir, resume = TRUE) {
   path <- file.path(run_dir, "fold_plan.rds")
   if (!isTRUE(resume) || !file.exists(path)) return(invisible(TRUE))
@@ -819,7 +812,6 @@ latest_run_dir <- function(base, prefix, require_file = NULL,
 }
 
 #' Read a string override, or the default.
-#' @export
 env_chr <- function(name, default) {
   v <- .env_raw(name)
   if (is.null(v)) return(default)
@@ -829,7 +821,6 @@ env_chr <- function(name, default) {
 
 #' Read a positive integer override, or the default. Refuses anything else:
 #' a thread count or a seed that silently became NA is worse than not starting.
-#' @export
 env_int <- function(name, default, min = 1L) {
   v <- .env_raw(name)
   if (is.null(v)) return(default)
@@ -849,7 +840,6 @@ env_int <- function(name, default, min = 1L) {
 #' treat as "nothing selected" and proceed with. With as_int = TRUE every item
 #' must parse, and the ones that do not are named -- a seed list with one bad
 #' entry must not become a shorter seed list.
-#' @export
 env_csv <- function(name, default, as_int = FALSE) {
   v <- .env_raw(name)
   if (is.null(v)) return(default)

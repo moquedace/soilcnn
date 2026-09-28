@@ -69,7 +69,6 @@
 #' @param crs   The CRS they are in. 4326 (lon/lat WGS84) by default.
 #' @param to    Target projection. Mollweide by default: equal-area, global.
 #' @return A two-column matrix of projected coordinates, in metres.
-#' @export
 project_xy <- function(x, y, crs = 4326,
                        to = "+proj=moll +lon_0=0 +datum=WGS84 +units=m") {
   .need_knndm()

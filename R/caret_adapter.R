@@ -195,6 +195,7 @@ caret_spec <- function(method, name = method, search = c("grid", "random"),
 #'
 #' @param pattern Optional regular expression on the method name.
 #' @return A tibble of method, label and the parameters it tunes.
+#' @export
 caret_available <- function(pattern = NULL) {
   .need_caret()
   all <- caret::getModelInfo()

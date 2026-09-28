@@ -73,7 +73,6 @@ predict_table <- function(pred_raw, points_valid, dataset_role,
 #' @param transform  Inverse of the target transform.
 #' @param n_seeds    Repetitions per (config, fold). One gives no error bar.
 #' @return list(comparison, by_config, run_dir, plan).
-#' @export
 run_table_resample <- function(model, tune_grid = NULL, store, points,
                                type_table, plan,
                                features    = c("centre", "window_mean"),
