@@ -5360,3 +5360,72 @@ nas 448 linhas depois das da 4ª rodada.
   bytes por pixel válido, ~100 GB para o globo) e a de RAM;
 - retomável: se parar (reinício do Windows, queda de energia), basta rodar
   de novo.
+
+
+## 2026-09-27 — P5: o Brasil a 250 m. O mapa está certo; a memória fica estável, mas acima do modelo com 15 threads
+
+**Com o código 4c227ba:**
+
+- `tests/test_predict.R` 33/33.
+- A caixa pequena em Mato Grosso (3 unidades): **6/6**.
+
+**O Brasil:**
+
+- 69 unidades, 225,8 milhões de pixels válidos de 307 milhões (73,5%);
+- 3,4 h a 18.559 px/s, com 1 worker × 15 threads (33 GB de RAM livre: dois
+  workers de 7 não cabiam pela regra do script global);
+- 8,9 GB em disco.
+
+| checagem | resultado |
+|---|---|
+| p5_01 a sonda | PASS, 1,78e-7 |
+| p5_02 unidades e mosaicos | PASS, 69/69, 21 bandas |
+| p5_03 pico ≤ 1,25 × estimativa | **FAIL**: 11,1 GB contra 7,6 |
+| p5_04 memória estável, sem reinícios | **FAIL**: 27 reinícios (limite 9,5 GB); dentro de um processo, o pico subiu no máximo 0,77 GB |
+| p5_05 emenda entre unidades e entre blocos de colunas | PASS, 3,8e-6 relativo, DI 0, nenhum pixel de máscara ou AOA diferente |
+| p5_06 ordem das bandas em 64 linhas sorteadas | PASS, 822.684 pixels |
+
+Dentro da AOA: bloco 92,4%, kNNDM 99,5% dos pixels amostrados. A mediana do
+ensemble, em t/ha: 11,6 (5%), 25,5 (50%), 48,7 (95%).
+
+**O diagnóstico (units.csv, por processo).** Um processo novo já chega a
+9,0–9,7 GB (mediana 9,45) na primeira unidade, qualquer que seja a terra
+dela: 0,1 GB a mais por milhão de pixels válidos.
+
+- **Não é vazamento:** com 15 threads, o nível de um worker nesta largura
+  fica ~2 GB acima do modelo. Com 7 threads, o T3 bateu com o modelo.
+- **O limite de reinício** pegava o menor entre a parte do orçamento e 1,25 ×
+  a estimativa: 9,5 GB, em cima do nível normal. Daí os reinícios a cada 1–7
+  unidades, ~3% do tempo.
+
+**As correções:**
+
+- **a5547ad: o reinício vale pela parte do worker no orçamento de RAM**, nunca
+  abaixo da estimativa (sem orçamento, 1,25 × a estimativa). O worker agora
+  faz a coleta completa antes de gravar o registro da unidade e guarda nele o
+  working set que ela deixa (`rss_gb`). É por esse valor que o reinício é
+  decidido, não pelo pico, que carrega o lixo acumulado entre duas coletas.
+- **989c5de: o modelo de RAM ganha 0,25 GB por thread acima de 7.** É um
+  termo medido, não derivado. A causa provável são os heaps por thread do
+  mimalloc (T6), mas isso não está provado. Com ele, toda rodada medida fica
+  dentro de 25% da estimativa: P4, T3 e P5.
+- **0311d7a:** o `p5_04` julga a memória pelo `rss_gb`.
+
+**Perderam:**
+
+- **Só afrouxar o multiplicador** (1,5 × a estimativa, por exemplo): o limite
+  continuaria preso a um modelo que erra com 15 threads. A parte do
+  orçamento é a restrição real.
+- **Caçar agora os ~2 GB a mais.** Os lotes do gather (até 256 MB) e do DI
+  (103 MB) caem na faixa que o mimalloc reaproveita só em parte (T6). Dá para
+  reduzi-los, mas memória não é o recurso escasso aqui (68 GB), e o
+  reinício cobre.
+
+**A seguir:**
+
+- **O P5 de novo no Brasil**, com o código corrigido. É um mapa novo, 3,4 h.
+  Esperado: zero reinícios e `p5_03`/`p5_04` passando, com um processo só
+  por 69 unidades.
+- **Na rodada global,** com 33 GB livres a regra escolhe 1 × 15, ~39 h. Para
+  o 2 × 7 (~33 h), é preciso começar de uma sessão do R nova, com os outros
+  programas fechados, para ter pelo menos 42 GB livres.
