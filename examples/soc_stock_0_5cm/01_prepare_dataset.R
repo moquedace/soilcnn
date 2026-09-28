@@ -75,7 +75,7 @@ pkgload::load_all(project_root)
 # "full" uses every profile. "dev" keeps a fraction of them, in whole spatial
 # blocks, so the whole pipeline runs end to end in minutes instead of a day.
 # A dev number is comparable only with another dev number: what must survive a
-# subsample is the SHAPE of a result -- see docs/reference_performance.md.
+# subsample is the SHAPE of a result -- see docs/archive/reference_performance.md.
 # The profile is written into the store and 99 announces it, so a dev result
 # can never be mistaken for a real one later.
 run_profile <- "dev"           # "dev" or "full"

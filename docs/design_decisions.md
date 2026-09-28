@@ -325,7 +325,7 @@ spatial splits.
 > cfg_014 with val CCC 0.657 under a 20 km prototype) belonged to tuning runs that no
 > longer exist; ids are reassigned on every run and none of them is the deployed model.
 > The discussion is kept for the qualitative conclusion (gate vs. concat). The current
-> run, its selected config and its numbers are in `reference_performance.md`.
+> run, its selected config and its numbers are in `archive/reference_performance.md`.
 
 ---
 

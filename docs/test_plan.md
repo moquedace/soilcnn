@@ -135,7 +135,7 @@ printed rather than asserted.
 | # | capability | where it gets exercised |
 |---|---|---|
 | C1 (done, 9/9: `checks/_c1_design_comparison.R`, the same grid under two designs) | `gate_type`, `use_se_block`, `embed_pool`, `conv_padding` | the `tune_length = 24` grid covers all of them by construction |
-| C2 (done: the level-and-DI interval, `conformal_scaled_calibrate()`, which `dsm_predict()` writes) | Normalised conformal intervals | blocked: needs a difficulty score comparable between calibration and prediction. The dissimilarity index from `R/aoa.R` is the right one — see `reference_performance.md` |
+| C2 (done: the level-and-DI interval, `conformal_scaled_calibrate()`, which `dsm_predict()` writes) | Normalised conformal intervals | blocked: needs a difficulty score comparable between calibration and prediction. The dissimilarity index from `R/aoa.R` is the right one — see `archive/reference_performance.md` |
 | C3 | `region_folds()` with a real region layer | no region column exists in the point table today |
 
 **The `tune_length = 24` run is not a capability test.** It is the science run

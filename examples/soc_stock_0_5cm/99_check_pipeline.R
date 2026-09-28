@@ -161,7 +161,7 @@ if (file.exists(f_tconfig)) {
          "  --  THIS IS NOT A RESULT RUN")
     if ("subsample" %in% names(.tc)) .say("  ", .tc$subsample[1])
     .say("  Comparable only with another run of the same profile.",
-         "  See docs/reference_performance.md")
+         "  See docs/archive/reference_performance.md")
     .say(strrep("!", 90), "\n")
   }
 }

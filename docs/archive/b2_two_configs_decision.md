@@ -19,7 +19,7 @@ that fails at `set.seed()`; (iii) the driver in Option 6 was a bare `source()`,
 which `rm(list = ls())` destroys mid-run; (iv) the headline cost was "about 12
 minutes" against the note's own table, which gives ~18.
 
-B2 in [`test_plan.md`](test_plan.md) is: *"Two configs in stage 04 — exercises
+B2 in [`test_plan.md`](../test_plan.md) is: *"Two configs in stage 04 — exercises
 `paired_by_seed.csv`, a branch that has never run. Cost: 2 × 10 seeds."*
 
 The branch is real and it has never run. But the cost line is wrong, the

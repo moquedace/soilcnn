@@ -57,10 +57,10 @@ a banner. The 250 m map has not been produced.
 
 | finding | value | where |
 |---|---|---|
-| validation design matters more than model family | random 0.622 / spatial 0.487 / region 0.384 CCC — a 0.24 spread, against 0.025 between families | `reference_performance.md` |
+| validation design matters more than model family | random 0.622 / spatial 0.487 / region 0.384 CCC — a 0.24 spread, against 0.025 between families | `archive/reference_performance.md` |
 | the back-transform of a log-trained median under-predicts the stock | **−24.4%** bias on the frozen test set, 53% of the MAE; Duan smearing brings it to **+2.7%** | `smearing.R`, 04 output |
 | Duan's independence assumption is violated here | S runs **1.79 → 1.15** across prediction quintiles; the two obvious repairs were measured and both make the held-out bias *worse* (−5.8%, −3.9%) | `smearing.R` header |
-| the smearing target is bracketed, not pinned | deployed-ensemble S is 1.259 on the refit fold and 1.389 on the test set | `reference_performance.md` |
+| the smearing target is bracketed, not pinned | deployed-ensemble S is 1.259 on the refit fold and 1.389 on the test set | `archive/reference_performance.md` |
 | the block folds validate a far easier job than the map does | validation-to-train median **15.7 km** vs prediction-to-train **824 km** (52×); kNNDM folds land at 837 km; W1 128 km vs 1,048 km | `_b1_knndm_folds.R` output |
 | training is deterministic across processes | seed 7 of cfg_003: CCC 0.480181867591615 in three separate runs — exactly, between interactive sessions; a unit trained in an `Rscript` subprocess differs at 1.2e-4 CCC (0.15% of the seed spread), cause not measured | B2, 04, B6 output |
 | a run whose process is KILLED mid-unit resumes into the same numbers | finished units untouched (mtime drift 0 s, comparison rows byte-identical), no orphan checkpoint, worst outcome column at 0.2% of the control's own seed spread | `checks/_b6_resume_check.R` |
@@ -273,7 +273,7 @@ of the package that were `source()`d from `R/`.
   - `test_plan.md` records each test's result.
   - `b2_two_configs_decision.md`, `reference_performance.md`,
     `revisao_e_prospeccao_2026_09.md` and `execution_plan.md` are marked as the
-    records they are.
+    records they are, and since 2026-09-28 they live in `docs/archive/`.
 
 ---
 

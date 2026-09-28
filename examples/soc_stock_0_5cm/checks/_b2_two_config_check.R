@@ -46,7 +46,7 @@
 # copy of the pipeline pasted into a test.
 #
 # The environment overrides that make it drivable are Option 3 of
-# docs/b2_two_configs_decision.md, and they are worth having on their own: stage
+# docs/archive/b2_two_configs_decision.md, and they are worth having on their own: stage
 # 04 was the only example script that could not be driven without editing it.
 #
 # COST. Three seeds, not ten. The branch is a pivot_wider over `seed` and four
