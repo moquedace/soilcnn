@@ -135,6 +135,24 @@ ok["region_cv_records_its_kind"]  <-
 ok["k_survives_as_k_not_as_kind"] <- identical(random_cv(k = 7L)$k, 7L)
 ok["region_cv_keeps_a_null_k"]    <- is.null(region_cv(group = "a", k = NULL)$k)
 
+# THE NUMBERS ARE CHECKED WHERE THEY ARE GIVEN. k = 2.5 used to become 2 folds
+# and k = "5" 5 by luck; a fraction of 15, meant as 15%, had no check at all.
+# Each constructor now stops and names itself.
+spec_err <- function(expr) tryCatch({ expr; "" }, error = function(e) conditionMessage(e))
+ok["a_fractional_k_is_refused_by_its_constructor"] <-
+  grepl("^spatial_cv\\(\\): k must be a whole number", spec_err(spatial_cv(k = 2.5))) &&
+  grepl("^random_cv\\(\\)", spec_err(random_cv(k = 1L))) &&
+  grepl("^knndm_cv\\(\\)", spec_err(knndm_cv(k = NA))) &&
+  grepl("^region_cv\\(\\)", spec_err(region_cv(group = "a", k = 0)))
+ok["a_k_given_as_text_is_refused"] <- grepl("a string", spec_err(spatial_cv(k = "5")))
+ok["a_whole_double_k_is_taken_as_an_integer"] <- identical(spatial_cv(k = 5)$k, 5L)
+ok["a_fraction_outside_zero_one_is_refused"] <-
+  grepl("test_frac must be a fraction", spec_err(spatial_cv(test_frac = 15))) &&
+  grepl("validation_frac", spec_err(holdout_cv(validation_frac = 0))) &&
+  grepl("leave something to train", spec_err(holdout_cv(validation_frac = 0.5, test_frac = 0.5))) &&
+  grepl("max_share", spec_err(spatial_cv(max_share = 0))) &&
+  identical(spatial_cv(max_share = 1)$max_share, 1)
+
 # A spec whose kind is not one of the four must be refused, not resampled by
 # position.
 bad_spec <- structure(list(kind = 3L, k = 2L), class = "resample_spec")

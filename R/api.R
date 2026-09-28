@@ -220,6 +220,34 @@ print.dsm_data <- function(x, ...) {
   structure(c(list(kind = .kind), list(...)), class = "resample_spec")
 }
 
+# THE NUMBERS A CONSTRUCTOR IS GIVEN, CHECKED WHERE THEY ARE GIVEN.
+#
+# as.integer(k) was the whole of it: k = 2.5 became 2 folds without a word,
+# k = "5" became 5 by luck, and k = "five" became NA and failed deep in the
+# fold assignment, naming an internal. A fraction had no check at all:
+# test_frac = 15, meant as 15%, reached the fold code as fifteen times the
+# data. A whole number of at least 2, and a fraction in [0, 1), or the
+# constructor stops, naming itself.
+.check_k <- function(k, what, allow_null = FALSE) {
+  if (is.null(k) && allow_null) return(NULL)
+  if (!is.numeric(k) || length(k) != 1L || !is.finite(k) || k != round(k) || k < 2) {
+    stop(what, "(): k must be a whole number of at least 2 -- the number of folds; got ",
+         if (is.null(k)) "NULL" else paste(format(k), collapse = ", "),
+         if (is.character(k)) " (a string)" else "", ".", call. = FALSE)
+  }
+  as.integer(k)
+}
+
+.check_frac <- function(x, what, name, zero_ok = TRUE, one_ok = FALSE) {
+  if (!is.numeric(x) || length(x) != 1L || !is.finite(x) || x > 1 || x < 0 ||
+      (!zero_ok && x == 0) || (!one_ok && x == 1)) {
+    stop(what, "(): ", name, " must be a fraction in ", if (zero_ok) "[0, " else "(0, ",
+         if (one_ok) "1]" else "1)", " -- 0.15 for 15%; got ",
+         if (is.null(x)) "NULL" else paste(format(x), collapse = ", "), ".", call. = FALSE)
+  }
+  as.numeric(x)
+}
+
 #' Spatially blocked k-fold: whole blocks of ground go to one fold.
 #'
 #' @param k          Folds.
@@ -235,8 +263,10 @@ spatial_cv <- function(k = 5L, block_size = "auto", buffer = "auto",
                        test_frac = 0.15, max_share = 0.10,
                        buffer_metric = c("chebyshev", "euclidean"),
                        seed = 42L) {
-  .resample_spec(.kind = "spatial", k = as.integer(k), block_size = block_size,
-                 buffer = buffer, test_frac = test_frac, max_share = max_share,
+  .resample_spec(.kind = "spatial", k = .check_k(k, "spatial_cv"), block_size = block_size,
+                 buffer = buffer, test_frac = .check_frac(test_frac, "spatial_cv", "test_frac"),
+                 max_share = .check_frac(max_share, "spatial_cv", "max_share", zero_ok = FALSE,
+                                         one_ok = TRUE),
                  buffer_metric = match.arg(buffer_metric), seed = seed)
 }
 
@@ -262,7 +292,7 @@ knndm_cv <- function(k = 5L, predpoints = NULL, hold_out_test = FALSE,
                      crs = 4326,
                      project_to = "+proj=moll +lon_0=0 +datum=WGS84 +units=m",
                      seed = 42L, ...) {
-  .resample_spec(.kind = "knndm", k = as.integer(k), predpoints = predpoints,
+  .resample_spec(.kind = "knndm", k = .check_k(k, "knndm_cv"), predpoints = predpoints,
                  hold_out_test = hold_out_test, crs = crs,
                  project_to = project_to, seed = seed, extra = list(...))
 }
@@ -273,21 +303,28 @@ knndm_cv <- function(k = 5L, predpoints = NULL, hold_out_test = FALSE,
 #' what geography is worth: run it against spatial_cv() on the same points and
 #' the gap is the spatial optimism.
 random_cv <- function(k = 5L, test_frac = 0.15, group = "auto", seed = 42L) {
-  .resample_spec(.kind = "random", k = as.integer(k), test_frac = test_frac,
+  .resample_spec(.kind = "random", k = .check_k(k, "random_cv"),
+                 test_frac = .check_frac(test_frac, "random_cv", "test_frac"),
                  group = group, seed = seed)
 }
 
 #' A single train/validation/test split.
 holdout_cv <- function(validation_frac = 0.15, test_frac = 0.15,
                        group = "auto", seed = 42L) {
+  validation_frac <- .check_frac(validation_frac, "holdout_cv", "validation_frac", zero_ok = FALSE)
+  test_frac <- .check_frac(test_frac, "holdout_cv", "test_frac")
+  if (validation_frac + test_frac >= 1) {
+    stop("holdout_cv(): validation_frac + test_frac must leave something to train on; got ",
+         validation_frac, " + ", test_frac, ".", call. = FALSE)
+  }
   .resample_spec(.kind = "holdout", validation_frac = validation_frac,
                  test_frac = test_frac, group = group, seed = seed)
 }
 
 #' Leave-region-out, on a grouping that already exists (biome, catchment, ...).
 region_cv <- function(group, k = NULL, test_frac = 0.15, seed = 42L) {
-  .resample_spec(.kind = "region", group = group, k = k,
-                 test_frac = test_frac, seed = seed)
+  .resample_spec(.kind = "region", group = group, k = .check_k(k, "region_cv", allow_null = TRUE),
+                 test_frac = .check_frac(test_frac, "region_cv", "test_frac"), seed = seed)
 }
 
 #' @export
