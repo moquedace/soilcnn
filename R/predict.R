@@ -1404,11 +1404,13 @@ print.dsm_prediction <- function(x, ...) {
 # the RAM -- over Brazil one worker's working set fell 2.5 GB between two
 # units while the PC was in use (P5) -- so a leak can hide from the working
 # set, but not from the private memory. NA where ps does not report it (it
-# does on Windows).
+# does on Windows, as mem_private -- psutil's name is private, and the first
+# version looked for that one, finding nothing).
 .predict_private_gb <- function() {
   if (!requireNamespace("ps", quietly = TRUE)) return(NA_real_)
   mi <- tryCatch(ps::ps_memory_info(ps::ps_handle()), error = function(e) NULL)
-  if (is.null(mi) || !"private" %in% names(mi)) NA_real_ else as.numeric(mi[["private"]]) / 1e9
+  nm <- intersect(c("mem_private", "private"), names(mi))
+  if (length(nm) == 0L) NA_real_ else as.numeric(mi[[nm[1]]]) / 1e9
 }
 
 .predict_worker <- function(job) {
