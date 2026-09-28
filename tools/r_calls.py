@@ -148,8 +148,7 @@ def check(rel, defined):
 
 MAIN = [
     'examples/soc_stock_0_5cm/_b1_knndm_folds.R',
-    'examples/soc_stock_0_5cm/_b3_augmentation.R',
-    'examples/soc_stock_0_5cm/_b6_resume_check.R',
+    'examples/soc_stock_0_5cm/checks/_b6_resume_check.R',
 ]
 
 if __name__ == '__main__':

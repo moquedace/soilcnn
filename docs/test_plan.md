@@ -70,7 +70,8 @@ outside. `score_test_grid()` measures how much a test-selected number would have
 been overstated. Both are inference only, minutes, and both produce a number for
 the paper.
 
-Tier A is implemented as `examples/soc_stock_0_5cm/_capability_sweep.R`.
+Tier A was implemented as `examples/soc_stock_0_5cm/_capability_sweep.R`
+(removed on 2026-09-28, with its results in `project_log.md`).
 Expected cost: **1.5-2 hours**, most of it A4 (36 forests on 543 columns) and
 A5 (54 xgboost units on 724).
 
@@ -133,7 +134,7 @@ printed rather than asserted.
 
 | # | capability | where it gets exercised |
 |---|---|---|
-| C1 (done, 9/9: `_c1_design_comparison.R`, the same grid under two designs) | `gate_type`, `use_se_block`, `embed_pool`, `conv_padding` | the `tune_length = 24` grid covers all of them by construction |
+| C1 (done, 9/9: `checks/_c1_design_comparison.R`, the same grid under two designs) | `gate_type`, `use_se_block`, `embed_pool`, `conv_padding` | the `tune_length = 24` grid covers all of them by construction |
 | C2 (done: the level-and-DI interval, `conformal_scaled_calibrate()`, which `dsm_predict()` writes) | Normalised conformal intervals | blocked: needs a difficulty score comparable between calibration and prediction. The dissimilarity index from `R/aoa.R` is the right one — see `reference_performance.md` |
 | C3 | `region_folds()` with a real region layer | no region column exists in the point table today |
 

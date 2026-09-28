@@ -361,7 +361,8 @@ generalisation". **That number supports no claim about augmentation.** Round 2 a
 changed the windows (3/5/7 → 3/9/15), the resolution (20 km → 250 m), the grid and the
 training schedule; augmentation was one of at least five things that moved.
 
-It has now been measured properly (`_b3_augmentation.R`, 2026-09-21): two arms
+It has now been measured properly (`_b3_augmentation.R`, 2026-09-21, since
+removed and kept in git's history): two arms
 differing in `augment` and in nothing else — same config (cfg_003, the deployed one),
 same fold plan, same three seeds, paired on (fold, seed), 9 pairs per arm.
 

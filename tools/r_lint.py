@@ -31,7 +31,7 @@ Comments and string contents are blanked first, via tools/r_skeleton.py, so a
 brace inside a message() and a '#' inside a string cannot mislead it.
 
 Usage
-  python tools/r_lint.py                 -- R/, examples/soc_stock_0_5cm/, tests/
+  python tools/r_lint.py                 -- R/, examples/ (and its SOC checks/), tests/
   python tools/r_lint.py <file.R> [...]  -- specific files
 Exit status is 1 if anything was found, so it can gate a commit.
 """
@@ -219,7 +219,9 @@ def main(argv):
     targets = argv[1:]
     if not targets:
         targets = sorted(glob.glob(ROOT + 'R/*.R')
+                         + glob.glob(ROOT + 'examples/*.R')
                          + glob.glob(ROOT + 'examples/soc_stock_0_5cm/*.R')
+                         + glob.glob(ROOT + 'examples/soc_stock_0_5cm/checks/*.R')
                          + glob.glob(ROOT + 'tests/*.R'))
     total = 0
     for p in targets:

@@ -57,7 +57,7 @@
 # 1.42 min/unit during tuning. Budget about 20 minutes of fitting plus a few
 # for the patch store, against the 1 to 3.5 hours that 2 x 10 seeds would cost.
 #
-# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/examples/soc_stock_0_5cm/_b2_two_config_check.R")
+# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/examples/soc_stock_0_5cm/checks/_b2_two_config_check.R")
 # ══════════════════════════════════════════════════════════════════════════════
 
 rm(list = ls())

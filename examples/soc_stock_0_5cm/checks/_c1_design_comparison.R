@@ -41,7 +41,7 @@
 #
 # It trains nothing. Both runs must already be on disk.
 #
-# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/examples/soc_stock_0_5cm/_c1_design_comparison.R")
+# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/examples/soc_stock_0_5cm/checks/_c1_design_comparison.R")
 # ══════════════════════════════════════════════════════════════════════════════
 
 rm(list = ls())

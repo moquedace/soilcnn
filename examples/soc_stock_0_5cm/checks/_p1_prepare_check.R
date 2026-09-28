@@ -35,7 +35,7 @@
 # COST: one extraction of the store at n_cores = physical - 1. The dev store is
 # 1.7 GB; reading both copies of each window to compare them needs ~2.5 GB.
 #
-# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/examples/soc_stock_0_5cm/_p1_prepare_check.R")
+# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/examples/soc_stock_0_5cm/checks/_p1_prepare_check.R")
 # ══════════════════════════════════════════════════════════════════════════════
 
 rm(list = ls())

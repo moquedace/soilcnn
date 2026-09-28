@@ -63,7 +63,7 @@
 #
 # COST: ~10 min.
 #
-# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/examples/soc_stock_0_5cm/_t7_training_memory.R")
+# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/examples/soc_stock_0_5cm/checks/_t7_training_memory.R")
 # ══════════════════════════════════════════════════════════════════════════════
 
 # WHERE THIS PROJECT IS, FOUND RATHER THAN REMEMBERED.

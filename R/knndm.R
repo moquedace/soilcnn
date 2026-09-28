@@ -33,8 +33,9 @@
 # default) before anything is measured. Equal-area rather than conformal because
 # what is being compared is distance across the whole domain, and an equal-area
 # projection keeps the comparison honest at the scale the folds are cut at.
-# `examples/soc_stock_0_5cm/_measure_knndm.R` measures this on the real
-# coordinates rather than assuming it.
+# It was measured on the real coordinates rather than assumed
+# (_measure_knndm.R, a one-off removed on 2026-09-28; its numbers are in
+# docs/project_log.md).
 #
 # WHY THERE IS NO BUFFER ARGUMENT, AND WHEN THAT IS WRONG.
 #

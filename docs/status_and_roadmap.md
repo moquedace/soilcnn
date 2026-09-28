@@ -63,20 +63,20 @@ a banner. The 250 m map has not been produced.
 | the smearing target is bracketed, not pinned | deployed-ensemble S is 1.259 on the refit fold and 1.389 on the test set | `reference_performance.md` |
 | the block folds validate a far easier job than the map does | validation-to-train median **15.7 km** vs prediction-to-train **824 km** (52×); kNNDM folds land at 837 km; W1 128 km vs 1,048 km | `_b1_knndm_folds.R` output |
 | training is deterministic across processes | seed 7 of cfg_003: CCC 0.480181867591615 in three separate runs — exactly, between interactive sessions; a unit trained in an `Rscript` subprocess differs at 1.2e-4 CCC (0.15% of the seed spread), cause not measured | B2, 04, B6 output |
-| a run whose process is KILLED mid-unit resumes into the same numbers | finished units untouched (mtime drift 0 s, comparison rows byte-identical), no orphan checkpoint, worst outcome column at 0.2% of the control's own seed spread | `_b6_resume_check.R` |
+| a run whose process is KILLED mid-unit resumes into the same numbers | finished units untouched (mtime drift 0 s, comparison rows byte-identical), no orphan checkpoint, worst outcome column at 0.2% of the control's own seed spread | `checks/_b6_resume_check.R` |
 | selection optimism | +0.0000 (cfg_003 ranks first on validation and on test) | `score_test_grid()` |
-| the two-config branch works and the frozen record survives it | B2: 13/13, original `selection.rds` byte-identical | `_b2_two_config_check.R` |
+| the two-config branch works and the frozen record survives it | B2: 13/13, original `selection.rds` byte-identical | `checks/_b2_two_config_check.R` |
 | on the test set, cfg_002 beats the deployed cfg_003 | paired ΔCCC −0.029, t = −2.80 (df 2), all three seeds agree — **and this number may not be acted on**; it was computed after the freeze | B2 output |
 | the validation design costs 0.19 CCC of the reported number | the same 8 configs score 0.480 (best, block folds) and 0.322 (best, kNNDM); all 8 drop, by −0.117 to −0.228 | C1 output |
 | under kNNDM the per-config uncertainty triples | mean SE 0.042 against 0.013; **0 of 28 config pairs separated at 2 SE** (blocks: 3 of 28) | C1 output |
 | neither design can order this grid | ranking reliability 0.678 (block) and 0.545 (kNNDM) over 3 seeds — a ranking that does not reproduce against itself. Spearman-Brown: **6 seeds** (block), **11** (kNNDM) for rho 0.80 | C1 output |
-| D4 augmentation helps, by about as much as the whole architecture search | paired +0.0300 CCC (95% CI [+0.0014, +0.0587], 9 pairs) — against a 0.042 spread between the best and worst of 8 configs, and a 0.0533 seed spread. The document that claimed this had cited a between-rounds comparison that supported nothing | `_b3_augmentation.R` |
+| D4 augmentation helps, by about as much as the whole architecture search | paired +0.0300 CCC (95% CI [+0.0014, +0.0587], 9 pairs) — against a 0.042 spread between the best and worst of 8 configs, and a 0.0533 seed spread. The document that claimed this had cited a between-rounds comparison that supported nothing | `_b3_augmentation.R` (removed 2026-09-28; in the log) |
 
 ### Capability tests (docs/test_plan.md)
 
 | tier | status |
 |---|---|
-| A (8 cheap paths a second user would hit first) | done, `_capability_sweep.R` |
+| A (8 cheap paths a second user would hit first) | done, `_capability_sweep.R` (removed 2026-09-28; its table is in the log) |
 | B1 kNNDM on the real points | done, 13/13 — produced the 52× finding |
 | B2 two configs in stage 04 | done, 13/13 |
 | B3 D4 augmentation on/off | **done** — paired +0.0300 CCC, 95% CI [+0.0014, +0.0587], smaller than the 0.0533 seed spread |
@@ -167,7 +167,7 @@ to maps, and what exists today:
 |---|---|---|
 | points + raster folder → patch store, at the windows the user declares | `dsm_prepare()` | **done 2026-09-26** — proven on the SOC data to build the identical store (P1, 19/19); 01 calls it, 02 is folded in |
 | folds, buffer, tuning, selection | `dsm_load()`, `*_cv()`, `dsm_train()`, `one_se()` | **done** |
-| a tuning grid drawn from the windows in the store | inside `dsm_train()` | **done 2026-09-27** — every window the store holds and every pair; batch sizes that give the smallest fold >= 4 steps an epoch; the inverse read from the store; `n_cores`. The thread count the examples pass (30) awaits `_t1_threads_benchmark.R` |
+| a tuning grid drawn from the windows in the store | inside `dsm_train()` | **done 2026-09-27** — every window the store holds and every pair; batch sizes that give the smallest fold >= 4 steps an epoch; the inverse read from the store; `n_cores`. The examples' thread counts follow T1 and T2: the physical cores minus one in 03 and 03b, five per seed in 04 |
 | refit the chosen config under N seeds | `dsm_final()` | **done 2026-09-27** — seeds side by side with fixed threads per seed (T1, T2), stage 04's selection and post-processing, the declaration of every hyperparameter; `tests/test_final.R` and P3 (the assembly against stage 04's own files, 7/7) passed. **Since 2026-09-28 stage 04 is one call to it**; the choice is frozen only once nothing else can stop the call, and a resume is held to the settings its run started with (`run_spec.rds`). **T7 (2026-09-28)**: a training worker's memory does not climb by epoch or by unit (~8.9 GB private, flat from the second unit on); ~2.4 GB of it, 4x the fold cache, were copies the setup left behind -- ~27 GB a worker on the full data -- and they are gone (f9f2f84, 172e1c6), with the tensors proven identical to the old path's. T7's rerun: -2.2 to -2.35 GB at every mark (8.9 -> 6.55 GB private after the units, peak working set 7.87 -> 5.60), and every seed identical to the earlier run's (0.00e+00). Still to measure: `dsm_train()`'s fold loop, where each fold's cache is released before the next |
 | median, mean and interval maps, with the calibration source as an argument | `dsm_predict()` | **done 2026-09-27** — row bands over the whole width, each row decompressed once; the network fully convolutional where exact; every band for every calibration source; a probe at the profiles before the map. `tests/test_predict.R` 29/29; P4 10/10: stage 05's 20 km map to 2e-5, 59x faster, and the probe on the 250 m rasters to 3.8e-7. T3 passed on its fifth run: 2 workers x 7 threads at 21,200 valid px/s on full-width 250 m rows, ~33 h for the globe, 14.7 GB a worker against 14.6 estimated, flat from unit to unit -- once the step's window was made once per worker (mimalloc, under libtorch on Windows, kept every large block freed; T4-T6), with a restart for a worker over its memory as the net. `tests/test_predict.R` 32/32. `05_dsm_predict_global.R` runs the global map |
 

@@ -15,7 +15,7 @@
 #
 # Block-fold residuals describe predicting NEAR other profiles; most of the map
 # is predicted FAR from any. An interval calibrated on them is honest for the
-# first job and too narrow for the second -- U1 already shows it 2-3 points
+# first job and too narrow for the second -- U1 showed it 2-3 points
 # short on the test set, which is itself drawn near the profiles. Residuals
 # from kNNDM folds are the ones exchangeable with the map's pixels.
 #
@@ -160,5 +160,5 @@ create_output_dirs(u2_dir)
 v <- ledger_verdict(L, required, file.path(u2_dir, "u2_checks.csv"))
 if (v$pass) {
   message("\nThe kNNDM residuals are in ", src,
-          "\nRun _u1_conformal_level_di.R again: it compares the two calibration sources.")
+          "\n05_dsm_predict_global.R calibrates its kNNDM bands on them.")
 }

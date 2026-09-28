@@ -51,7 +51,7 @@
 # part B ~2-4 min, most of it reading ~140 full rows of 181 rasters from the
 # HDD.
 #
-# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/examples/soc_stock_0_5cm/_p4_predict_check.R")
+# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/examples/soc_stock_0_5cm/checks/_p4_predict_check.R")
 # ══════════════════════════════════════════════════════════════════════════════
 
 # WHERE THIS PROJECT IS, FOUND RATHER THAN REMEMBERED.

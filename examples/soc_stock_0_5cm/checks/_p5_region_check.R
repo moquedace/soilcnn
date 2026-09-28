@@ -49,7 +49,7 @@
 #                    so p5_04 has a process with three units to measure.
 #   soc_p5_threads   7 or 15 -- chosen from the free RAM when unset
 #
-# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/examples/soc_stock_0_5cm/_p5_region_check.R")
+# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/examples/soc_stock_0_5cm/checks/_p5_region_check.R")
 # ══════════════════════════════════════════════════════════════════════════════
 
 # WHERE THIS PROJECT IS, FOUND RATHER THAN REMEMBERED.

@@ -62,10 +62,10 @@
 # HOW TO RUN IT
 #
 #   Sys.setenv(soc_b6_phase = "prepare")
-#   source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/examples/soc_stock_0_5cm/_b6_resume_check.R")
+#   source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/examples/soc_stock_0_5cm/checks/_b6_resume_check.R")
 #     ... phase 1 tells you, in a banner, exactly when to press Esc ...
 #   Sys.setenv(soc_b6_phase = "verify")
-#   source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/examples/soc_stock_0_5cm/_b6_resume_check.R")
+#   source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/examples/soc_stock_0_5cm/checks/_b6_resume_check.R")
 #
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -123,7 +123,7 @@ project_root <- (function() {
 
 # The path this script prints in its own instructions, so the two phases
 # can never be told to source a different file from the one running.
-b6_script <- file.path(project_root, "examples", "soc_stock_0_5cm",
+b6_script <- file.path(project_root, "examples", "soc_stock_0_5cm", "checks",
                        "_b6_resume_check.R")
 
 # ── Which phase ───────────────────────────────────────────────────────────────
@@ -180,7 +180,7 @@ tuning_base  <- file.path(project_root, "outputs", "tuning",
                           "soc_stock_modeling", target_label)
 
 # EVERY RUN ID IS A FIXED STRING UNDER ONE PARENT, exactly as
-# _capability_sweep.R does it, and for the same two reasons.
+# _capability_sweep.R did it (removed 2026-09-28), and for the same two reasons.
 #
 # Fixed, because a timestamped run_id defeats resume -- and resume is the
 # subject here, so a run_id that changes between the two phases would make the
@@ -287,7 +287,7 @@ training_args <- list(
 # fire at different epochs in the two runs and the difference would read as a
 # resume defect.
 #
-# _b3_augmentation.R carries the same guard for the same reason.
+# _b3_augmentation.R carried the same guard for the same reason.
 unknown_args <- setdiff(names(training_args), names(formals(train_one_cnn)))
 if (length(unknown_args) > 0L) {
   stop("training_args names that train_one_cnn() does not accept: ",
@@ -1252,8 +1252,9 @@ if (identical(b6_phase, "verify")) {
   # kernels accumulate through atomics, and nothing under R/ asks torch for a
   # deterministic backend -- R/train_cnn.R sets set.seed() and
   # torch_manual_seed() and stops there. Thirty epochs amplify whatever that
-  # leaves behind. _b3_augmentation.R states the same fact and refuses, for the
-  # same reason, to read anything into two runs of one config disagreeing.
+  # leaves behind. _b3_augmentation.R (removed 2026-09-28) stated the same fact
+  # and refused, for the same reason, to read anything into two runs of one
+  # config disagreeing.
   #
   # WHAT THE YARDSTICK IS, AND WHY IT IS NOT A NUMBER TYPED HERE.
   #

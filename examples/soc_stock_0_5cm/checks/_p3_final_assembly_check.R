@@ -36,7 +36,7 @@
 #
 # COST: reading ~40 CSVs, about a minute.
 #
-# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/examples/soc_stock_0_5cm/_p3_final_assembly_check.R")
+# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/examples/soc_stock_0_5cm/checks/_p3_final_assembly_check.R")
 # ══════════════════════════════════════════════════════════════════════════════
 
 # WHERE THIS PROJECT IS, FOUND RATHER THAN REMEMBERED.

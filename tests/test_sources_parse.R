@@ -53,8 +53,10 @@ source(file.path(root, "tests", "helper.R"))
 
 # Every directory that holds code someone will source. examples/ is included
 # on purpose: a pipeline script that cannot parse wastes the same day as a
-# framework file that cannot, and it is the scripts that get edited most.
-dirs <- c("R", file.path("examples", "soc_stock_0_5cm"), "tests")
+# framework file that cannot, and it is the scripts that get edited most. The
+# reusable checks live one level down, in checks/.
+dirs <- c("R", "examples", file.path("examples", "soc_stock_0_5cm"),
+          file.path("examples", "soc_stock_0_5cm", "checks"), "tests")
 
 files <- unlist(lapply(dirs, function(d) {
   p <- file.path(root, d)

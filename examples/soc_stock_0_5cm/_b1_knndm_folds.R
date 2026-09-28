@@ -6,7 +6,8 @@
 # docs/test_plan.md, tier B, row B1: `knndm_cv()` on the real points. Everything
 # this project knows about kNNDM so far is either a property of the code
 # (tests/test_knndm.R, on 320 synthetic points) or a measurement of the COST
-# (_measure_knndm.R). The two things those settled are not repeated here:
+# (_measure_knndm.R, a one-off since removed; its numbers are in the log). The
+# two things those settled are not repeated here:
 #
 #   * the coordinates are global lon/lat, so every distance must be computed in
 #     an equal-area projection -- a degree of longitude is 111 km at the equator
@@ -14,7 +15,7 @@
 #   * projected, the nearest-neighbour search is a kd-tree and the cost is not a
 #     consideration at this n. Unprojected it is O(n^2) in time AND memory.
 #
-# _measure_knndm.R closed with the sentence this script exists to answer:
+# That measurement closed with the sentence this script exists to answer:
 # "What this does NOT settle: whether kNNDM folds are BETTER than the block
 # folds in use. That is an empirical question."
 #
@@ -119,7 +120,7 @@ source(file.path(project_root, "utils", "install_load_pkg.R"))
 #
 # CAST is listed so a machine without it installs it now rather than eight
 # minutes in, after the raster stack has been read. docs/project_log.md records
-# that CAST was NOT installed when _measure_knndm.R was written, so this is the
+# that CAST was NOT installed when the kNNDM cost was measured, so this is the
 # likely first run on this machine.
 pkg <- c(
   "torch",
@@ -129,7 +130,7 @@ pkg <- c(
   "purrr",       # create_output_dirs() walks with it
   "sf",          # the projection
   "terra",       # the prediction grid
-  "FNN",         # kd-tree nearest neighbours -- the same package _measure_knndm used
+  "FNN",         # kd-tree nearest neighbours -- the one the kNNDM cost was measured with
   "CAST"         # the reference kNNDM implementation; never re-derived here
 )
 
@@ -801,7 +802,7 @@ xy_proj <- project_xy(meta$x, meta$y, crs = 4326, to = moll)
 pp_proj <- project_xy(predpoints$x, predpoints$y, crs = 4326, to = moll)
 
 # Nearest-neighbour distance from each query point to the nearest reference
-# point, planar, in metres. FNN's kd-tree is the same one _measure_knndm.R
+# point, planar, in metres. FNN's kd-tree is the same one _measure_knndm.R (removed)
 # timed on these coordinates; k = 1 because the query set is never the
 # reference set here, so a point is never its own neighbour.
 nnd <- function(query_xy, reference_xy) {
@@ -1070,8 +1071,8 @@ message("  The plan whose median sits closer to the first line is scoring the ",
 #     changing the predpoint sample or k is how the geometry gets understood;
 #   * the plan above is on disk, so the rf run costs no kNNDM time at all.
 #
-# When it is run, it belongs in _capability_sweep.R beside the other capability
-# rows, or in a script of its own. The call is the same one 03b makes, with the
+# When it is run, it belongs in a script of its own. The call is the same one
+# 03b makes, with the
 # plan read from disk instead of a spec -- resolve_resampling() returns a
 # fold_plan unchanged (R/api.R:240), which is what makes that substitution exact:
 #
