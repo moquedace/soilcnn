@@ -42,6 +42,9 @@
 #   <run>/<config>/models/seed%04d_best.pt    one checkpoint per seed
 #   <run>/<config>/predictor_scaling.csv      the scaling the weights expect
 #   <run>/<config>/ensemble_predictions.csv, conformal_90.rds, smearing.rds
+#   <run>/run_spec.rds                       what the seeds' numbers depend on,
+#                                            written before the first seed; a
+#                                            resume is held to it
 #
 # and, new, the answer to "which CNN was chosen, exactly":
 #
@@ -117,6 +120,9 @@
 #' @param run_id     NULL for final_<timestamp>. Give an existing one with
 #'   resume = TRUE to finish an interrupted fit.
 #' @param resume     Skip seeds whose checkpoint and record are already there.
+#'   A resumed run is held to the settings it started with (run_spec.rds):
+#'   another thread count, schedule, grid, split or scaling is refused, and so
+#'   is a directory dsm_final() did not start.
 #' @param verbose    Report progress, and print the result.
 #' @return A `dsm_final`, printed with the report.
 #' @export
@@ -192,10 +198,15 @@ dsm_final <- function(tuning, data = NULL, config = "auto",
   by_config   <- if (file.exists(bc_path)) safe_read_csv2(bc_path) else NULL
 
   # ── 2. which configuration ────────────────────────────────────────────────
+  #
+  # CHOSEN HERE, FROZEN ONLY IN STEP 4, once nothing else can stop the call.
+  # freeze_selection() refuses ever to record another choice in this tuning
+  # run. Frozen here, as it was, a choice made by a call that then stopped --
+  # a window the store lacks, a batch the refit cannot fill, a resume held to
+  # other settings -- stayed frozen with no final model behind it, and the
+  # corrected call was refused after it.
   sel <- .final_select(config, rule, metric, by_config, units_tbl, grid, say, verbose)
   ids <- sel$ids
-  freeze_selection(tuning_dir, ids, rule = sel$rule_applied, metric = metric,
-                   note = paste("dsm_final() on", format(Sys.time())))
   selected <- grid[grid$config_id %in% ids, , drop = FALSE]
 
   windows_needed <- sort(unique(unlist(selected$window_sizes)))
@@ -231,8 +242,16 @@ dsm_final <- function(tuning, data = NULL, config = "auto",
   # ONCE here, from this split's training rows, handed to every worker, and
   # written beside the weights -- stage 05 scales the rasters with it.
   scaling <- fit_scaling(data$points, data$type_table, index$train)
+  # Checked here, as build_fold_cache() checks it in every worker: there it
+  # stops after the choice is frozen and after each worker has loaded.
+  if (any(scaling$degenerate)) {
+    stop("Degenerate scaling (zero or non-finite sd) on the refit's training rows for: ",
+         paste(scaling$predictor[scaling$degenerate], collapse = ", "),
+         ". A channel constant over the rows a model trains on cannot be z-scored.",
+         call. = FALSE)
+  }
 
-  # ── 4. where it goes, and what is already done ────────────────────────────
+  # ── 4. where it goes, what it depends on, and what is already done ────────
   output_dir <- output_dir %||% file.path(dirname(tuning_dir), "final_model")
   run_id     <- run_id %||% paste0("final_", format(Sys.time(), "%Y%m%d_%H%M%S"))
   run_dir    <- normalizePath(file.path(output_dir, run_id), winslash = "/", mustWork = FALSE)
@@ -240,6 +259,17 @@ dsm_final <- function(tuning, data = NULL, config = "auto",
     stop("A final run already exists at ", run_dir, ". Pass resume = TRUE to ",
          "finish it, or another run_id.", call. = FALSE)
   }
+  # What a seed's numbers depend on besides the seed: recorded when the run
+  # is new, and a resume that would compute the rest another way is refused
+  # (.final_run_spec()). The same five values .resolve_train_transform()
+  # probes the inverse at.
+  .final_run_spec(run_dir, run_id, list(
+    grid = grid, split = index, scaling = scaling, threads_per_unit = tpu,
+    training = training, transform_probe = as.numeric(transform(c(0, 0.5, 1, 2.5, 5)))))
+  # Everything that can stop the call has been checked; the choice is frozen
+  # before the first seed trains, and so before any test score exists.
+  freeze_selection(tuning_dir, ids, rule = sel$rule_applied, metric = metric,
+                   note = paste("dsm_final() on", format(Sys.time())))
   create_output_dirs(c(run_dir, file.path(run_dir, "comparison")))
   for (cid in ids) {
     create_output_dirs(file.path(run_dir, cid, c("models", "history", "predictions",
@@ -567,6 +597,84 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
   r <- .final_unit_record(run_dir, config_id, seed)
   !is.null(r) && identical(r$status, "success") &&
     file.exists(file.path(run_dir, config_id, "models", sprintf("seed%04d_best.pt", seed)))
+}
+
+# WHAT A SEED'S NUMBERS DEPEND ON, BESIDES THE SEED, RECORDED BEFORE THE FIRST
+# SEED TRAINS. A resume keeps every finished seed and trains the rest, so the
+# rest must be computed as the finished ones were -- or one run holds seeds
+# computed two ways, its summary records only the second, and nothing in the
+# ensemble shows it. T1 measured what one of these alone does: another thread
+# count moved the heavy configuration's val_ccc by 0.067 in 12 epochs.
+#
+#   grid              the tuning run's: a config id names a network only
+#                     within one grid, and another grid's cfg_003 is another
+#                     network under the same name
+#   split, scaling    the refit's rows and the constants its inputs are scaled
+#                     with: another store, point table or validation_frac
+#                     changes them
+#   threads_per_unit  T1
+#   training          the schedule and the clamp; print_every only prints,
+#                     and is not compared
+#   transform_probe   the inverse at five values: the space of every metric
+#
+# The seeds are not in it (adding seeds to a run is what resume is for), and
+# neither are the ids: a second configuration trains in its own directory.
+#
+# Written when the directory is new. One that exists without it was not
+# started by dsm_final() -- a final model fitted by stage 04, whose seeds a
+# fit into it would overwrite -- and it is refused whatever it holds.
+.final_run_spec <- function(run_dir, run_id, spec) {
+  f <- file.path(run_dir, "run_spec.rds")
+  if (!file.exists(f)) {
+    held <- if (dir.exists(run_dir)) {
+      list.files(run_dir, recursive = TRUE, all.files = TRUE, no.. = TRUE)
+    } else character(0)
+    if (length(held) > 0L) {
+      stop("run_id \"", run_id, "\" names a directory dsm_final() did not start: ",
+           run_dir, " holds ", length(held), " file(s) and no run_spec.rds -- a final ",
+           "model fitted by stage 04, or one from before dsm_final() recorded its ",
+           "settings. A fit into it would overwrite its seeds. Give another run_id.",
+           call. = FALSE)
+    }
+    create_output_dirs(run_dir)
+    safe_save_rds(c(spec, list(written_at = Sys.time())), f, compress = FALSE)
+    return(invisible(spec))
+  }
+  old  <- readRDS(f)
+  said <- function(v) if (is.null(v)) "(not set)" else paste(format(v, trim = TRUE), collapse = ", ")
+  what <- c(grid            = "the tuning run's grid (a config id names a network only within one)",
+            split           = "the refit's rows (another store, test set or validation_frac)",
+            scaling         = "the predictor scaling (another store or point table)",
+            transform_probe = "the inverse transform")
+  diffs <- character(0)
+  for (k in names(spec)) {
+    a <- old[[k]]
+    b <- spec[[k]]
+    if (identical(k, "training")) {
+      a <- a[setdiff(names(a), "print_every")]
+      b <- b[setdiff(names(b), "print_every")]
+    }
+    if (isTRUE(all.equal(a, b))) next
+    diffs <- c(diffs, if (identical(k, "training")) {
+      keys <- union(names(a), names(b))
+      keys <- keys[!vapply(keys, function(z) isTRUE(all.equal(a[[z]], b[[z]])), logical(1))]
+      sprintf("training$%s %s, now %s", keys,
+              vapply(keys, function(z) said(a[[z]]), character(1)),
+              vapply(keys, function(z) said(b[[z]]), character(1)))
+    } else if (identical(k, "threads_per_unit")) {
+      sprintf("threads_per_unit %s, now %s", said(a), said(b))
+    } else {
+      what[[k]]
+    })
+  }
+  if (length(diffs) > 0L) {
+    stop("run_id \"", run_id, "\" was started with other settings than this call gives:\n  ",
+         paste(diffs, collapse = "\n  "),
+         "\n  Its finished seeds and the rest would be computed two ways. Resume it with ",
+         "the settings it started with (", f, "), or give another run_id.",
+         call. = FALSE)
+  }
+  invisible(old)
 }
 
 # What a worker needs in memory, measured by T2: ~10 GB peak per process with

@@ -12,7 +12,11 @@
 #   4. the report declares every hyperparameter of the grid, says which the
 #      search varied, and lists what it tried
 #   5. an interrupted fit resumes without retraining a finished seed
-#   6. the arguments that can only be wrong are refused before anything trains
+#   6. the arguments that can only be wrong are refused before anything trains;
+#      a resume only with the settings its run started with; and a refused
+#      call freezes no choice
+#   7. a final model dsm_final() did not start gets its declaration, and is
+#      never fitted into
 #
 # The fixture: 96 points in 8 sites two degrees apart, 3 channels, window 3 --
 # enough blocks that a spatial tuning plan and its refit split both have
@@ -198,6 +202,43 @@ ok["an_existing_run_is_not_overwritten_silently"] <-
   grepl("already exists", refuse(run_id = "par", resume = FALSE))
 ok["a_seed_count_means_42_onwards"] <- identical(.final_seeds(3L), 42:44)
 
+# A RESUME IS HELD TO THE SETTINGS ITS RUN STARTED WITH (run_spec.rds). The
+# thread count is T1's; the schedule is what every epoch runs; print_every
+# only prints, and a resume that changes nothing else trains nothing.
+ok["the_run_records_what_its_seeds_depend_on"] <- {
+  sp <- readRDS(file.path(rd, "run_spec.rds"))
+  identical(sp$threads_per_unit, 1L) && identical(sp$training$n_epochs, 3L) &&
+    all(c("grid", "split", "scaling", "transform_probe") %in% names(sp))
+}
+ok["a_resume_with_another_thread_count_is_refused"] <-
+  grepl("threads_per_unit 1, now 2",
+        refuse(run_id = "par", n_cores = 2L, threads_per_unit = 2L), fixed = TRUE)
+ok["a_resume_with_another_schedule_is_refused"] <-
+  grepl("training$n_epochs 3, now 4",
+        refuse(run_id = "par", training = list(n_epochs = 4L)), fixed = TRUE)
+ok["a_resume_that_only_prints_otherwise_is_not_refused"] <- {
+  fp <- suppressMessages(do.call(dsm_final, utils::modifyList(
+    c(list(fit, config = cid, n_cores = 1L, run_id = "par"), final_args),
+    list(training = list(print_every = 1L)))))
+  identical(fp$n_workers, 0L) && identical(fp$all_seed_results$ccc, fin$all_seed_results$ccc)
+}
+
+# A REFUSED CALL FREEZES NO CHOICE. freeze_selection() never records another
+# choice in a tuning run, so a choice frozen by a call that then stopped would
+# outlive the refusal, and the corrected call would be refused after it. On a
+# copy of the tuning run with nothing frozen, a resume the run's settings
+# refuse must leave nothing frozen.
+tcopy_root <- file.path(base, "tuning_copy")
+dir.create(tcopy_root)
+file.copy(fit$run_dir, tcopy_root, recursive = TRUE)
+tcopy <- file.path(tcopy_root, basename(fit$run_dir))
+unlink(file.path(tcopy, "comparison", "selection.rds"))
+ok["a_refused_call_freezes_no_choice"] <-
+  grepl("threads_per_unit 1, now 2", err(do.call(dsm_final, utils::modifyList(
+    c(list(tcopy, data = data, config = cid, n_cores = 2L), final_args),
+    list(run_id = "par", threads_per_unit = 2L)))), fixed = TRUE) &&
+  !file.exists(file.path(tcopy, "comparison", "selection.rds"))
+
 # THE CLAMP IS THE TUNING RUN'S. dsm_train() recorded the one it scored its
 # units with -- the default here -- the refit took it without being told, and
 # the summary a map reads carries it; another, given in `training`, is refused.
@@ -223,7 +264,7 @@ s04[c("threads_per_unit", "n_workers", "training", "fitted_by", "validation_frac
       "n_train", "n_validation", "n_test", "torch_version", "r_version",
       "git_commit", "finished_at")] <- NULL
 saveRDS(s04, file.path(old_rd, "comparison", "final_run_summary.rds"))
-unlink(file.path(old_rd, c("final_report.md", "selected_hyperparameters.csv")))
+unlink(file.path(old_rd, c("final_report.md", "selected_hyperparameters.csv", "run_spec.rds")))
 unlink(file.path(old_rd, cid, "units"), recursive = TRUE)
 rep04 <- suppressMessages(dsm_report_final(old_rd, fit$run_dir, verbose = FALSE))
 txt04 <- readLines(rep04$report_file, encoding = "UTF-8")
@@ -236,6 +277,16 @@ ok["it_declares_the_hyperparameters_dsm_final_declared"] <-
 ok["and_reports_the_same_test_results"] <-
   isTRUE(all.equal(rep04$config_summary$ccc_mean, fin$config_summary$ccc_mean)) &&
   isTRUE(all.equal(rep04$config_summary$mae_mean, fin$config_summary$mae_mean))
+# NEVER FITTED INTO. Named as a run_id, a final model dsm_final() did not
+# start -- the deployed one was fitted by stage 04 -- is refused before
+# anything is written into it: a fit there would overwrite its seeds.
+pt_file <- file.path(old_rd, cid, "models", "seed0001_best.pt")
+pt_md5  <- unname(tools::md5sum(pt_file))
+ok["a_directory_dsm_final_did_not_start_is_never_fitted_into"] <-
+  grepl("did not start", err(do.call(dsm_final, utils::modifyList(
+    c(list(fit, n_cores = 1L), final_args), list(output_dir = old, run_id = basename(rd)))))) &&
+  identical(unname(tools::md5sum(pt_file)), pt_md5) &&
+  !file.exists(file.path(old_rd, "run_spec.rds"))
 
 # ── 8. calibration residuals of a configuration, found by what it is ─────────
 #
