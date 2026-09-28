@@ -67,7 +67,10 @@ run's directory.}
 \item{run_id}{NULL for final_\if{html}{\out{<timestamp>}}. Give an existing one with
 resume = TRUE to finish an interrupted fit.}
 
-\item{resume}{Skip seeds whose checkpoint and record are already there.}
+\item{resume}{Skip seeds whose checkpoint and record are already there.
+A resumed run is held to the settings it started with (run_spec.rds):
+another thread count, schedule, grid, split or scaling is refused, and so
+is a directory dsm_final() did not start.}
 
 \item{verbose}{Report progress, and print the result.}
 }
