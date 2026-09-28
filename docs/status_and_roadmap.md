@@ -228,10 +228,11 @@ of the package that were `source()`d from `R/`.
   end, the resampling specs and fold constructors, the registry, and the tools
   applied to results. The runners, the store's plumbing and the scripts'
   helpers (37) are internal.
-- **The help pages.** The blocks are complete (c7f50ab): every argument, every
-  return, and the print methods on pages of their own. `@noRd` sits on the 81
-  internal blocks. `man/` is written the first time `roxygen2::roxygenise()`
-  runs.
+- ~~The help pages~~ — **done** (c7f50ab, 96525db). Every argument has a
+  @param and every function a @return, and the print methods have pages of
+  their own. `@noRd` sits on the 81 internal blocks. roxygen2 8.1.0 wrote the 84
+  pages and left NAMESPACE as it was, and its second pass is clean. The
+  tarball is 117 files and installs its help without an error.
 - ~~The vignette~~ — **done** (0fbde99). `vignettes/soilcnn.Rmd` walks the
   chain from `dsm_prepare()` to `dsm_predict()`, and `examples/quickstart.R`
   runs the same steps on the SOC data. The worked example stays outside the

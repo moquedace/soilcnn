@@ -5791,3 +5791,12 @@ foram escritos.
     pacote. O tarball é o mesmo.
   - O que o build do diretório inteiro garantia (os dados do usuário fora) é
     checado no `test_package_metadata`, pela mesma regra do `R CMD build`.
+
+A rodada seguinte confirmou tudo:
+
+- a segunda passada do `roxygenise()` saiu limpa;
+- `test_api` 51/51 e `test_train_defaults` 56/56, sem nenhum aviso;
+- `test_package_metadata` 25/25;
+- `test_package_install` 15/15, construindo pela cópia.
+
+O item "Toward a package" do roadmap está fechado.
