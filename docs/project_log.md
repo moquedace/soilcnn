@@ -5948,3 +5948,146 @@ O que os números querem dizer se lê nas tabelas. **Custo:** ~10 min.
   batem com os formais.
 - Falta o que só o R faz: a suíte (o `test_final` ganhou 8 asserções), o T7 e
   o R CMD check.
+
+
+## 2026-09-28 — Suíte 31/31, o primeiro R CMD check, o T7 lido, e o repositório `soilcnn`
+
+### O que rodou (código 995eba9)
+
+- **`tests/run_all.R`: 31/31 em 7,7 min.**
+  - O `test_final` passou 41/41, com as 8 asserções novas.
+  - O ajuste de 1 worker com o rastreio ligado deu as seeds idênticas bit a
+    bit ao de 2 workers sem rastreio: o rastreio não muda nenhum número.
+- **R CMD check: 1 NOTE, nenhum WARNING ou ERROR** (`00check_20260928_183710.log`).
+  O NOTE eram 121 linhas de "no visible binding for global variable", sobre
+  70 nomes.
+- **T7: PASS 3/3.**
+
+### O NOTE do check
+
+Um verbo do dplyr lê uma coluna pelo nome solto, por exemplo
+`dplyr::filter(perf, dataset_role == "test")`, e só acha a coluna dentro da
+tabela quando a linha roda. O check lê a linha sem a tabela e não acha variável
+nenhuma com esse nome.
+
+**Antes de declarar, cada par (função, nome) foi conferido contra o uso.** Um
+script em Python achou, em cada função, as linhas onde o nome aparece solto.
+Todas estão dentro de `select`, `filter`, `group_by`, `summarise`, `mutate`,
+`arrange`, `relocate` ou `rename`, ou são os pronomes `.data` e `.env`.
+Nenhuma é variável que alguém esqueceu de definir.
+
+- Os 70 nomes estão escritos à mão em `R/globals.R`, agrupados pelo que são
+  (10d4a16). Um nome declarado é um nome que o check para de olhar, então um
+  NOTE novo é lido antes de o nome entrar na lista.
+- A mesma declaração tira a sugestão de importar `methods::new`: `new` é uma
+  coluna do `compare_run_snapshot()`.
+
+Perderam:
+
+- **`.data$coluna` em umas 30 funções**: não muda nada do que elas calculam;
+- **`importFrom(dplyr, .data)`**: cobre só o pronome, e o `NAMESPACE` daqui é
+  só o que as tags `@export` dizem (o `test_package_metadata` cobra isso).
+
+### O T7: a memória do treino não cresce por época
+
+O worker (cfg_003, janela 15, 3 unidades de 30 épocas num processo), em
+memória privada:
+
+| fase | nível | acrescentou |
+|---|---|---|
+| R e torch carregados | 1,13 | |
+| janelas carregadas | 2,88 | +1,75 |
+| cache da dobra | 4,13 | +1,25 |
+| 1ª época da 1ª unidade | 6,50 | +2,36 |
+| época 30 | 6,80 | |
+| fim da 1ª unidade (avaliação final) | 8,65 | +1,86 |
+| fim da 2ª | 8,94 | +0,29 |
+| fim da 3ª | 8,90 | −0,04 |
+
+- **As épocas não vazam.** Nas unidades 2 e 3 o nível fica parado; a
+  inclinação cai de 26 MB/época na 1ª para 1 MB/época na 3ª.
+- **O pool do treino (+2,4 GB) e o da avaliação final (+1,9 GB) são
+  reaproveitados.** A 2ª unidade acrescenta 0,14 GB na avaliação final, e a
+  3ª, 0,03.
+- **O que não era reaproveitado era a montagem.** Das 3,0 GB, só 0,61 eram o
+  cache. O resto, ~2,4 GB (4× o cache), eram cópias que o mimalloc segurava:
+  - a cópia double que o `torch_tensor()` faz da janela inteira antes de
+    converter (1,21 GB);
+  - o clone que o cache escalava (0,61 GB);
+  - a janela crua do store, liberada depois do cache (0,61 GB).
+- **O pico de working set foi 7,87 GB.** A estimativa do `dsm_final()` (1,5 +
+  7× as janelas, do T2) dava 10,0.
+- **O mimalloc, pelas estatísticas dele**, fez 15,7 mil purges (138 GiB
+  devolvidos) e comprometeu no máximo 7,4 GiB. Blocos do tamanho dos do treino
+  voltam ao sistema e são reaproveitados; blocos do tamanho de uma janela
+  inteira, não. É o mesmo corte que o T6 achou.
+
+**No conjunto completo** (janelas ~11× maiores), a parte da montagem seria
+~27 GB por worker. O resto quase não depende do tamanho dos dados.
+
+### A correção (f9f2f84): o mesmo cache, sem as cópias
+
+- **`.rows_to_float()`** converte uma janela, ou reúne linhas de uma janela
+  já carregada, em fatias de 16 MB, dentro de um tensor feito uma vez só. O
+  T6 viu blocos de ~20 MB serem reaproveitados. O `load_patch_window()` usa
+  ele.
+- **O `build_fold_cache()` reúne cada papel num tensor próprio e escala ali
+  mesmo.** Sai o clone da janela inteira. E um papel nunca é uma *view* do
+  tensor cru do store: `x[1:24, , , ]` pode ser uma view, e a escala é feita
+  no lugar.
+- **Uma janela que o store não carregou é lida do arquivo dela.** Os workers
+  do `dsm_final()` carregam só a tabela (`dsm_load(windows = integer(0))`,
+  agora documentado) e cortam os papéis direto do array. Nunca seguram a
+  janela como tensor para depois liberá-la.
+- **`.final_worker_gb()` segue a decomposição do T7**: 1,1 + o cache + o maior
+  entre o array da maior janela (enquanto ela é lida) e o pool do treino (4,7
+  GB). Para o dev isso dá 6,4 GB, contra 10,0 da regra do T2.
+
+**Os números não podem mudar**, porque a conversão e a escala são elemento a
+elemento. O `test_fold_cache` ganhou 7 asserções, que comparam **exatamente**,
+com fatias de 2 a 4 pontos:
+
+- as fatias contra a conversão inteira;
+- o cache contra o caminho antigo escrito por extenso (converter, clonar,
+  escalar, fatiar);
+- o cache lido dos arquivos contra o cortado do store carregado;
+- e o store continua cru.
+
+O T7 ganhou o t7_04: as seeds 42 a 44 têm que dar as métricas que as mesmas
+seeds deram na rodada 995eba9 (até 1e-12). O T7 também imprime o rastreio
+novo ao lado do anterior.
+
+**Ficou como medido, sem mudar:** o pool da avaliação final vem dos lotes de
+avaliação de até 1024 (`bs_eval`). Um lote menor encolheria o pool, mas pode
+mudar os números de uma seed como as threads mudam, e mudaria os de rodadas de
+tuning em retomada.
+
+**Ainda aberto:** o laço de dobras do `dsm_train()`. Ele se beneficia das duas
+correções (sem a cópia double na carga e sem o clone por dobra), mas o cache
+de cada dobra é liberado antes do da seguinte. Se o mimalloc não o
+reaproveitar, o tuning completo cresce um cache por dobra. É a próxima medida,
+antes da rodada completa.
+
+### As decisões que o usuário deixou comigo
+
+- **O repositório.** O usuário renomeou para `moquedace/soilcnn`, que é
+  público; o nome antigo redireciona (301). O `DESCRIPTION` (`URL`,
+  `BugReports`) e o remote local passaram para o nome novo (e0720de).
+- **O push.** Antes de enviar, conferi o que os 219 commits levavam: só
+  código, páginas de ajuda, docs e três `.pyc` antigos. O maior blob tem 290
+  KB (o próprio log). Não há dados, nem arquivo grande, nem credencial, e o
+  autor é o mesmo do histórico já público. Enviei só o estado que já tinha
+  sido verificado (`2cdd43d..e0720de`). O que veio depois (globals, a
+  correção do cache, o aviso do 04, estes docs) vai junto com a próxima
+  verificação.
+- **"latest" no 04.** Continua o padrão: é a rodada de tuning terminada mais
+  nova, o que um ajuste logo depois do 03 quer. Agora o 04 diz no início qual
+  modelo final o 05 mapeia hoje, de qual rodada ele saiu, e se o novo ajuste
+  vem da mesma (2b79ed3).
+  - Perdeu **parar quando as duas diferem**: depois de toda rodada de tuning
+    nova elas diferem por definição.
+  - Perdeu **fixar a rodada do modelo implantado**: reajustá-lo com seeds
+    novas é um novo sorteio da mesma escolha, e o mapa não precisa disso.
+- **Não há 04 para rodar agora.** O modelo implantado continua o do mapa. O
+  próximo modelo final sai da rodada de ciência, depois da decisão do desenho
+  (blocos ou kNNDM), como o roadmap já dizia.
