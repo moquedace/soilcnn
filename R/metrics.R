@@ -89,7 +89,7 @@ calc_metrics <- function(obs, pred) {
   r2_val <- if (stats::sd(pred) == 0 || stats::sd(obs) == 0) {
     NA_real_
   } else {
-    tryCatch(as.numeric(cor(pred, obs, use = "pairwise.complete.obs"))^2,
+    tryCatch(as.numeric(stats::cor(pred, obs, use = "pairwise.complete.obs"))^2,
              error = function(e) NA_real_)
   }
 

@@ -145,12 +145,12 @@ extract_gate_analysis <- function(model, data_loader, points_valid,
     n                       = nrow(gate_by_profile),
     n_gate_dims             = ncol(gate_rows),
     mean_gate               = mean(gv, na.rm = TRUE),
-    median_gate             = median(gv, na.rm = TRUE),
+    median_gate             = stats::median(gv, na.rm = TRUE),
     q05_gate                = as.numeric(stats::quantile(gv, 0.05, na.rm = TRUE)),
     q95_gate                = as.numeric(stats::quantile(gv, 0.95, na.rm = TRUE)),
     mean_norm_branch1       = mean(norm1_all, na.rm = TRUE),
     mean_norm_branch2       = mean(norm2_all, na.rm = TRUE),
-    median_norm_ratio       = median(norm1_all / (norm2_all + 1e-8), na.rm = TRUE),
+    median_norm_ratio       = stats::median(norm1_all / (norm2_all + 1e-8), na.rm = TRUE),
     mean_cosine_similarity  = mean(cos_sim_all, na.rm = TRUE)
   )
 
@@ -684,8 +684,8 @@ run_cnn_tuning <- function(
     unit_id <- sprintf("%s_f%d_s%d", cfg$config_id, fold, seed_i)
 
     if (unit_id %in% done_ids) {
-      message("\n── ", u, "/", n_units, ": ", unit_id,
-              " -- already trained, skipping ──")
+      message("\n-- ", u, "/", n_units, ": ", unit_id,
+              " -- already trained, skipping --")
       next
     }
 
@@ -694,9 +694,9 @@ run_cnn_tuning <- function(
     set.seed(this_seed)
     torch::torch_manual_seed(this_seed)
 
-    message("\n── ", u, "/", n_units, ": ", unit_id,
+    message("\n-- ", u, "/", n_units, ": ", unit_id,
             "  (config ", i, "/", n_cfg, ", fold ", fold,
-            ", seed ", this_seed, ") ──")
+            ", seed ", this_seed, ") --")
     message("  window_sizes : ", paste(cfg$window_sizes[[1]], collapse = "x"))
     message("  conv_channels: ", paste(cfg$conv_channels[[1]], collapse = ", "))
     message("  embedding_dim: ", cfg$embedding_dim,
@@ -911,11 +911,11 @@ run_cnn_tuning <- function(
     # phrase was wrong even when the number was real, because a test score on
     # screen beside the selection metric is not a diagnostic, it is the input
     # to a choice somebody is about to make.
-    message("\n── Best config: ", comparison$config_id[1],
+    message("\n-- Best config: ", comparison$config_id[1],
             " | val_CCC=", round(comparison$val_ccc[1], 3),
-            " | val_MAE=", round(comparison$val_mae[1], 3), " ──")
+            " | val_MAE=", round(comparison$val_mae[1], 3), " --")
   } else {
-    message("\n── No config completed successfully. ──")
+    message("\n-- No config completed successfully. --")
   }
 
   invisible(list(comparison = comparison, run_dir = run_dir))

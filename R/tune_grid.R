@@ -298,7 +298,7 @@ make_tune_grid <- function(tune_length = 20L, seed = NULL, fixed = list(),
   if (n_kept < tune_length) {
     rows <- rows[seq_len(n_kept)]
     message("make_tune_grid: only ", n_kept, " unique configs available ",
-            "(requested ", tune_length, ") — search space likely exhausted.")
+            "(requested ", tune_length, ") -- search space likely exhausted.")
   }
 
   .rows_to_tibble(rows)

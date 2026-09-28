@@ -446,7 +446,7 @@ build_fold_cache <- function(store, points, type_table, index,
   }
 
   roles <- names(index)
-  cache <- setNames(vector("list", length(roles)), roles)
+  cache <- stats::setNames(vector("list", length(roles)), roles)
   for (r in roles) cache[[r]] <- list()
 
   for (w in window_sizes) {
@@ -553,7 +553,7 @@ fold_table_view <- function(cache, predictors, windows = NULL,
     as.matrix(x[, , c_, c_]$to(device = "cpu"))
   }
 
-  out <- setNames(vector("list", length(roles)), roles)
+  out <- stats::setNames(vector("list", length(roles)), roles)
   for (r in roles) {
     blocks <- list()
 
@@ -603,6 +603,6 @@ fold_table_view <- function(cache, predictors, windows = NULL,
 }
 
 fold_points_valid <- function(store, index) {
-  setNames(lapply(names(index), function(r) store$meta[index[[r]], , drop = FALSE]),
+  stats::setNames(lapply(names(index), function(r) store$meta[index[[r]], , drop = FALSE]),
            names(index))
 }
