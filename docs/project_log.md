@@ -6142,3 +6142,20 @@ e `rows[<fatia>]` é o R base indexando um vetor com uma lista.
 - **A lição, registrada:** um caminho com um ramo de tensor e um de array
   precisa dos dois testados. O T7 provou o ramo do array e não disse nada
   sobre o do tensor; a suíte disse.
+
+### A suíte com a correção (código 4e05c16)
+
+- **`tests/run_all.R`: 31/31 em 7,8 min.** O `test_fold_cache` passou 29/29,
+  com as 7 asserções de identidade exata: fatias contra a conversão inteira,
+  cache contra o caminho antigo, cache lido do arquivo contra o cortado do
+  store carregado. O `test_final` passou 41/41: retomada presa aos ajustes,
+  chamada recusada que não congela nada, diretório do 04 nunca sobrescrito,
+  e o rastreio com todas as fases.
+- **R CMD check: `Status: OK`.**
+- Com isso, os itens pedidos em "vamos fazer tds" estão fechados:
+  - o check completo;
+  - o 04 como uma chamada ao `dsm_final()`;
+  - a memória do worker do treino (−2,3 GB, os mesmos números);
+  - as threads à mão;
+  - o repositório `soilcnn`.
+- Fica para a próxima medida o laço de dobras do `dsm_train()`.
