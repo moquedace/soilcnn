@@ -6091,3 +6091,54 @@ antes da rodada completa.
 - **Não há 04 para rodar agora.** O modelo implantado continua o do mapa. O
   próximo modelo final sai da rodada de ciência, depois da decisão do desenho
   (blocos ou kNNDM), como o roadmap já dizia.
+
+
+## 2026-09-28 — T7 confirma: −2,3 GB por worker, os mesmos números; e o `:` do R torch
+
+### O que rodou (código c9b6684)
+
+- **R CMD check: `Status: OK`.** Sem NOTE: os 70 nomes do `R/globals.R`
+  resolveram o único que havia.
+- **T7: PASS 4/4.** O t7_04 comparou as seeds 42 a 44 com as da rodada
+  995eba9: **diferença máxima 0,00e+00** em CCC, MAE, RMSE, R² e época do
+  melhor modelo. O cache sem cópias treina exatamente o mesmo modelo, em escala
+  real.
+
+| memória privada (GB) | antes (995eba9) | agora | mudança |
+|---|---|---|---|
+| antes do treino | 4,13 | 1,95 | −2,18 |
+| depois da 1ª unidade | 8,65 | 6,37 | −2,29 |
+| depois da última | 8,90 | 6,55 | −2,35 |
+| pico de working set | 7,87 | 5,60 | −2,26 |
+
+- A carga do store agora é só a tabela (1,05 GB, menos que o início). O cache
+  da dobra acrescenta 0,90 GB, dos quais 0,61 são o próprio cache.
+- As épocas continuam sem vazar: cada unidade deixa +0,09 GB para a próxima.
+- A estimativa do `dsm_final()` para esse worker é 6,4 GB, contra 6,55
+  medidos (privada) e 5,60 (working set).
+- O mimalloc, pelas estatísticas dele, comprometeu no máximo 5,2 GiB, contra
+  7,4 antes.
+
+### A suíte: 26/31, e a causa
+
+Cinco arquivos falharam com "tipo de subscrito inválido 'list'", todos no
+primeiro cache montado a partir de um **store carregado**: `test_fold_cache`,
+`test_resample_run`, `test_api_run`, `test_final` e `test_predict`. O T7
+passou porque os workers agora cortam do array do R, onde o `[` é o do R base.
+
+**A causa está no R torch** (`R/indexing.R`). Os argumentos de `[` e `[<-`
+num tensor são avaliados sob uma máscara (`.d`) que redefine o `:` para
+construir um objeto de fatia, e a máscara vale também dentro de chamadas
+aninhadas. Em `src[rows[s:e], , , , drop = FALSE]`, o `s:e` virou uma fatia,
+e `rows[<fatia>]` é o R base indexando um vetor com uma lista.
+
+- **A correção (172e1c6):** as linhas são tiradas antes, fora dos colchetes
+  (`rr <- rows[s:e]`). Em `out[s:e, , , ] <- part` a fatia é o que se quer, e
+  as seeds idênticas do T7 mostram que ela está certa.
+- **A mesma máscara redefine `N`, `newaxis` e `..`.** Varri `R/`, `tests/` e
+  `examples/` atrás de índices com `:` aninhado. Só este era num tensor; os
+  outros quatro indexam listas, data frames e matrizes do R. Nenhum índice usa
+  `N` ou `newaxis`.
+- **A lição, registrada:** um caminho com um ramo de tensor e um de array
+  precisa dos dois testados. O T7 provou o ramo do array e não disse nada
+  sobre o do tensor; a suíte disse.
