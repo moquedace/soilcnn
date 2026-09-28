@@ -5800,3 +5800,151 @@ A rodada seguinte confirmou tudo:
 - `test_package_install` 15/15, construindo pela cópia.
 
 O item "Toward a package" do roadmap está fechado.
+
+
+## 2026-09-28 — O 04 vira uma chamada ao `dsm_final()`; a retomada presa aos ajustes da rodada; o T7 mede a memória do treino
+
+### O 04
+
+O `04_final_model.R` tinha 852 linhas. Agora são as configurações do SOC e
+uma chamada ao `dsm_final()`, que grava os mesmos arquivos nos mesmos lugares:
+o `05` lê uma rodada nova como lia as antigas.
+
+**O que muda nos números.** As seeds treinam lado a lado, cada uma num
+processo R com 5 threads, em vez de uma depois da outra na sessão com 30. O T2
+mediu 1,52× mais rápido, e o número de uma seed depende só da seed e das
+threads (T1, T2). Então um ajuste novo **não reproduz as seeds do modelo
+implantado** (`final_20260918_150311`, ajustado pelo 04 antigo com 30
+threads). Ele difere como outro sorteio de seeds diferiria. E o `05` mapeia a
+rodada final mais nova: rodar o 04 faz do ajuste novo o do próximo mapa.
+
+**O que saiu com o script antigo:**
+
+- o intervalo normalizado pela dispersão entre seeds, que o 04 nunca produzia
+  quando a calibração vinha da CV (a dispersão da CV não é a do ensemble
+  final); o intervalo adaptativo de verdade é o do `dsm_predict()` (nível +
+  DI);
+- a comparação impressa com a calibração pela validação do refit, cujo achado
+  já está registrado (83,6% contra 87,8% de cobertura para 90% nominais);
+- o `tidyr` e o `DescTools` da lista de pacotes.
+
+**O que entrou:**
+
+- `resume_run_id`, e a variável `soc_final_run_id`, para retomar uma rodada
+  interrompida;
+- `threads_per_unit` (5) e `n_cores` à vista, com o porquê: as threads por
+  seed fazem parte do resultado;
+- o `target_col` na carga, como no 03: a trava do store confere o alvo.
+
+**As janelas.** A sessão carrega todas as do store (3, 9 e 15; ~0,85 GB),
+porque só lê a tabela dele. Cada worker carrega as janelas da sua config.
+Perderam:
+
+- carregar só as da config escolhida, que exigiria saber a escolha antes do
+  `dsm_final()`;
+- não carregar nenhuma (`windows = integer(0)`), um modo que o `dsm_load()`
+  não documenta.
+
+**"latest" hoje resolve para `soc_0_5cm_design_spatial`** (terminada em 19/09
+às 05:53), e não para `soc_0_5cm_20260916_232318`, a rodada de onde saiu o
+modelo implantado. O 04 antigo faria o mesmo. Para reajustar a partir da
+rodada do modelo implantado:
+`Sys.setenv(soc_final_tuning_run_id = "soc_0_5cm_20260916_232318")`.
+
+### Duas falhas do `dsm_final()` que a conversão expôs
+
+**1. A escolha era congelada antes das checagens.** O `freeze_selection()`
+nunca aceita outra escolha na mesma rodada de tuning. Uma chamada que
+congelava e depois parava deixava a escolha congelada sem modelo final por
+trás, e a chamada corrigida era recusada. As paradas possíveis eram uma janela
+que o store não tem, um lote maior que o refit ou uma escala degenerada.
+
+- Agora a escolha é congelada no passo 4, depois de tudo o que pode parar a
+  chamada, e ainda antes da primeira seed, ou seja, antes de existir qualquer
+  nota no teste.
+- A escala degenerada passou a ser checada ali também. Antes ela só parava
+  dentro de cada worker, depois de ele carregar o store.
+
+**2. A retomada só conferia o checkpoint.** Retomar com outro
+`threads_per_unit` treinava as seeds restantes de outro jeito, e o resumo
+registrava só o último. O mesmo valia para outro cronograma, outra rodada de
+tuning ou outro store.
+
+- Agora o `run_spec.rds` guarda, antes da primeira seed, aquilo de que os
+  números dependem além da seed:
+  - a grade;
+  - o recorte do refit;
+  - a escala;
+  - as threads por seed;
+  - o cronograma (menos o `print_every`, que só imprime);
+  - a inversa, em cinco valores.
+- Uma retomada diferente é recusada, dizendo o que mudou
+  (`threads_per_unit 5, now 7`).
+- Um diretório que existe sem `run_spec.rds` não foi começado pelo
+  `dsm_final()`, e é recusado. É o caso do modelo implantado, ajustado pelo 04
+  antigo: um ajuste ali sobrescreveria as seeds dele. Isso passou a importar
+  porque o 04 ganhou `soc_final_run_id`.
+
+Perderam:
+
+- **conferir só as threads nos registros por unidade**: não cobre o
+  cronograma nem os dados;
+- **guardar o plano de tuning inteiro**: o que os números usam é o recorte do
+  refit, e é ele que fica;
+- **comparar os ids**: acrescentar uma config a uma rodada é legítimo, e ela
+  treina no diretório dela.
+
+### O rastreio de memória do treino
+
+- **`options(dsm.final.trace_mem = TRUE)`.** Depois de uma coleta, o worker
+  registra o working set, a memória privada, o pico e o heap do R. Faz isso
+  depois de cada fase (início, store carregado, cache da dobra, store
+  liberado) e depois de cada época de cada unidade, e grava
+  `logs/worker_NN_mem_trace.rds`. É o lado do treino do que o T4 fez para o
+  mapa (`dsm.predict.trace_mem`).
+- **`options(dsm.final.worker_env = c(...))`** acrescenta variáveis de
+  ambiente aos workers, como no `dsm_predict()`.
+- **`train_one_cnn()` ganhou `on_epoch = NULL`**, chamado no fim de cada
+  época. O rastreio só lê memória. `dsm_train()` e `dsm_final()` não o aceitam
+  do usuário.
+- **O `test_final` roda o ajuste de 1 worker com o rastreio ligado.** A
+  identidade bit a bit com o de 2 workers, que roda sem rastreio, prova que
+  ele não muda nenhum número.
+
+### T7 (`_t7_training_memory.R`)
+
+**A pergunta.** O T2 achou ~10 GB de pico por worker com 1,26 GB de janelas,
+quase igual com 2 ou com 6 unidades (10,0 contra 10,3 GB). No conjunto
+completo, na mesma proporção, seriam mais de 100 GB por processo. Um pico não
+diz qual fase o fez, nem se o nível sobe por época ou por unidade.
+
+**A suspeita é o mimalloc (T6).** A montagem do worker libera tensores de 250
+MB ou mais:
+
+- as cópias do caminho array do R → tensor float;
+- o clone que o cache da dobra escala;
+- as janelas cruas do store, depois que o cache existe.
+
+**O que mede.** O `dsm_final()` de verdade, numa cópia descartável da rodada
+de tuning do modelo implantado, e não numa cópia do código:
+
+- 1 worker × 5 threads, a cfg_003;
+- 3 seeds de 30 épocas, sem parada antecipada;
+- `MIMALLOC_SHOW_STATS=1`.
+
+As checagens dizem só que a medida está completa:
+
+- o ajuste terminou;
+- o rastreio tem cada fase e cada época;
+- a rodada original ficou intacta (md5).
+
+O que os números querem dizer se lê nas tabelas. **Custo:** ~10 min.
+
+### Verificação mecânica
+
+- `tools/r_balance.py` passa nos seis arquivos, e `tools/r_lint.py` não acha
+  nada.
+- `tools/r_calls.py`: toda função chamada existe, e os argumentos nomeados
+  batem com os formais.
+- Falta o que só o R faz: a suíte (o `test_final` ganhou 8 asserções), o T7 e
+  o R CMD check.

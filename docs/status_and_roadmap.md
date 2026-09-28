@@ -167,7 +167,7 @@ to maps, and what exists today:
 | points + raster folder → patch store, at the windows the user declares | `dsm_prepare()` | **done 2026-09-26** — proven on the SOC data to build the identical store (P1, 19/19); 01 calls it, 02 is folded in |
 | folds, buffer, tuning, selection | `dsm_load()`, `*_cv()`, `dsm_train()`, `one_se()` | **done** |
 | a tuning grid drawn from the windows in the store | inside `dsm_train()` | **done 2026-09-27** — every window the store holds and every pair; batch sizes that give the smallest fold >= 4 steps an epoch; the inverse read from the store; `n_cores`. The thread count the examples pass (30) awaits `_t1_threads_benchmark.R` |
-| refit the chosen config under N seeds | `dsm_final()` | **done 2026-09-27** — seeds side by side with fixed threads per seed (T1, T2), stage 04's selection and post-processing, the declaration of every hyperparameter; `tests/test_final.R` and P3 (the assembly against stage 04's own files, 7/7) passed; 04 still its own script |
+| refit the chosen config under N seeds | `dsm_final()` | **done 2026-09-27** — seeds side by side with fixed threads per seed (T1, T2), stage 04's selection and post-processing, the declaration of every hyperparameter; `tests/test_final.R` and P3 (the assembly against stage 04's own files, 7/7) passed. **Since 2026-09-28 stage 04 is one call to it**; the choice is frozen only once nothing else can stop the call, and a resume is held to the settings its run started with (`run_spec.rds`). T7 measures where a training worker's ~10 GB go (T2), before the full data set |
 | median, mean and interval maps, with the calibration source as an argument | `dsm_predict()` | **done 2026-09-27** — row bands over the whole width, each row decompressed once; the network fully convolutional where exact; every band for every calibration source; a probe at the profiles before the map. `tests/test_predict.R` 29/29; P4 10/10: stage 05's 20 km map to 2e-5, 59x faster, and the probe on the 250 m rasters to 3.8e-7. T3 passed on its fifth run: 2 workers x 7 threads at 21,200 valid px/s on full-width 250 m rows, ~33 h for the globe, 14.7 GB a worker against 14.6 estimated, flat from unit to unit -- once the step's window was made once per worker (mimalloc, under libtorch on Windows, kept every large block freed; T4-T6), with a restart for a worker over its memory as the net. `tests/test_predict.R` 32/32. `05_dsm_predict_global.R` runs the global map |
 
 ### Robustness and ease of use (the audit's list, applied)
@@ -237,8 +237,8 @@ of the package that were `source()`d from `R/`.
   chain from `dsm_prepare()` to `dsm_predict()`, and `examples/quickstart.R`
   runs the same steps on the SOC data. The worked example stays outside the
   package: it is the SOC project, with its paths and its data, and the
-  tarball leaves it out. 03, 03b and 04 still type `n_threads = 30` where
-  `setup_torch_device()` would read the machine (T1 measured 30 and 15 a wash).
+  tarball leaves it out. 03 and 03b read their threads from the machine
+  (2ab3b6c), and 04 gives `dsm_final()` its threads per seed (2026-09-28).
 - ~~**The example headers.**~~ **Done, 2026-09-21.** 26 files carried
   `project_root <- "D:/usuario_armazenamento/..."` and 15 of them fetched
   `install_load_pkg()` from a GitHub URL on every run — so the project ran on
