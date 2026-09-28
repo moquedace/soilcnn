@@ -14,8 +14,9 @@
 #   p5_01  the probe passes: the profiles' own pixels, every seed, before the map
 #   p5_02  every unit finished and every band has its mosaic
 #   p5_03  no worker's peak exceeded the RAM model's estimate by more than 25%
-#   p5_04  memory stays flat: after a worker process's second unit its peak
-#          rises by at most 1 GB, and no worker had to give its memory back
+#   p5_04  memory stays flat: after a worker process's second unit, the
+#          working set a unit leaves rises by at most 1 GB, and no worker had
+#          to give its memory back (over its share of the RAM budget)
 #   p5_05  a part across two seams -- between two units and between two
 #          chunks of columns -- mapped on its own, is that part of the whole
 #   p5_06  every band keeps its order at every pixel of 64 rows drawn at
@@ -219,18 +220,24 @@ ledger_check(L, "p5_03", "no worker's peak exceeded the RAM model's estimate by 
              sprintf("%.1f GB of %.1f estimated (%d worker(s) x %d thread(s))", pk, est,
                      m$work$n_workers, m$work$threads))
 
+# The level each unit LEAVES, after the full collection that ends it (rss_gb),
+# where the record has it: the first P5 over Brazil judged peaks, and a peak
+# holds whatever garbage sat between two collections -- fresh workers' first
+# units peaked anywhere from 8.9 to 11.1 GB on units alike.
 proc <- if (all(is.na(u$pid))) paste0("w", u$worker) else paste0("p", u$pid)
+u$level <- if ("rss_gb" %in% names(u) && any(is.finite(u$rss_gb))) u$rss_gb else u$peak_gb
 rise <- vapply(split(u, proc), function(w) {
   w <- w[order(w$finished_at), , drop = FALSE]
-  if (nrow(w) < 3L) NA_real_ else max(w$peak_gb[-(1:2)]) - w$peak_gb[2]
+  if (nrow(w) < 3L) NA_real_ else max(w$level[-(1:2)]) - w$level[2]
 }, numeric(1))
 per_proc <- table(proc)
 notes <- Sys.glob(file.path(m$run_dir, "units", "*", "recycled.rds"))
-ledger_check(L, "p5_04", "memory stays flat: a process's peak rises <= 1 GB after its second unit, and none left over its memory",
+ledger_check(L, "p5_04", "memory stays flat: what a unit leaves rises <= 1 GB after a process's second unit, and none left over its memory",
              any(is.finite(rise)) && all(rise[is.finite(rise)] <= 1) && length(notes) == 0L,
-             sprintf("%d process(es), %d-%d unit(s) each | worst rise %.2f GB | %d exit(s) over %.1f GB",
+             sprintf("%d process(es), %d-%d unit(s) each | worst rise %.2f GB (%s) | %d exit(s) over %.1f GB",
                      length(per_proc), min(per_proc), max(per_proc),
                      if (any(is.finite(rise))) max(rise, na.rm = TRUE) else NA_real_,
+                     if ("rss_gb" %in% names(u) && any(is.finite(u$rss_gb))) "working set after a unit" else "peak",
                      length(notes), m$manifest$recycle_gb))
 
 # ── the seams: a part across a unit boundary and a chunk boundary ─────────────
