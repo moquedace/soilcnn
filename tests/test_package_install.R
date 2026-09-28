@@ -89,14 +89,28 @@ refused <- callr::r(function(l) {
 ok["worker_refuses_changed_code"] <- grepl("not the code its session loaded", refused)
 
 # ── 3. the tarball ───────────────────────────────────────────────────────────
-tgz <- pkgbuild::build(root, dest_path = work, vignettes = FALSE, manual = FALSE,
+# BUILT FROM A COPY OF THE PACKAGE'S OWN FILES. R CMD build lists every file
+# under the directory before it applies .Rbuildignore -- outputs/ and data/
+# included, tens of thousands of files on one HDD -- and that listing was
+# 4m40s of every build here. What it would keep is exactly what is copied, so
+# the tarball is the same; that .Rbuildignore keeps the rest out is checked in
+# test_package_metadata.R, against the rule R CMD build applies.
+pkg   <- unname(read.dcf(file.path(root, "DESCRIPTION"), fields = "Package")[1, 1])
+stage <- file.path(work, "stage", pkg)
+dir.create(stage, recursive = TRUE)
+parts <- c("DESCRIPTION", "NAMESPACE", "LICENSE", ".Rbuildignore", "R", "man", "vignettes")
+parts <- parts[file.exists(file.path(root, parts))]
+copied <- vapply(parts, function(p) file.copy(file.path(root, p), stage, recursive = TRUE),
+                 logical(1))
+ok["the_package_was_staged"] <- all(copied)
+tgz <- pkgbuild::build(stage, dest_path = work, vignettes = FALSE, manual = FALSE,
                        quiet = TRUE)
 listed <- utils::untar(tgz, list = TRUE)
 top <- unique(sub("^[^/]+/([^/]+).*$", "\\1", listed))
 ok["tarball_was_built"] <- file.exists(tgz)
 ok["tarball_leaves_out_the_user_data"] <-
   !any(c("data", "outputs", "examples", "tests", "docs") %in% top)
-ok["tarball_holds_the_package"] <- all(c("DESCRIPTION", "NAMESPACE", "R") %in% top)
+ok["tarball_holds_the_package"] <- all(c("DESCRIPTION", "NAMESPACE", "R", "man") %in% top)
 
 # ── 4. install into the temporary library ────────────────────────────────────
 # R CMD INSTALL's own words when it fails: install.packages() would only warn

@@ -572,6 +572,14 @@ vignette("soilcnn")                         # the tour, built into the copy
 Building the vignette needs knitr, rmarkdown and pandoc (RStudio ships
 pandoc). Without them, `vignettes = FALSE` builds the package without it.
 
+In a project that has run for a while, the build spends minutes before it
+starts: `R CMD build` lists every file under the directory, `outputs/` and
+`data/` included, before `.Rbuildignore` sets them aside (4m40s here). A copy
+of the package's own files builds in seconds and gives the same tarball: copy
+`DESCRIPTION`, `NAMESPACE`, `LICENSE`, `.Rbuildignore`, `R/`, `man/` and
+`vignettes/` into a folder named after the package, and build from that folder.
+`tests/test_package_install.R` does exactly this.
+
 `dsm_final()` and `dsm_predict()` start worker processes, and each loads the
 framework the way its session did — the source tree, or that same installed
 copy — and stops before its first unit if the code there is not the code its

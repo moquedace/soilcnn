@@ -31,6 +31,7 @@
 #      function of the user's own with the same name is not
 #  10. every exported function that scores a store's predictions defaults to
 #      the store's own inverse transform
+#  11. .Rbuildignore keeps the user's directories out and the package in
 #
 # Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tests/test_package_metadata.R")
 
@@ -193,6 +194,22 @@ ok["scorers_default_to_the_stores_inverse"] <- all(vapply(scorers, function(f) {
   fm <- formals(get(f, envir = ns))
   "transform" %in% names(fm) && is.null(fm$transform)
 }, logical(1)))
+
+# ── 11. .Rbuildignore keeps the user's directories out of a tarball ──────────
+# By the rule R CMD build applies: each line a Perl regular expression, case
+# ignored, against the path from the package root. test_package_install.R
+# builds from a staged copy of the package's own files, so this is where the
+# rule for a build of the whole directory is held to.
+ign <- readLines(file.path(root, ".Rbuildignore"), warn = FALSE)
+ign <- ign[nzchar(trimws(ign))]
+kept_out <- function(path) {
+  any(vapply(ign, function(p) grepl(p, path, perl = TRUE, ignore.case = TRUE), logical(1)))
+}
+user_parts <- c("data", "outputs", "examples", "tests", "docs", "tools", "utils",
+                "README.md", "LICENSE.md", "_setup_packages_r46.R")
+package_parts <- c("DESCRIPTION", "NAMESPACE", "LICENSE", "R", "man", "vignettes")
+ok["buildignore_keeps_the_user_parts_out"] <- all(vapply(user_parts, kept_out, logical(1)))
+ok["buildignore_keeps_the_package_in"] <- !any(vapply(package_parts, kept_out, logical(1)))
 
 cat("  imports declared/used    : ", length(imports), " / ", sum(imports %in% used), "\n", sep = "")
 cat("  exports, S3 methods      : ", length(exported), ", ", length(registered), "\n", sep = "")
