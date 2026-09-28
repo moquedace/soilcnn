@@ -44,9 +44,7 @@ root <- (function() {
   stop("Project root not found.", call. = FALSE)
 })()
 source(file.path(root, "tests", "helper.R"))
-source(file.path(root, "R", "utils.R"))
-source(file.path(root, "R", "resample.R"))     # with_local_seed(), for the split
-source(file.path(root, "R", "conformal.R"))
+.load_framework(root)
 
 ok <- logical(0)
 

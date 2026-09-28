@@ -18,7 +18,7 @@
 #   5. an old store (no spec in the manifest) is tolerated, not falsely failed
 #   6. store_spec() reports what the store HOLDS, not the subset loaded
 #
-# Run: source("D:/.../tests/test_store_spec.R")     (CPU, no torch needed)
+# Run: source("D:/.../tests/test_store_spec.R")     (CPU, no tensors)
 
 suppressMessages({
   library(tibble)
@@ -49,8 +49,7 @@ root <- (function() {
 })()
 
 source(file.path(root, "tests", "helper.R"))
-source(file.path(root, "R", "utils.R"))
-source(file.path(root, "R", "dataset.R"))
+.load_framework(root)
 
 ok <- c()
 

@@ -39,7 +39,7 @@
 #      the simplest model within one standard error of it are different
 #      configs, which is the only case where the rule earns its existence
 #
-# Run: source("D:/.../tests/test_resample.R")    (CPU, no torch needed)
+# Run: source("D:/.../tests/test_resample.R")    (CPU, no tensors)
 
 suppressMessages({
   library(tibble)
@@ -71,12 +71,7 @@ root <- (function() {
 })()
 
 source(file.path(root, "tests", "helper.R"))
-source(file.path(root, "R", "utils.R"))
-source(file.path(root, "R", "dataset.R"))
-# diagnostics.R owns spatial_overlap_report(), which resample.R calls from
-# fold_leakage_report() and which this file asserts directly.
-source(file.path(root, "R", "diagnostics.R"))
-source(file.path(root, "R", "resample.R"))
+.load_framework(root)
 
 ok <- c()
 

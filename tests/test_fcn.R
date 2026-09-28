@@ -40,13 +40,13 @@ root <- (function() {
   for (d in cand) {
     for (up in c(".", "..")) {
       r <- normalizePath(file.path(d, up), winslash = "/", mustWork = FALSE)
-      if (file.exists(file.path(r, "R", "load_all.R"))) return(r)
+      if (file.exists(file.path(r, "R", "cnn_architecture.R"))) return(r)
     }
   }
   stop("Project root not found.", call. = FALSE)
 })()
 source(file.path(root, "tests", "helper.R"))
-suppressMessages(source(file.path(root, "R", "load_all.R")))
+.load_framework(root)
 
 ok <- c()
 set.seed(20260927)

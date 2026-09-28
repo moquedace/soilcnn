@@ -58,7 +58,7 @@ root <- (function() {
 })()
 
 source(file.path(root, "tests", "helper.R"))
-source(file.path(root, "R", "load_all.R"))
+.load_framework(root)
 
 ok <- c()
 

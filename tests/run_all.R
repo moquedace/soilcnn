@@ -36,6 +36,7 @@ test_files <- c(
   # a reason that has nothing to do with what they test. One bad escape in
   # R/diagnostics.R once stopped the 99 before its first check.
   "test_sources_parse.R",    # every .R file under R/, examples/ and tests/
+  "test_package_metadata.R", # NAMESPACE = the tags, DESCRIPTION = the pkg:: calls, the worker guards
   "test_patch_geometry.R",   # geometry of the patches, both extraction paths
   "test_transform_loss.R",   # early-stopping loss vs the real torch loss
   "test_validation.R",       # clamp contract + option-set validation
@@ -74,7 +75,8 @@ slow_files <- c(
   "test_api_run.R",          # the same, through dsm_load() and dsm_train()
   "test_final.R",            # dsm_final(): N seeds side by side == one by one; the report
   "test_predict.R",          # dsm_predict(): every band at every pixel, by hand; 2 workers == 1
-  "test_prepare.R"           # points + raster folder -> store; 2 cores == 1
+  "test_prepare.R",          # points + raster folder -> store; 2 cores == 1
+  "test_package_install.R"   # build, install to a temp library, library(); workers open the same code
 )
 
 if (run_slow) test_files <- c(test_files, slow_files)
@@ -83,11 +85,31 @@ rule   <- strrep("-", 72)
 status <- character(0)
 t0     <- Sys.time()
 
+# THE PACKAGE IS LOADED ONCE FOR THE SUITE -- after the parse test, which needs
+# nothing and must come first -- and every test is told so by a mark in the
+# environment it runs in (see .load_framework() in helper.R). A package that
+# does not load fails every test after it for the same reason, so the suite
+# stops there and says why, instead of printing it twenty-eight times.
+source(file.path(root, "tests", "helper.R"))
+loaded <- FALSE
+
 for (tf in test_files) {
   cat("\n", rule, "\n", tf, "\n", sep = "")
+  if (!loaded && !identical(tf, "test_sources_parse.R")) {
+    load_error <- tryCatch({ .load_framework(root); NULL },
+                           error = function(e) conditionMessage(e))
+    if (!is.null(load_error)) {
+      cat("  the package did not load: ", load_error, "\n", sep = "")
+      status[setdiff(test_files, names(status))] <- "NOT RUN"
+      break
+    }
+    loaded <- TRUE
+  }
+  test_env <- new.env()
+  test_env$.dlc_suite_loaded <- TRUE
   status[tf] <- tryCatch(
     {
-      source(file.path(root, "tests", tf), local = new.env())
+      source(file.path(root, "tests", tf), local = test_env)
       "PASS"
     },
     error = function(e) {

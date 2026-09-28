@@ -3,9 +3,9 @@
 #
 # This was a hardcoded "D:/usuario_armazenamento/...", which meant the script
 # ran on exactly one machine and had to be edited on every other. The same
-# snippet is in every tests/*.R and in R/load_all.R: it asks Rscript (--file),
+# snippet is in every tests/*.R: it asks Rscript (--file),
 # then source() (the ofile of an enclosing frame), then the working directory,
-# and climbs until it finds the directory that holds R/load_all.R.
+# and climbs until it finds the directory that holds R/cnn_architecture.R.
 project_root <- (function() {
   cand <- character(0)
   a <- commandArgs(trailingOnly = FALSE)
@@ -20,7 +20,7 @@ project_root <- (function() {
   cand <- c(cand, getwd())
   for (d in cand) for (up in c(".", "..", "../..", "../../..")) {
     r <- normalizePath(file.path(d, up), winslash = "/", mustWork = FALSE)
-    if (file.exists(file.path(r, "R", "load_all.R"))) return(r)
+    if (file.exists(file.path(r, "R", "cnn_architecture.R"))) return(r)
   }
   stop("Project root not found. source() this script by its full path, or ",
        "setwd() into the project first.", call. = FALSE)
@@ -36,6 +36,10 @@ gc()
 options(width = 200)
 
 setwd(project_root)
+
+# The framework, for latest_run_dir() and the patch store. It is one package
+# now, and loading it is one line whatever part of it a script uses.
+pkgload::load_all(project_root)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 99b -- VISUAL pipeline checkpoint (companion to 99_check_pipeline.R)
@@ -86,9 +90,6 @@ dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
   } else {
     file.path("comparison", "comparison_ranked.csv")
   }
-# latest_run_dir() lives in R/utils.R; this script deliberately loads no
-# more of the framework than it uses.
-source(file.path(project_root, "R", "utils.R"))
   latest_run_dir(base_dir, prefix = prefix, require_file = marker,
                  label = paste0(prefix, "run"), on_none = "null")
 }
@@ -515,8 +516,6 @@ print(tibble::tibble(channel = names(channel_idx), predictor = channels_to_show,
 # The store keeps the RAW patches (unscaled) -- which is exactly what this part
 # wants to show: the data as it came off the raster, before any statistical
 # transformation.
-source(file.path(project_root, "R", "preprocess.R"))
-source(file.path(project_root, "R", "dataset.R"))
 
 t0 <- Sys.time()
 store <- load_patch_store(patch_dir)

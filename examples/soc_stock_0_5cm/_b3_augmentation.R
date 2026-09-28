@@ -100,9 +100,9 @@ options(width = 200)
 #
 # This was a hardcoded "D:/usuario_armazenamento/...", which meant the script
 # ran on exactly one machine and had to be edited on every other. The same
-# snippet is in every tests/*.R and in R/load_all.R: it asks Rscript (--file),
+# snippet is in every tests/*.R: it asks Rscript (--file),
 # then source() (the ofile of an enclosing frame), then the working directory,
-# and climbs until it finds the directory that holds R/load_all.R.
+# and climbs until it finds the directory that holds R/cnn_architecture.R.
 project_root <- (function() {
   cand <- character(0)
   a <- commandArgs(trailingOnly = FALSE)
@@ -117,16 +117,16 @@ project_root <- (function() {
   cand <- c(cand, getwd())
   for (d in cand) for (up in c(".", "..", "../..", "../../..")) {
     r <- normalizePath(file.path(d, up), winslash = "/", mustWork = FALSE)
-    if (file.exists(file.path(r, "R", "load_all.R"))) return(r)
+    if (file.exists(file.path(r, "R", "cnn_architecture.R"))) return(r)
   }
   stop("Project root not found. source() this script by its full path, or ",
        "setwd() into the project first.", call. = FALSE)
 })()
 setwd(project_root)
 
-# One source() instead of ten, in an order that is not guessable. See
-# R/load_all.R.
-source(file.path(project_root, "R", "load_all.R"))
+# The framework is a package: pkgload::load_all() loads it from this source
+# tree as it stands. library(deeplearningcaret) loads an installed copy.
+pkgload::load_all(project_root)
 
 # ── Settings ──────────────────────────────────────────────────────────────────
 
@@ -513,22 +513,23 @@ message(strrep("=", 78))
 # and proves nothing.
 #
 # So the call itself is counted. augment_d4_batch() is looked up by name from
-# train_one_cnn(), whose closure is the global environment (load_all.R sources
-# into it), so a global wrapper IS the function the training loop calls. The ON
-# arm must call it; the OFF arm must never call it. That is a fact about this
-# session, not an inference from the results.
+# train_one_cnn(), in the package's namespace, so the wrapper goes THERE
+# (assignInNamespace()). A wrapper in the global environment would never be
+# called -- the framework finds its own copy first -- and the ON arm would
+# count zero calls. The ON arm must call it; the OFF arm must never call it.
+# That is a fact about this session, not an inference from the results.
 #
 # The wrapper delegates to the original rather than reimplementing it, so the
 # augmentation being measured is the framework's, unmodified. It is restored at
 # the end; a script that stops midway leaves a wrapper that is semantically the
-# original, and any pipeline script restores it anyway (rm(list = ls()) followed
-# by load_all.R re-sources R/utils.R).
-.b3_augment_d4_batch_real <- augment_d4_batch
+# original, and the next pkgload::load_all() replaces it anyway.
+.b3_augment_d4_batch_real <- get("augment_d4_batch",
+                                 envir = asNamespace("deeplearningcaret"))
 .b3_augment_calls <- 0L
-augment_d4_batch <- function(tensor_list) {
+utils::assignInNamespace("augment_d4_batch", function(tensor_list) {
   .b3_augment_calls <<- .b3_augment_calls + 1L
   .b3_augment_d4_batch_real(tensor_list)
-}
+}, ns = "deeplearningcaret")
 
 # Checkpoints are written only after a unit finishes, so counting them before
 # and after an arm says how many units THIS session actually trained -- which is
@@ -1073,11 +1074,12 @@ if (!is.null(repro) && nrow(repro) > 0L) {
   message("  b3_reproduction_vs_03.csv  the ON arm against ", tuning_run_id)
 }
 
-# The framework's own function goes back, so nothing sourced after this in the
-# same session keeps counting. A pipeline script would restore it anyway --
-# rm(list = ls()) then load_all.R -- but leaving a wrapper behind for the next
-# reader to discover is not a courtesy.
-augment_d4_batch <- .b3_augment_d4_batch_real
+# The framework's own function goes back, so nothing run after this in the
+# same session keeps counting. The next pkgload::load_all() would restore it
+# anyway -- but leaving a wrapper behind for the next reader to discover is
+# not a courtesy.
+utils::assignInNamespace("augment_d4_batch", .b3_augment_d4_batch_real,
+                         ns = "deeplearningcaret")
 rm(.b3_augment_d4_batch_real, .b3_augment_calls)
 
 message("\nB3 complete: ", verdict_code)

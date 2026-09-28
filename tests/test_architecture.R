@@ -42,9 +42,7 @@ root <- (function() {
        "or source() this file with its full path.", call. = FALSE)
 })()
 source(file.path(root, "tests", "helper.R"))
-source(file.path(root, "R", "utils.R"))
-source(file.path(root, "R", "cnn_architecture.R"))
-source(file.path(root, "R", "tune_grid.R"))
+.load_framework(root)
 
 set.seed(1); torch_manual_seed(1)
 n_ch <- 187L; N <- 8L

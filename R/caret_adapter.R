@@ -42,8 +42,8 @@
 # COST TO BE HONEST ABOUT: caret Depends on ggplot2 and lattice and Imports
 # recipes, plyr, pROC, ModelMetrics, reshape2, foreach. That is a heavy tree
 # for a package someone installs to fit a CNN. It is therefore a SUGGESTS: this
-# file is sourced like any other, and nothing fails until caret_spec() is
-# actually called.
+# file loads with the package like any other, and nothing fails until
+# caret_spec() is actually called.
 
 .need_caret <- function() {
   if (!requireNamespace("caret", quietly = TRUE)) {

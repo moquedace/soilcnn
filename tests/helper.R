@@ -81,3 +81,48 @@
     quit(status = 1L)
   }
 }
+
+# ── loading the framework ─────────────────────────────────────────────────────
+
+#' Load the package from the source tree, once, and refuse a shadowed one.
+#'
+#' Every test loads the framework the way a session working on it does --
+#' pkgload::load_all() -- and none source()s files of R/ one by one any more.
+#' A source()d file lands in the global environment, where it answers every
+#' call a test makes directly, while the framework, calling within its own
+#' namespace, runs the package: the test would check one loading of the code
+#' and the framework would run another, each with its own model registry.
+#'
+#' tests/run_all.R loads once for the suite and marks the environment it runs
+#' each test in; a test run on its own loads for itself, so it always checks
+#' the tree as it stands.
+#'
+#' A global environment that still holds functions the package defines -- what
+#' a session that source()d R/load_all.R, before this was a package, leaves
+#' behind -- is refused: those copies would answer the test instead of the
+#' package.
+#'
+#' @param root The project root.
+#' @return The package's namespace, invisibly.
+.load_framework <- function(root) {
+  suite <- isTRUE(get0(".dlc_suite_loaded", envir = parent.frame(), inherits = FALSE))
+  if (!suite) {
+    if (!requireNamespace("pkgload", quietly = TRUE)) {
+      stop("The tests load the framework with pkgload::load_all(): ",
+           "install.packages(\"pkgload\").", call. = FALSE)
+    }
+    pkgload::load_all(root, quiet = TRUE)
+  }
+  pkg <- read.dcf(file.path(root, "DESCRIPTION"), fields = "Package")[1, 1]
+  ns  <- asNamespace(pkg)
+  both <- intersect(ls(globalenv(), all.names = TRUE), ls(ns, all.names = TRUE))
+  shadow <- Filter(function(n) is.function(get(n, envir = globalenv())), both)
+  if (length(shadow)) {
+    stop("The global environment holds ", length(shadow), " function(s) the ",
+         "package also defines (", paste(utils::head(shadow, 4), collapse = ", "),
+         if (length(shadow) > 4L) ", ..." else "", ") -- left by an earlier ",
+         "source(). They would answer this test's calls instead of the package.",
+         "\n  Restart R (Ctrl+Shift+F10 in RStudio) and run it again.", call. = FALSE)
+  }
+  invisible(ns)
+}

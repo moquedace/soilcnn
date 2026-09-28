@@ -50,7 +50,7 @@ root <- (function() {
        "or source() this file with its full path.", call. = FALSE)
 })()
 source(file.path(root, "tests", "helper.R"))
-source(file.path(root, "R", "train_cnn.R"))
+.load_framework(root)
 
 set.seed(42); torch_manual_seed(42)
 

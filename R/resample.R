@@ -804,8 +804,6 @@ apply_buffer <- function(plan, meta, buffer,
 #' SAME criterion, so a number here can be compared with a number there rather
 #' than being a second, incompatible notion of leakage.
 #'
-#' Needs R/diagnostics.R sourced (spatial_overlap_report).
-#'
 #' @param plan      A fold_plan.
 #' @param meta      Patch store meta with x/y.
 #' @param cell_size Raster resolution, in the units of x/y.

@@ -71,9 +71,8 @@
 
 # ── Packages ──────────────────────────────────────────────────────────────────
 #
-# dplyr is a prerequisite of the runner, not a convenience of this script:
-# R/load_all.R attaches nothing, and R/resample.R uses %>% inside
-# summarise_resamples(), which is on every dsm_train() return path.
+# The framework needs none of these attached -- it is a package, and imports
+# what it uses. They are for this script's own code.
 suppressPackageStartupMessages({
   library(torch); library(coro)
   library(dplyr); library(readr); library(tibble); library(purrr)
@@ -99,9 +98,9 @@ options(width = 200)
 #
 # This was a hardcoded "D:/usuario_armazenamento/...", which meant the script
 # ran on exactly one machine and had to be edited on every other. The same
-# snippet is in every tests/*.R and in R/load_all.R: it asks Rscript (--file),
+# snippet is in every tests/*.R: it asks Rscript (--file),
 # then source() (the ofile of an enclosing frame), then the working directory,
-# and climbs until it finds the directory that holds R/load_all.R.
+# and climbs until it finds the directory that holds R/cnn_architecture.R.
 project_root <- (function() {
   cand <- character(0)
   a <- commandArgs(trailingOnly = FALSE)
@@ -116,7 +115,7 @@ project_root <- (function() {
   cand <- c(cand, getwd())
   for (d in cand) for (up in c(".", "..", "../..", "../../..")) {
     r <- normalizePath(file.path(d, up), winslash = "/", mustWork = FALSE)
-    if (file.exists(file.path(r, "R", "load_all.R"))) return(r)
+    if (file.exists(file.path(r, "R", "cnn_architecture.R"))) return(r)
   }
   stop("Project root not found. source() this script by its full path, or ",
        "setwd() into the project first.", call. = FALSE)
@@ -165,7 +164,7 @@ if (!b6_phase %in% c("prepare", "verify", "worker")) {
 }
 
 setwd(project_root)
-source(file.path(project_root, "R", "load_all.R"))
+pkgload::load_all(project_root)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 

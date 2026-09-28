@@ -35,8 +35,7 @@ root <- (function() {
   stop("Project root not found.", call. = FALSE)
 })()
 source(file.path(root, "tests", "helper.R"))
-source(file.path(root, "R", "utils.R"))
-source(file.path(root, "R", "checks.R"))
+.load_framework(root)
 
 ok <- logical(0)
 quiet <- function(expr) suppressMessages(expr)

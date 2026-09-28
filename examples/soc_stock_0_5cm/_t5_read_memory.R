@@ -36,9 +36,9 @@
 #
 # This was a hardcoded "D:/usuario_armazenamento/...", which meant the script
 # ran on exactly one machine and had to be edited on every other. The same
-# snippet is in every tests/*.R and in R/load_all.R: it asks Rscript (--file),
+# snippet is in every tests/*.R: it asks Rscript (--file),
 # then source() (the ofile of an enclosing frame), then the working directory,
-# and climbs until it finds the directory that holds R/load_all.R.
+# and climbs until it finds the directory that holds R/cnn_architecture.R.
 project_root <- (function() {
   cand <- character(0)
   a <- commandArgs(trailingOnly = FALSE)
@@ -53,14 +53,14 @@ project_root <- (function() {
   cand <- c(cand, getwd())
   for (d in cand) for (up in c(".", "..", "../..", "../../..")) {
     r <- normalizePath(file.path(d, up), winslash = "/", mustWork = FALSE)
-    if (file.exists(file.path(r, "R", "load_all.R"))) return(r)
+    if (file.exists(file.path(r, "R", "cnn_architecture.R"))) return(r)
   }
   stop("Project root not found. source() this script by its full path, or ",
        "setwd() into the project first.", call. = FALSE)
 })()
 source(file.path(project_root, "utils", "install_load_pkg.R"))
 install_load_pkg(c("torch", "terra", "dplyr", "readr", "tibble", "ps", "callr"))
-source(file.path(project_root, "R", "load_all.R"))
+pkgload::load_all(project_root)
 options(width = 200)
 
 target_label <- "soc_stock_0_5cm"
@@ -88,7 +88,7 @@ reps <- 3L
 # One experiment, in a fresh R process: repeat `kind` `reps` times, and after
 # each drop everything, collect fully and read the working set.
 experiment <- function(kind, root, files, rules, center, scale, rows, n_row, n_col, reps) {
-  suppressMessages(source(file.path(root, "R", "load_all.R")))
+  suppressMessages(pkgload::load_all(root, quiet = TRUE))
   set_torch_threads(15L)
   rss <- function() as.numeric(ps::ps_memory_info(ps::ps_handle())[["rss"]]) / 1e9
   n_ch <- length(files)
@@ -180,7 +180,7 @@ for (kd in kinds) {
   message(sprintf("  %-13s ...", kd))
   t0 <- Sys.time()
   r <- tryCatch(callr::r(experiment, args = list(
-    kind = kd, root = .dlc_root, files = rt$raster_file, rules = as.data.frame(qc),
+    kind = kd, root = project_root, files = rt$raster_file, rules = as.data.frame(qc),
     center = as.numeric(sc$center), scale = as.numeric(sc$scale), rows = rows,
     n_row = n_row, n_col = n_col, reps = reps),
     env = c(callr::rcmd_safe_env(), OMP_NUM_THREADS = "15", MKL_NUM_THREADS = "15")),

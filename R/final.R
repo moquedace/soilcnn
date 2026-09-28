@@ -577,11 +577,7 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
     stop("dsm_final() trains every seed in its own R process and needs the ",
          "callr package. install.packages(\"callr\").", call. = FALSE)
   }
-  root <- get0(".dlc_root", envir = globalenv(), inherits = FALSE)
-  if (is.null(root)) {
-    stop("dsm_final() starts its workers from R/load_all.R and cannot find it: ",
-         "source R/load_all.R first.", call. = FALSE)
-  }
+  loader <- .dlc_loader()          # the framework this session runs, for each worker
 
   per_worker_gb <- .final_worker_gb(data$store, windows)
   n_workers <- max(1L, min(n_cores %/% threads_per_unit, nrow(todo)))
@@ -618,12 +614,13 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
     scaling = scaling, cfgs = selected, units = todo, training = training,
     transform = transform, run_dir = run_dir, claims_dir = claims_dir,
     threads = threads_per_unit)
+  .dlc_check_portable(job, "dsm_final()")
 
   t0 <- Sys.time()
   procs <- lapply(seq_len(n_workers), function(w) {
     callr::r_bg(
       .final_worker_entry,
-      args = list(job = c(job, list(worker = w)), root = root),
+      args = list(job = c(job, list(worker = w)), loader = loader),
       env = c(callr::rcmd_safe_env(),
               OMP_NUM_THREADS = as.character(threads_per_unit),
               MKL_NUM_THREADS = as.character(threads_per_unit)),
@@ -666,10 +663,12 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
 # band worker is: callr sends a function without its enclosing frame unless
 # asked to, but a function defined inside .final_train_units() would still
 # LOOK as if it carried that frame -- the store, the tensors -- and nothing
-# here should depend on a detail of how another package serialises.
-.final_worker_entry <- function(job, root) {
-  suppressMessages(source(file.path(root, "R", "load_all.R")))
-  .final_worker(job)
+# here should depend on a detail of how another package serialises. The
+# framework is loaded the way the session loaded it, and the worker taken
+# from its namespace, where it is not exported.
+.final_worker_entry <- function(job, loader) {
+  ns <- loader$open(loader)
+  get(".final_worker", envir = ns)(job)
 }
 
 # ONE WORKER: its own copy of the store and the fold cache, then units claimed

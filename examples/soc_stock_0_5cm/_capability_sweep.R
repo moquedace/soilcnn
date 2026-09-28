@@ -41,12 +41,9 @@
 
 # ── Packages ──────────────────────────────────────────────────────────────────
 #
-# dplyr IS A PREREQUISITE OF THE SWEEP, not a convenience of one capability.
-# source(R/load_all.R) attaches nothing -- there is no library() call anywhere
-# under R/ and no `%>%` <- assignment -- while R/train_table.R:289 uses %>%
-# INSIDE the per-unit fitting loop and R/resample.R uses it in
-# summarise_resamples(), which is on every dsm_train() return path. Without
-# dplyr attached, every tabular capability here fits its first forest and dies.
+# The framework needs none of these attached -- it is a package, and imports
+# what it uses. They are for the capabilities' own code and for the model
+# libraries they borrow.
 
 suppressPackageStartupMessages({
   library(torch); library(coro)
@@ -61,9 +58,9 @@ options(width = 200)
 #
 # This was a hardcoded "D:/usuario_armazenamento/...", which meant the script
 # ran on exactly one machine and had to be edited on every other. The same
-# snippet is in every tests/*.R and in R/load_all.R: it asks Rscript (--file),
+# snippet is in every tests/*.R: it asks Rscript (--file),
 # then source() (the ofile of an enclosing frame), then the working directory,
-# and climbs until it finds the directory that holds R/load_all.R.
+# and climbs until it finds the directory that holds R/cnn_architecture.R.
 project_root <- (function() {
   cand <- character(0)
   a <- commandArgs(trailingOnly = FALSE)
@@ -78,13 +75,13 @@ project_root <- (function() {
   cand <- c(cand, getwd())
   for (d in cand) for (up in c(".", "..", "../..", "../../..")) {
     r <- normalizePath(file.path(d, up), winslash = "/", mustWork = FALSE)
-    if (file.exists(file.path(r, "R", "load_all.R"))) return(r)
+    if (file.exists(file.path(r, "R", "cnn_architecture.R"))) return(r)
   }
   stop("Project root not found. source() this script by its full path, or ",
        "setwd() into the project first.", call. = FALSE)
 })()
 setwd(project_root)
-source(file.path(project_root, "R", "load_all.R"))
+pkgload::load_all(project_root)
 
 target_label <- "soc_stock_0_5cm"
 data_dir     <- file.path(project_root, "data", "processed",

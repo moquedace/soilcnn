@@ -4,11 +4,12 @@
 
 # ── The pipe ──────────────────────────────────────────────────────────────────
 #
-# load_all.R source()s files and attaches no package, so a session that has
-# not called library(dplyr) fails at the first `%>%` inside the framework --
-# after the store has loaded, in the README's own Quickstart. Nine modules use
-# it. Bound here, once, from the package that owns it; a later library(dplyr)
-# rebinds the same function and changes nothing.
+# Nine modules use it, and code in a namespace finds only what the namespace
+# holds, what it imports and base: a worker process, which attaches no
+# package, would stop at the first `%>%`. Bound here, once, from the package
+# that owns it. (It was first bound for R/load_all.R, whose source()d files
+# could not count on a library(dplyr) either -- the README's own Quickstart
+# failed on it.)
 `%>%` <- dplyr::`%>%`
 
 # ── I/O helpers ──────────────────────────────────────────────────────────────
@@ -109,9 +110,9 @@ safe_torch_save <- function(object, path) {
 # in one place. What must never happen is a user DISCOVERING the contract from
 # a cryptic error deep inside a training loop -- hence check_point_contract().
 #
-# It lives HERE, in the foundation file every entry point loads first, because
-# predict_loader() (train_cnn.R) and the patch store (dataset.R) both need it.
-# Putting it in either of those made the other fail to find it under source().
+# It lives HERE, in the foundation file, because predict_loader() (train_cnn.R)
+# and the patch store (dataset.R) both need it. (While the files were
+# source()d one by one, putting it in either made the other fail to find it.)
 #
 # Rename your columns to these before calling. They are the only names the
 # framework hardcodes about your data.
@@ -200,6 +201,120 @@ resolve_cores <- function(n_cores = NULL, what = "this step") {
             "may run slower.")
   }
   n
+}
+
+# ── What a worker loads ───────────────────────────────────────────────────────
+#
+# dsm_final() and dsm_predict() work in fresh R processes, and each loads the
+# framework itself. It must be THE SAME framework the session that started it
+# runs: the source tree if the session loaded that (pkgload::load_all()), the
+# installed copy if it loaded that (library()), and the same installed copy
+# where two libraries hold one. A worker that loaded the installed package for
+# a session working on the source tree would map with the code of the last
+# install, and nothing would say so.
+#
+# What travels to the worker is a description, not the namespace. A function
+# whose environment is the namespace makes the worker load the package while
+# it READS its arguments -- before it has set what must be set before torch
+# starts (dsm_predict()'s collection threshold), and from wherever the
+# worker's library path finds a copy first. So open() is sent with base as its
+# environment, and .dlc_check_portable() refuses a job that carries anything
+# tied to the namespace.
+#
+# And the code must not change under a run. Recycled workers start hours into
+# a global map; one that loaded files edited in the meantime would map its
+# units with other code than the rest. .onLoad() fingerprints what it loaded,
+# and a worker whose fingerprint differs from its session's stops.
+.dlc_state <- new.env(parent = emptyenv())
+
+# The files a load reads: the package's metadata and its R/ directory -- the
+# sources in a source tree, the lazy-load database in an installed copy, which
+# a reinstall rewrites.
+.dlc_code_hash <- function(path) {
+  files <- c(file.path(path, c("DESCRIPTION", "NAMESPACE")),
+             sort(list.files(file.path(path, "R"), full.names = TRUE)))
+  files <- files[file.exists(files) & !dir.exists(files)]
+  paste(unname(tools::md5sum(files)), collapse = "")
+}
+
+.dlc_loader <- function() {
+  ns <- environment(.dlc_loader)
+  if (!isNamespace(ns)) {
+    stop("dsm_final() and dsm_predict() start workers that load the framework ",
+         "as a package, and this session has it some other way -- its files ",
+         "source()d, most likely.\n  Start a fresh R session and load it with ",
+         "pkgload::load_all(\"<project root>\") or library(deeplearningcaret).",
+         call. = FALSE)
+  }
+  pkg  <- unname(getNamespaceName(ns))
+  dev  <- requireNamespace("pkgload", quietly = TRUE) && pkgload::is_dev_package(pkg)
+  path <- normalizePath(getNamespaceInfo(ns, "path"), winslash = "/", mustWork = FALSE)
+  desc <- file.path(path, "DESCRIPTION")
+  if (!file.exists(desc) ||
+      !identical(unname(read.dcf(desc, fields = "Package")[1, 1]), pkg)) {
+    stop("This session's ", pkg, " was loaded from ", path, ", and that ",
+         "directory does not hold its DESCRIPTION -- a worker could not load ",
+         "the same code.", call. = FALSE)
+  }
+  if (is.null(.dlc_state$code_hash)) {
+    stop("This session's ", pkg, " has no fingerprint of the code it loaded; ",
+         "its .onLoad() did not run. Load it with library() or ",
+         "pkgload::load_all().", call. = FALSE)
+  }
+  # Runs in the worker, before the framework exists there: base R and
+  # pkgload only, and base as its environment (see above).
+  open <- function(loader) {
+    if (loader$dev) {
+      if (!requireNamespace("pkgload", quietly = TRUE)) {
+        stop("This worker must load ", loader$package, " from ", loader$path,
+             " as its session did, and needs pkgload: install.packages(\"pkgload\").",
+             call. = FALSE)
+      }
+      suppressMessages(pkgload::load_all(loader$path, quiet = TRUE))
+    } else {
+      loadNamespace(loader$package, lib.loc = dirname(loader$path))
+    }
+    ns <- asNamespace(loader$package)
+    here <- get(".dlc_state", envir = ns)$code_hash
+    if (!identical(here, loader$code_hash)) {
+      stop("This worker loaded ", loader$package, " from ", loader$path,
+           " and the code there is not the code its session loaded: it changed ",
+           "since. A run whose workers map with different code gives a map made ",
+           "of two -- finish the run with the code it started with, or restart it.",
+           call. = FALSE)
+    }
+    ns
+  }
+  environment(open) <- baseenv()
+  list(package = pkg, dev = dev, path = path, code_hash = .dlc_state$code_hash,
+       open = open)
+}
+
+# NOTHING OF THE NAMESPACE IN WHAT A WORKER RECEIVES: a function or an
+# environment in the job whose enclosure leads to this package would make the
+# worker load it while reading its arguments (see .dlc_loader()). Checked
+# before any worker starts, because what it prevents fails without a word.
+.dlc_check_portable <- function(x, who) {
+  ns  <- environment(.dlc_check_portable)
+  bad <- character(0)
+  walk <- function(v, where) {
+    e <- if (is.function(v)) environment(v) else if (is.environment(v)) v else NULL
+    if (!is.null(e) && identical(topenv(e), ns)) bad <<- c(bad, where)
+    if (is.list(v)) {
+      nm <- names(v)
+      for (i in seq_along(v)) {
+        walk(v[[i]], paste0(where, "$", if (is.null(nm) || !nzchar(nm[i])) i else nm[i]))
+      }
+    }
+  }
+  walk(x, "job")
+  if (length(bad)) {
+    stop(who, " would send its workers ", length(bad), " object(s) whose ",
+         "environment is the package's own: ", paste(utils::head(bad, 5), collapse = ", "),
+         if (length(bad) > 5L) ", ..." else "", ". A worker reading them would ",
+         "load the package before it chose which copy to load.", call. = FALSE)
+  }
+  invisible(TRUE)
 }
 
 # ── Torch / device setup ──────────────────────────────────────────────────────

@@ -3,9 +3,9 @@
 #
 # This was a hardcoded "D:/usuario_armazenamento/...", which meant the script
 # ran on exactly one machine and had to be edited on every other. The same
-# snippet is in every tests/*.R and in R/load_all.R: it asks Rscript (--file),
+# snippet is in every tests/*.R: it asks Rscript (--file),
 # then source() (the ofile of an enclosing frame), then the working directory,
-# and climbs until it finds the directory that holds R/load_all.R.
+# and climbs until it finds the directory that holds R/cnn_architecture.R.
 project_root <- (function() {
   cand <- character(0)
   a <- commandArgs(trailingOnly = FALSE)
@@ -20,7 +20,7 @@ project_root <- (function() {
   cand <- c(cand, getwd())
   for (d in cand) for (up in c(".", "..", "../..", "../../..")) {
     r <- normalizePath(file.path(d, up), winslash = "/", mustWork = FALSE)
-    if (file.exists(file.path(r, "R", "load_all.R"))) return(r)
+    if (file.exists(file.path(r, "R", "cnn_architecture.R"))) return(r)
   }
   stop("Project root not found. source() this script by its full path, or ",
        "setwd() into the project first.", call. = FALSE)
@@ -29,6 +29,10 @@ source(file.path(project_root, "utils", "install_load_pkg.R"))
 
 pkg <- c("processx")
 install_load_pkg(pkg)
+
+# The framework, for latest_run_dir(). It is one package now, and loading it
+# is one line whatever part of it a script uses.
+pkgload::load_all(project_root)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 05a_test -- test of the 2D pipeline before running the full job
@@ -291,9 +295,6 @@ if (identical(config_id, "auto")) {
   # config in SELECTION order (selected_cfgs is the grid's order -- with two
   # configs, [1] can be the runner-up), and a refusal rather than a silent
   # "auto" if nothing resolves.
-# latest_run_dir() lives in R/utils.R; this script deliberately loads no
-# more of the framework than it uses.
-source(file.path(project_root, "R", "utils.R"))
   final_run_id <- latest_run_dir(
     final_model_base, prefix = "final_",
     require_file = file.path("comparison", "final_run_summary.rds"),

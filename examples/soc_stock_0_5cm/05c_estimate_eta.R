@@ -2,9 +2,9 @@
 #
 # This was a hardcoded "D:/usuario_armazenamento/...", which meant the script
 # ran on exactly one machine and had to be edited on every other. The same
-# snippet is in every tests/*.R and in R/load_all.R: it asks Rscript (--file),
+# snippet is in every tests/*.R: it asks Rscript (--file),
 # then source() (the ofile of an enclosing frame), then the working directory,
-# and climbs until it finds the directory that holds R/load_all.R.
+# and climbs until it finds the directory that holds R/cnn_architecture.R.
 project_root <- (function() {
   cand <- character(0)
   a <- commandArgs(trailingOnly = FALSE)
@@ -19,7 +19,7 @@ project_root <- (function() {
   cand <- c(cand, getwd())
   for (d in cand) for (up in c(".", "..", "../..", "../../..")) {
     r <- normalizePath(file.path(d, up), winslash = "/", mustWork = FALSE)
-    if (file.exists(file.path(r, "R", "load_all.R"))) return(r)
+    if (file.exists(file.path(r, "R", "cnn_architecture.R"))) return(r)
   }
   stop("Project root not found. source() this script by its full path, or ",
        "setwd() into the project first.", call. = FALSE)
@@ -39,7 +39,7 @@ log_root <- file.path(project_root, "outputs", "spatial_prediction", "_worker_lo
 # The old loop took the newest directory by NAME and then looked for logs in
 # it; a run in progress is the one whose log was touched last, and that is the
 # question an ETA script is asking.
-source(file.path(project_root, "R", "utils.R"))
+pkgload::load_all(project_root)
 
 # The same override 05a and 05 read, so the ETA divides by the concurrency
 # the run actually has. This was a literal 3 with a comment asking the reader

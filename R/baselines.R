@@ -364,13 +364,6 @@ mlp_spec <- function(n_epochs = 300L, patience = 40L) {
   )
 }
 
-# ── register them ─────────────────────────────────────────────────────────────
-#
-# At source() time, and overwrite = TRUE, because sourcing R/ twice in one
-# session is the normal way to work here and must not error.
-register_model(rf_spec(),  overwrite = TRUE)
-register_model(mlp_spec(), overwrite = TRUE)
-
 # ── the CNN, in the same registry ─────────────────────────────────────────────
 #
 # It is registered so that list_models() describes everything the framework can
@@ -424,7 +417,18 @@ cnn_spec <- function() {
   )
 }
 
-register_model(cnn_spec(), overwrite = TRUE)
+# ── register them ─────────────────────────────────────────────────────────────
+#
+# When the package loads (.onLoad(), R/zzz.R), not as this file is read -- a
+# package reads its files at install time, alphabetically, before
+# register_model() exists. overwrite = TRUE so that calling it twice in a
+# session is harmless.
+.register_builtin_models <- function() {
+  register_model(rf_spec(),  overwrite = TRUE)
+  register_model(mlp_spec(), overwrite = TRUE)
+  register_model(cnn_spec(), overwrite = TRUE)
+  invisible(NULL)
+}
 
 # ── print methods ─────────────────────────────────────────────────────────────
 #

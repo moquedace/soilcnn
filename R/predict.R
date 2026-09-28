@@ -1249,17 +1249,14 @@ print.dsm_prediction <- function(x, ...) {
     stop("dsm_predict() maps in worker processes and needs the callr package. ",
          "install.packages(\"callr\").", call. = FALSE)
   }
-  root <- get0(".dlc_root", envir = globalenv(), inherits = FALSE)
-  if (is.null(root)) {
-    stop("dsm_predict() starts its workers from R/load_all.R and cannot find it: ",
-         "source R/load_all.R first.", call. = FALSE)
-  }
+  loader <- .dlc_loader()          # the framework this session runs, for each worker
   claims_dir <- file.path(run_dir, paste0(".claims_", tag))
   logs_dir   <- file.path(run_dir, "logs")
   unlink(claims_dir, recursive = TRUE)          # stale claims of a run that died
   create_output_dirs(c(claims_dir, logs_dir, job$units_dir))
   job$claims_dir <- claims_dir
   job$units <- units
+  .dlc_check_portable(job, "dsm_predict()")
   done_paths <- .predict_done_path(job$units_dir, units$unit_id)
   cells <- as.numeric(units$r1 - units$r0 + 1L) * (units$c1 - units$c0 + 1L)
 
@@ -1273,7 +1270,7 @@ print.dsm_prediction <- function(x, ...) {
   start <- function(w, gen) {
     callr::r_bg(
       .predict_worker_entry,
-      args = list(job = c(job, list(worker = w)), root = root),
+      args = list(job = c(job, list(worker = w)), loader = loader),
       # The primitive caches of ideep (LRU_CACHE_CAPACITY) and oneDNN
       # (ONEDNN_PRIMITIVE_CACHE_CAPACITY) default to 1,024 entries each, and
       # an entry holds buffers sized to its input: bounded here, beside the
@@ -1352,15 +1349,15 @@ print.dsm_prediction <- function(x, ...) {
 
 # At the top level on purpose, as .final_worker_entry(): nothing a worker
 # does may depend on a frame serialised along with it.
-.predict_worker_entry <- function(job, root) {
+.predict_worker_entry <- function(job, loader) {
   # BEFORE torch loads -- the threshold is read once, when torch starts, and
-  # R/load_all.R builds torch modules as it sources. torch then runs a LIGHT
-  # collection every job$gc_threshold_mb of new allocations (lantern's CPU
-  # allocator, src/lantern/src/Allocator.cpp), and caches freed blocks up to
-  # the same amount. See .predict_gc_hook() for the full collections.
+  # loading the framework loads torch, which it imports. torch then runs a
+  # LIGHT collection every job$gc_threshold_mb of new allocations (lantern's
+  # CPU allocator, src/lantern/src/Allocator.cpp), and caches freed blocks up
+  # to the same amount. See .predict_gc_hook() for the full collections.
   options(torch.threshold_call_gc = job$gc_threshold_mb)
-  suppressMessages(source(file.path(root, "R", "load_all.R")))
-  .predict_worker(job)
+  ns <- loader$open(loader)
+  get(".predict_worker", envir = ns)(job)
 }
 
 # THE COLLECTOR THE MAP RUNS, and why it has to run a FULL collection.

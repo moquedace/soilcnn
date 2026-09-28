@@ -24,7 +24,7 @@
 #   6. a frozen test set survives a change of resampling method
 #   7. the failures a user will actually hit say what to do
 #
-# Run: source("D:/.../tests/test_api.R")     (no torch needed)
+# Run: source("D:/.../tests/test_api.R")     (no tensors)
 
 suppressMessages({
   library(tibble)
@@ -56,12 +56,7 @@ root <- (function() {
 })()
 
 source(file.path(root, "tests", "helper.R"))
-source(file.path(root, "R", "utils.R"))
-source(file.path(root, "R", "metrics.R"))
-source(file.path(root, "R", "resample.R"))
-source(file.path(root, "R", "dataset.R"))
-source(file.path(root, "R", "model_registry.R"))
-source(file.path(root, "R", "api.R"))
+.load_framework(root)
 
 ok <- c()
 

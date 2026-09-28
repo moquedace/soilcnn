@@ -1163,16 +1163,14 @@ print.dsm_store <- function(x, ...) {
     say("Extracting ", n_ch, " band(s) on ", n_workers, " cores...")
     cl <- parallel::makeCluster(n_workers)
     on.exit(parallel::stopCluster(cl), add = TRUE)
-    parallel::clusterExport(cl, c(".prep_band_worker", ".prep_worker_setup",
-                                  ".prep_worker_band", ".prep_gdal_cache",
-                                  "qc_band_values", "patch_band_assemble"),
-                            envir = environment(.prep_band_worker))
-    got <- parallel::clusterCall(cl, .prep_worker_setup, job)
+    fns <- .prep_worker_functions()
+    parallel::clusterExport(cl, names(fns), envir = list2env(fns))
+    got <- parallel::clusterCall(cl, fns$.prep_worker_setup, job)
     say("  GDAL cache per worker: ", format(got[[1]]), " (asked ", gdal_cache_mb,
         " MB) -- read back, not assumed")
     batches <- split(seq_len(n_ch), ceiling(seq_len(n_ch) / n_workers))
     for (b in batches) {
-      res_list <- parallel::parLapply(cl, b, .prep_worker_band)
+      res_list <- parallel::parLapply(cl, b, fns$.prep_worker_band)
       for (k in seq_along(b)) {
         i <- b[k]
         for (wi in seq_along(windows)) {
@@ -1269,4 +1267,21 @@ print.dsm_store <- function(x, ...) {
 .prep_worker_band <- function(i) {
   j <- get(".prep_job", envir = globalenv())
   .prep_band_worker(i, j$files, j$rules, j$reads, j$windows, j$n_points)
+}
+
+# WHAT A BAND WORKER RECEIVES: these six, as copies whose environment is the
+# worker's global one, where they find each other -- and nothing else of the
+# framework, which a band does not need. Sent as they are, their environment
+# would be the package's namespace, and a worker reading one loads the
+# package: the INSTALLED copy, whatever this session loaded, so a session
+# working on the source tree would extract with the code of the last install
+# -- and each of the workers would load torch to read rasters.
+.prep_worker_functions <- function() {
+  nm <- c(".prep_band_worker", ".prep_worker_setup", ".prep_worker_band",
+          ".prep_gdal_cache", "qc_band_values", "patch_band_assemble")
+  fns <- mget(nm, envir = environment(.prep_worker_functions))
+  lapply(fns, function(f) {
+    environment(f) <- globalenv()
+    f
+  })
 }

@@ -22,7 +22,7 @@
 #   6. snapshots round-trip, including the decimal that broke them once
 #   7. a changed / new / removed value is each reported as what it is
 #
-# Run: source("D:/.../tests/test_reporting.R")    (CPU, no torch needed)
+# Run: source("D:/.../tests/test_reporting.R")    (CPU, no tensors)
 
 suppressMessages({
   library(tibble)
@@ -55,9 +55,7 @@ root <- (function() {
 })()
 
 source(file.path(root, "tests", "helper.R"))
-source(file.path(root, "R", "utils.R"))
-source(file.path(root, "R", "metrics.R"))
-source(file.path(root, "R", "diagnostics.R"))
+.load_framework(root)
 
 ok <- c()
 

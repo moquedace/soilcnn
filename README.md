@@ -214,13 +214,14 @@ For the reasoning behind every architectural and training choice see [`docs/desi
 | [`R/smearing.R`](R/smearing.R) | `smearing_factor()` · `smear()` — the back-transform of a log-trained median, and the one surface that may be summed |
 | [`R/test_optimism.R`](R/test_optimism.R) | `freeze_selection()` · `score_test_grid()` — the test set, scored only after the choice is locked |
 | [`R/api.R`](R/api.R) | **The front end**: `dsm_load()` · `spatial_cv()` · `dsm_train()` |
-| [`R/load_all.R`](R/load_all.R) | One `source()` for every module, in dependency order — and it stops on a missing module rather than loading part of the framework |
+| [`R/zzz.R`](R/zzz.R) | `.onLoad()`: registers the built-in models, and fingerprints the code it loaded — every worker compares its own with it before it starts |
 
 Beside `R/`:
 
 | Where | What |
 |------|---------|
-| [`tests/run_all.R`](tests/run_all.R) | 24 files, ~780 assertions, ~3.5 min. Every accumulator is named and `.report()` refuses an empty, unnamed, NA-bearing or non-logical one. `test_sources_parse.R` runs first and is the authority on syntax. |
+| [`DESCRIPTION`](DESCRIPTION) · [`NAMESPACE`](NAMESPACE) | The package, `deeplearningcaret`: what it imports, and the 100 functions it exports — every one some script calls. NAMESPACE is what roxygen2 writes from the `@export` tags, and `tests/test_package_metadata.R` checks that it still is |
+| [`tests/run_all.R`](tests/run_all.R) | 31 files: 25 fast, then 6 slow ones that train, map, and build and install the package. The package is loaded once for the suite. Every accumulator is named and `.report()` refuses an empty, unnamed, NA-bearing or non-logical one. `test_sources_parse.R` runs first and is the authority on syntax. |
 | [`tools/`](tools/) | Three Python checks that need no R: `r_lint.py` (a top-level `else`, the native pipe — the two mistakes that have cost a round trip here; has a `--selftest`), `r_calls.py` (every project function a script calls exists, `do.call` targets included; named arguments match formals), `r_skeleton.py` (an edit touched only comments and strings). Run them after any edit made without an R session. |
 | [`utils/install_load_pkg.R`](utils/install_load_pkg.R) | Installs what is missing, then **stops** if a package will not load |
 
@@ -229,7 +230,7 @@ Beside `R/`:
 ## Quickstart
 
 ```r
-source("R/load_all.R")          # the whole framework, in dependency order
+pkgload::load_all(".")          # the package, from this source tree (or library(deeplearningcaret))
 
 data <- dsm_load(
   patch_dir    = "outputs/patches/.../",
@@ -505,13 +506,15 @@ What the interval bands come from instead is [calibrated uncertainty](#calibrate
 
 ## Dependencies
 
-The framework itself (`R/`) needs:
+The framework's own are `DESCRIPTION`'s Imports:
 
 ```r
 install.packages(c(
   "torch", "coro",                          # deep learning
-  "dplyr", "tidyr", "readr", "tibble",      # data wrangling
-  "purrr", "matrixStats", "DescTools"       # ensemble aggregation, CCC
+  "dplyr", "readr", "tibble", "purrr",      # data wrangling
+  "terra", "matrixStats", "janitor",        # rasters, ensemble aggregation, names
+  "callr", "ps",                            # worker processes, and their memory
+  "pkgload"                                 # to load the package from its source tree
 ))
 torch::install_torch()                      # ONCE: the C++ backend, ~200 MB
 ```
@@ -520,13 +523,17 @@ torch::install_torch()                      # ONCE: the C++ backend, ~200 MB
 separate download that `library(torch)` asks for the first time. Until
 `install_torch()` has run, nothing here trains.
 
+Its Suggests, each needed only by the part that says so when called:
+`sf` (points from a spatial file; kNNDM), `CAST` (kNNDM folds), `FNN` (a
+faster exact nearest neighbour for the AOA), `randomForest` or `ranger` (the
+RF baseline; ranger is far faster), `caret` (its model library).
+
 The worked example (`examples/`) adds:
 
 ```r
 install.packages(c(
-  "terra", "sf",                            # rasters and points
-  "janitor", "ggplot2", "stringr",          # 01 and 06
-  "ps", "processx",                         # 05a: worker orchestration, RSS monitoring
+  "sf", "ggplot2", "stringr", "tidyr",      # 01 and 06
+  "DescTools", "processx",                  # 04b, 05a
   "randomForest", "ranger", "caret"         # baselines (03b); ranger optional
 ))
 ```
@@ -534,6 +541,28 @@ install.packages(c(
 Every example script begins with `install_load_pkg(...)`, which installs what
 is missing and then **stops** if a package will not load — it used to say
 "completed" either way.
+
+### Loading it
+
+The framework is an R package, `deeplearningcaret`:
+
+```r
+pkgload::load_all("<project root>")         # the source tree, as it stands -- what the scripts do
+library(deeplearningcaret)                  # an installed copy
+```
+
+To install a copy, build the tarball first: `R CMD INSTALL` of the directory
+itself copies `data/` into the library, subdirectories and all.
+
+```r
+tgz <- pkgbuild::build("<project root>", dest_path = tempdir(), vignettes = FALSE)
+install.packages(tgz, repos = NULL, type = "source")
+```
+
+`dsm_final()` and `dsm_predict()` start worker processes, and each loads the
+framework the way its session did — the source tree, or that same installed
+copy — and stops before its first unit if the code there is not the code its
+session loaded.
 
 A CUDA-capable GPU is strongly recommended. CPU training is supported but ~10–20× slower; `setup_torch_device()` uses every physical core but one unless told otherwise.
 
@@ -566,8 +595,9 @@ The [`examples/soc_stock_0_5cm/`](examples/soc_stock_0_5cm/) directory contains 
 
 Nothing needs editing first. Every script finds the project for itself — it
 asks `Rscript --file`, then the `source()` frame, then the working directory,
-and climbs to the directory holding `R/load_all.R` — so a clone anywhere runs
-as it is, with no network access needed to start. The one thing a new user
+and climbs to the directory holding `R/cnn_architecture.R` — and loads the
+package from there with `pkgload::load_all()`, so a clone anywhere runs as it
+is, with no network access needed to start. The one thing a new user
 must set is `predictor_raster_dir` in `01_prepare_dataset.R`, which is
 where *their* rasters are.
 

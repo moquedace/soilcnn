@@ -19,7 +19,7 @@
 #   7. far points fall outside the AOA and near points inside
 #   8. degenerate input is refused, not answered
 #
-# Run: source("D:/.../tests/test_aoa.R")     (no torch, no packages beyond base)
+# Run: source("D:/.../tests/test_aoa.R")     (no tensors: base R on small matrices)
 
 # -- project root: works under source() in the console AND under Rscript ------
 
@@ -46,9 +46,7 @@ root <- (function() {
 })()
 
 source(file.path(root, "tests", "helper.R"))
-source(file.path(root, "R", "utils.R"))
-source(file.path(root, "R", "resample.R"))   # with_local_seed
-source(file.path(root, "R", "aoa.R"))
+.load_framework(root)
 
 ok <- c()
 
@@ -205,7 +203,6 @@ ok["print_aoa_does_not_throw"] <- !inherits(
 # The map's DI, the AOA and the level-and-DI interval all measure against the
 # same reference; built by one function, a calibration point and a map pixel
 # cannot end up measured against two different ones.
-source(file.path(root, "R", "preprocess.R"))
 set.seed(606)
 n_r <- 120L
 preds_r <- paste0("v", 1:4)

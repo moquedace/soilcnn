@@ -59,10 +59,7 @@ root <- (function() {
 })()
 
 source(file.path(root, "tests", "helper.R"))
-for (m in c("utils", "patches", "preprocess", "dataset", "metrics",
-            "cnn_architecture", "tune_grid", "resample", "train_cnn")) {
-  source(file.path(root, "R", paste0(m, ".R")))
-}
+.load_framework(root)
 
 ok <- c()
 

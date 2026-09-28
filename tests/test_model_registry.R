@@ -50,11 +50,7 @@ root <- (function() {
 })()
 
 source(file.path(root, "tests", "helper.R"))
-source(file.path(root, "R", "utils.R"))
-source(file.path(root, "R", "metrics.R"))
-source(file.path(root, "R", "resample.R"))
-source(file.path(root, "R", "dataset.R"))
-source(file.path(root, "R", "model_registry.R"))
+.load_framework(root)
 
 ok <- c()
 
@@ -305,8 +301,6 @@ if (requireNamespace("torch", quietly = TRUE)) {
   #   the textbook default rather than an arbitrary corner of the space.
   # ===========================================================================
 
-  source(file.path(root, "R", "baselines.R"))
-
   ok["rf_grid_rows_are_distinct"] <- all(vapply(1:6, function(k) {
     g <- rf_grid(k, seed = 1L)
     nrow(unique(g[, c("mtry_frac", "min_node_size")])) == nrow(g)
@@ -352,8 +346,6 @@ if (requireNamespace("torch", quietly = TRUE)) {
 
   if (requireNamespace("randomForest", quietly = TRUE) ||
       requireNamespace("ranger", quietly = TRUE)) {
-    source(file.path(root, "R", "baselines.R"))
-
     xs <- tv$train$x
     ys <- c(1.0, 2.0, 3.0, 4.0)
     g  <- rf_grid(1L, seed = 1L)
@@ -394,8 +386,6 @@ if (requireNamespace("torch", quietly = TRUE)) {
   # ===========================================================================
 
   if (requireNamespace("caret", quietly = TRUE)) {
-    source(file.path(root, "R", "caret_adapter.R"))
-
     ok["caret_lists_regression_methods"] <- {
       av <- caret_available("^rf$|^ranger$|^glmnet$")
       is.data.frame(av) && nrow(av) > 0

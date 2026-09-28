@@ -51,9 +51,7 @@ root <- (function() {
        "or source() this file with its full path.", call. = FALSE)
 })()
 source(file.path(root, "tests", "helper.R"))
-source(file.path(root, "R", "utils.R"))
-source(file.path(root, "R", "patches.R"))
-source(file.path(root, "R", "preprocess.R"))
+.load_framework(root)
 
 set.seed(11)
 ok <- logical(0)

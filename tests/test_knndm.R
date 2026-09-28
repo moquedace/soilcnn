@@ -50,9 +50,7 @@ root <- (function() {
   stop("Project root not found.", call. = FALSE)
 })()
 source(file.path(root, "tests", "helper.R"))
-source(file.path(root, "R", "utils.R"))
-source(file.path(root, "R", "resample.R"))
-source(file.path(root, "R", "knndm.R"))
+.load_framework(root)
 
 ok <- logical(0)
 
@@ -176,9 +174,6 @@ if (has_cast && has_sf) {
   # switch() in resolve_resampling() selects by name, and a spec whose kind is
   # not a string once selected by POSITION instead -- a spatial request that
   # came back as a holdout, with no error.
-  source(file.path(root, "R", "metrics.R"))
-  source(file.path(root, "R", "dataset.R"))
-  source(file.path(root, "R", "api.R"))
   spec <- knndm_cv(k = 3L, predpoints = predpts, seed = 7L)
   ok["spec_is_a_resample_spec"] <- inherits(spec, "resample_spec")
   ok["spec_kind_is_the_string_knndm"] <-

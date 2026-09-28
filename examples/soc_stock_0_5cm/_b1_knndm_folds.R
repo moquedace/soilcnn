@@ -59,7 +59,7 @@
 # docs/test_plan.md budgets ~1 h for B1. That budget is for B1 INCLUDING the rf
 # run that follows; this script is the cheap half of it. Reading the code says:
 #
-#   packages + load_all.R + dsm_load (one window)        ~1 min
+#   packages + load_all() + dsm_load (one window)        ~1 min
 #   the 20 km footprint: 181 rasters x 797 x 2004 cells  ~1-4 min   <- dominates
 #   prediction_sample() regular draw                     seconds
 #   CAST::knndm, 3,137 points, ~5,000 predpoints, k = 3  ~1-3 min
@@ -91,9 +91,9 @@
 #
 # This was a hardcoded "D:/usuario_armazenamento/...", which meant the script
 # ran on exactly one machine and had to be edited on every other. The same
-# snippet is in every tests/*.R and in R/load_all.R: it asks Rscript (--file),
+# snippet is in every tests/*.R: it asks Rscript (--file),
 # then source() (the ofile of an enclosing frame), then the working directory,
-# and climbs until it finds the directory that holds R/load_all.R.
+# and climbs until it finds the directory that holds R/cnn_architecture.R.
 project_root <- (function() {
   cand <- character(0)
   a <- commandArgs(trailingOnly = FALSE)
@@ -108,15 +108,15 @@ project_root <- (function() {
   cand <- c(cand, getwd())
   for (d in cand) for (up in c(".", "..", "../..", "../../..")) {
     r <- normalizePath(file.path(d, up), winslash = "/", mustWork = FALSE)
-    if (file.exists(file.path(r, "R", "load_all.R"))) return(r)
+    if (file.exists(file.path(r, "R", "cnn_architecture.R"))) return(r)
   }
   stop("Project root not found. source() this script by its full path, or ",
        "setwd() into the project first.", call. = FALSE)
 })()
 source(file.path(project_root, "utils", "install_load_pkg.R"))
 
-# torch is here for ONE reason and it is not training. R/load_all.R sources
-# R/cnn_architecture.R, which calls torch::nn_module() at the top level, so the
+# torch is here for ONE reason and it is not training. The package imports
+# it -- R/cnn_architecture.R calls torch::nn_module() at the top level -- so the
 # framework cannot be loaded without torch being loadable. Nothing below builds
 # a network or touches a device.
 #
@@ -145,9 +145,9 @@ options(width = 200)
 
 setwd(project_root)
 
-# One source() instead of ten, in an order that is not guessable. See
-# R/load_all.R.
-source(file.path(project_root, "R", "load_all.R"))
+# The framework is a package: pkgload::load_all() loads it from this source
+# tree as it stands. library(deeplearningcaret) loads an installed copy.
+pkgload::load_all(project_root)
 
 # ── Settings ──────────────────────────────────────────────────────────────────
 

@@ -52,8 +52,7 @@ root <- (function() {
   stop("Project root not found.", call. = FALSE)
 })()
 source(file.path(root, "tests", "helper.R"))
-source(file.path(root, "R", "utils.R"))
-source(file.path(root, "R", "test_optimism.R"))
+.load_framework(root)
 
 ok <- logical(0)
 

@@ -12,9 +12,9 @@
 #
 # This was a hardcoded "D:/usuario_armazenamento/...", which meant the script
 # ran on exactly one machine and had to be edited on every other. The same
-# snippet is in every tests/*.R and in R/load_all.R: it asks Rscript (--file),
+# snippet is in every tests/*.R: it asks Rscript (--file),
 # then source() (the ofile of an enclosing frame), then the working directory,
-# and climbs until it finds the directory that holds R/load_all.R.
+# and climbs until it finds the directory that holds R/cnn_architecture.R.
 .dlc_root <- (function() {
   cand <- character(0)
   a <- commandArgs(trailingOnly = FALSE)
@@ -29,7 +29,7 @@
   cand <- c(cand, getwd())
   for (d in cand) for (up in c(".", "..", "../..", "../../..")) {
     r <- normalizePath(file.path(d, up), winslash = "/", mustWork = FALSE)
-    if (file.exists(file.path(r, "R", "load_all.R"))) return(r)
+    if (file.exists(file.path(r, "R", "cnn_architecture.R"))) return(r)
   }
   stop("Project root not found. source() this script by its full path, or ",
        "setwd() into the project first.", call. = FALSE)
@@ -56,10 +56,10 @@ gerar_graficos_cnn <- function(
   # particular past run is a default that is wrong from the day after it is
   # written. 05 and 07 resolve the same two things the same way.
   final_base <- file.path(project_root,"outputs/final_model/soc_stock_modeling",target)
-  # latest_run_dir() and selected_config_id() live in R/utils.R: newest
+  # latest_run_dir() and selected_config_id(), from the framework: newest
   # FINISHED run by time (this was the eleventh alphabetical "latest" site),
   # and the config in selection order rather than grid order.
-  source(file.path(project_root, "R", "utils.R"))
+  pkgload::load_all(project_root, quiet = TRUE)
   if (identical(final_run_id,"latest")) {
     final_run_id <- latest_run_dir(final_base, prefix = "final_",
       require_file = file.path("comparison", "final_run_summary.rds"),

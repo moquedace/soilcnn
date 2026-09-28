@@ -22,7 +22,7 @@
 # Parametrised over window size, channel count and centre position, so a
 # regression in any one combination fails loudly.
 #
-# Run: source("tests/test_patch_geometry.R")   (no torch, no GPU, no real data)
+# Run: source("tests/test_patch_geometry.R")   (no tensors, no GPU, no real data)
 
 # -- project root: works under source() in the console AND under Rscript ------
 # commandArgs("--file=") is empty when the file is source()d, so fall back to
@@ -52,7 +52,7 @@ root <- (function() {
        "or source() this file with its full path.", call. = FALSE)
 })()
 source(file.path(root, "tests", "helper.R"))
-source(file.path(root, "R", "patches.R"))
+.load_framework(root)
 
 # ── synthetic raster ──────────────────────────────────────────────────────────
 
