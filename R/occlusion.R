@@ -358,12 +358,17 @@ print.spatial_occlusion <- function(x, ...) {
 #' @param config_id Which config.
 #' @param fold,seed_i Which unit of it.
 #' @param ...       Passed to spatial_occlusion().
+#' @param transform NULL (the default) for the inverse of the transform the
+#'   store was built under, as in dsm_train(); a function to use instead,
+#'   refused if it disagrees with the store's.
 #' @inheritParams spatial_occlusion
 #' @return A `spatial_occlusion`, as spatial_occlusion() returns.
 #' @export
 occlusion_report <- function(run_dir, data, config_id, fold = 1L, seed_i = 1L,
-                             role = "validation", transform = identity,
+                             role = "validation", transform = NULL,
                              device, ...) {
+  # The store's inverse by default, as dsm_train() and score_test_grid().
+  transform <- .resolve_train_transform(transform, data, verbose = FALSE)
   tune_grid <- readRDS(file.path(run_dir, "tune_grid.rds"))
   plan      <- readRDS(file.path(run_dir, "fold_plan.rds"))
   cfg <- tune_grid[tune_grid$config_id == config_id, , drop = FALSE]

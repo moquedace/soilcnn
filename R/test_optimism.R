@@ -119,14 +119,16 @@ freeze_selection <- function(run_dir, config_id, rule = "one_se",
 #' @param run_dir   Tuning run directory.
 #' @param data      A dsm_data (from dsm_load()), or a list with store, points
 #'   and type_table.
-#' @param transform Inverse of the target transformation, e.g. expm1.
+#' @param transform NULL (the default) for the inverse of the transform the
+#'   store was built under, as in dsm_train(); a function is the inverse to
+#'   use instead, and is refused if it disagrees with the store's.
 #' @param device    torch device.
 #' @param config_ids Which configs to score. NULL means every config in the grid.
 #' @param allow_unfrozen Escape hatch for teaching or for a run whose selection
 #'   was recorded elsewhere. Not a default, and the report says it was used.
 #' @return An object of class "test_optimism".
 #' @export
-score_test_grid <- function(run_dir, data, transform = identity, device,
+score_test_grid <- function(run_dir, data, transform = NULL, device,
                             config_ids = NULL, allow_unfrozen = FALSE) {
 
   sel_path  <- file.path(run_dir, "comparison", "selection.rds")
@@ -147,6 +149,11 @@ score_test_grid <- function(run_dir, data, transform = identity, device,
     stop("`data` must be a dsm_data, or a list with store, points and ",
          "type_table.", call. = FALSE)
   }
+  # THE STORE'S INVERSE, AS dsm_train() TAKES IT. The default was identity:
+  # on a log1p store, a call that left it out scored the test set in log
+  # space -- a table of plausible numbers, in the wrong units, beside the
+  # tuning table dsm_train() had scored in native ones.
+  transform <- .resolve_train_transform(transform, data, verbose = FALSE)
 
   grid_path <- file.path(run_dir, "tune_grid.rds")
   plan_path <- file.path(run_dir, "fold_plan.rds")

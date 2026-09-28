@@ -29,6 +29,8 @@
 #   8. a job carrying a function of the namespace is refused; plain data passes
 #   9. a copy source()d from R/ is refused at attach, with the way out; a
 #      function of the user's own with the same name is not
+#  10. every exported function that scores a store's predictions defaults to
+#      the store's own inverse transform
 #
 # Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tests/test_package_metadata.R")
 
@@ -181,6 +183,16 @@ ok["copy_sourced_from_R_is_found"]     <- identical(p_copy$found, "ccc")
 ok["attach_refuses_it_and_says_how"]   <- grepl(".pkg_stale_copies()", p_copy$attach, fixed = TRUE)
 ok["own_function_of_that_name_passes"] <- length(p_own$found) == 0L && identical(p_own$attach, "")
 ok["the_probe_left_nothing_behind"]    <- !exists("ccc", envir = globalenv(), inherits = FALSE)
+
+# ── 10. what scores predictions from a store defaults to the store's inverse ──
+# dsm_train() has since the audit; score_test_grid() and occlusion_report()
+# defaulted to identity, and on a log1p store a call that left `transform` out
+# scored in log space, in plausible numbers. NULL is the store's own inverse.
+scorers <- c("dsm_train", "dsm_final", "score_test_grid", "occlusion_report")
+ok["scorers_default_to_the_stores_inverse"] <- all(vapply(scorers, function(f) {
+  fm <- formals(get(f, envir = ns))
+  "transform" %in% names(fm) && is.null(fm$transform)
+}, logical(1)))
 
 cat("  imports declared/used    : ", length(imports), " / ", sum(imports %in% used), "\n", sep = "")
 cat("  exports, S3 methods      : ", length(exported), ", ", length(registered), "\n", sep = "")
