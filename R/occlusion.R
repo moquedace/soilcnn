@@ -66,12 +66,12 @@ patch_ring_index <- function(w) {
 #' Replace a set of pixels with the same pixels taken from other samples.
 #'
 #' Operates on the fold cache's own representation: `cache[[role]][[key]]` is a
-#' TORCH TENSOR of shape [n, channels, w, w], not a base R array. The first
+#' TORCH TENSOR of shape `[n, channels, w, w]`, not a base R array. The first
 #' version of this function assumed an R array, which fails on real data and
 #' failed in the test for the same reason -- worth stating in the code, because
 #' `dim()` works on both and hides the difference until an assignment does not.
 #'
-#' @param x      Tensor [n, channels, w, w].
+#' @param x      Tensor `[n, channels, w, w]`.
 #' @param mask   w x w logical matrix: TRUE where the pixels are hidden.
 #' @param method "permute" (default) or "zero".
 #' @param seed   Draw seed for the permutation.

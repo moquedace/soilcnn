@@ -64,7 +64,7 @@ patch_window_bytes <- function(n_points, n_channels, window_size) {
 
 #' Write one window array to the store.
 #'
-#' @param arr         Array [n_points, n_channels, w, w], double.
+#' @param arr         Array `[n_points, n_channels, w, w]`, double.
 #' @param patch_dir   Store directory.
 #' @param window_size Odd integer.
 #' @return A one-row tibble describing what was written.

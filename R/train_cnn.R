@@ -10,7 +10,8 @@
 #' Run inference over a DataLoader and return a pred/obs tibble.
 #'
 #' @param model        Trained dual_branch_cnn.
-#' @param data_loader  DataLoader whose batches are (x1 [, x2], y).
+#' @param data_loader  DataLoader whose batches are `(x1, y)`, or `(x1, x2, y)`
+#'   for two branches.
 #' @param points_valid Tibble with at least: profile_id, sample_id,
 #'   target_native, target_transform (transformed scale used during training).
 #' @param dataset_role Character label: "train", "validation", or "test".
@@ -427,7 +428,7 @@ train_one_cnn <- function(
 #' @param tune_grid    tibble from make_tune_grid() or make_manual_tune_grid().
 #' @param n_channels   Number of predictor channels.
 #' @param cache        Scaled, split tensors from build_fold_cache()$cache:
-#'   cache[[role]][[window_key]] plus cache[[role]]$y. Built by the CALLER,
+#'   `cache[[role]][[window_key]]` plus `cache[[role]]$y`. Built by the CALLER,
 #'   because the scaling is fold-dependent – the grid loop must not own
 #'   that decision. When resampling arrives this argument simply becomes the
 #'   current fold's cache, with no change to the loop below.

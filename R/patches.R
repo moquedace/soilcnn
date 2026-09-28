@@ -61,7 +61,7 @@ patch_cell_index <- function(centre_row, centre_col, n_cols, window_size) {
 #' @param band_values Numeric vector of one band's cells, row-major.
 #' @param cell_index  Matrix from patch_cell_index().
 #' @param window_size Odd integer patch side.
-#' @return list(array = [n_centres, w, w], valid = logical vector per centre).
+#' @return list(array = `[n_centres, w, w]`, valid = logical vector per centre).
 #' @noRd
 patch_band_assemble <- function(band_values, cell_index, window_size) {
   n     <- nrow(cell_index)
@@ -85,7 +85,7 @@ patch_band_assemble <- function(band_values, cell_index, window_size) {
 #' @param cell_values Numeric matrix, cells (row-major) x channels.
 #' @param cell_index  Matrix from patch_cell_index().
 #' @param n_channels  Number of channels (columns of cell_values).
-#' @return list(values = array [n_pos, n_centres, n_channels], valid = logical).
+#' @return list(values = array `[n_pos, n_centres, n_channels]`, valid = logical).
 #' @noRd
 patch_gather <- function(cell_values, cell_index, n_channels) {
   n     <- nrow(cell_index)
@@ -99,7 +99,7 @@ patch_gather <- function(cell_values, cell_index, n_channels) {
   list(values = vals, valid = valid)
 }
 
-#' Reshape gathered values into [n_keep, n_channels, w, w]. No re-indexing.
+#' Reshape gathered values into `[n_keep, n_channels, w, w]`. No re-indexing.
 #'
 #' @param values     The `values` element of patch_gather().
 #' @param keep       Integer vector of centre positions to keep.

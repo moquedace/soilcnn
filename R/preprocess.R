@@ -149,7 +149,7 @@ fit_scaling <- function(points, type_table, rows, pct_scale = 100) {
 
 #' Apply channel scaling to a patch tensor, in place of a re-extraction.
 #'
-#' @param x       torch tensor [N, C, H, W].
+#' @param x       torch tensor `[N, C, H, W]`.
 #' @param scaling Tibble from fit_scaling(), rows in channel order.
 #' @param inplace Modify `x` instead of allocating a copy. The patch tensors
 #'   are multi-GB (a 15x15 window over 37k points and 181 channels is ~6 GB in
@@ -179,7 +179,7 @@ scale_patches <- function(x, scaling, inplace = FALSE) {
 }
 
 #' Same operation on a plain R array, for callers not holding a tensor.
-#' Apply the same affine scaling to a [n_rows, n_channels] matrix.
+#' Apply the same affine scaling to a `[n_rows, n_channels]` matrix.
 #'
 #' The table view of the same transform `scale_patches()` applies to patches.
 #' One implementation of the arithmetic, three shapes -- tensor, array, matrix
