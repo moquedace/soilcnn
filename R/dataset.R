@@ -128,10 +128,17 @@ save_patch_window <- function(arr, patch_dir, window_size) {
   slab <- max(1L, as.integer(floor(slab_mb * 1e6 / per_point)))
   for (s in seq.int(1L, n, by = slab)) {
     e <- min(s + slab - 1L, n)
+    # THE ROWS ARE PICKED OUT HERE, NOT INSIDE THE TENSOR'S BRACKETS. R torch
+    # evaluates the arguments of `[` and `[<-` on a tensor under a mask in
+    # which `:` builds a slice -- nested calls included -- so src[rows[s:e], ]
+    # turns s:e into a slice object and rows[<slice>] fails ("invalid
+    # subscript type 'list'", every test that cut a fold from a loaded store,
+    # 2026-09-28). In out[s:e, , , ] below that slice is what is meant.
+    rr <- rows[s:e]
     part <- if (is_tensor) {
-      src[rows[s:e], , , , drop = FALSE]
+      src[rr, , , , drop = FALSE]
     } else {
-      torch::torch_tensor(src[rows[s:e], , , , drop = FALSE], dtype = torch::torch_float())
+      torch::torch_tensor(src[rr, , , , drop = FALSE], dtype = torch::torch_float())
     }
     out[s:e, , , ] <- part
   }
