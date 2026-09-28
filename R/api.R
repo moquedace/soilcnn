@@ -56,6 +56,7 @@
 #' @return A `dsm_data` object. `$transform` is the target transform the store
 #'   was built under -- name, forward and inverse -- or NULL when the store did
 #'   not record one.
+#' @export
 dsm_load <- function(patch_dir, points = NULL, type_table = NULL, windows = NULL,
                      cell_size = NULL, raster_table = NULL, target_col = NULL,
                      verbose = TRUE) {
@@ -259,6 +260,7 @@ print.dsm_data <- function(x, ...) {
 #' @param test_frac  Share held out entirely, carved by the same criterion.
 #' @param max_share  Balance constraint for "auto": the largest share of the
 #'   points one block may hold.
+#' @export
 spatial_cv <- function(k = 5L, block_size = "auto", buffer = "auto",
                        test_frac = 0.15, max_share = 0.10,
                        buffer_metric = c("chebyshev", "euclidean"),
@@ -288,6 +290,7 @@ spatial_cv <- function(k = 5L, block_size = "auto", buffer = "auto",
 #'
 #' Needs the CAST and sf packages. See R/knndm.R for the projection question,
 #' which is not optional on lon/lat data.
+#' @export
 knndm_cv <- function(k = 5L, predpoints = NULL, hold_out_test = FALSE,
                      crs = 4326,
                      project_to = "+proj=moll +lon_0=0 +datum=WGS84 +units=m",
@@ -302,6 +305,7 @@ knndm_cv <- function(k = 5L, predpoints = NULL, hold_out_test = FALSE,
 #' Right when the rows really are independent, and the cleanest way to MEASURE
 #' what geography is worth: run it against spatial_cv() on the same points and
 #' the gap is the spatial optimism.
+#' @export
 random_cv <- function(k = 5L, test_frac = 0.15, group = "auto", seed = 42L) {
   .resample_spec(.kind = "random", k = .check_k(k, "random_cv"),
                  test_frac = .check_frac(test_frac, "random_cv", "test_frac"),
@@ -309,6 +313,7 @@ random_cv <- function(k = 5L, test_frac = 0.15, group = "auto", seed = 42L) {
 }
 
 #' A single train/validation/test split.
+#' @export
 holdout_cv <- function(validation_frac = 0.15, test_frac = 0.15,
                        group = "auto", seed = 42L) {
   validation_frac <- .check_frac(validation_frac, "holdout_cv", "validation_frac", zero_ok = FALSE)
@@ -322,6 +327,7 @@ holdout_cv <- function(validation_frac = 0.15, test_frac = 0.15,
 }
 
 #' Leave-region-out, on a grouping that already exists (biome, catchment, ...).
+#' @export
 region_cv <- function(group, k = NULL, test_frac = 0.15, seed = 42L) {
   .resample_spec(.kind = "region", group = group, k = .check_k(k, "region_cv", allow_null = TRUE),
                  test_frac = .check_frac(test_frac, "region_cv", "test_frac"), seed = seed)
@@ -350,6 +356,7 @@ print.resample_spec <- function(x, ...) {
 #' @param test_ids Sample ids to force into the test set, so a frozen test set
 #'   survives a change of method.
 #' @param windows  Windows the grid will use, for `buffer = "auto"`.
+#' @export
 resolve_resampling <- function(spec, data, test_ids = NULL, windows = NULL,
                                verbose = TRUE) {
   if (inherits(spec, "fold_plan")) return(spec)
@@ -453,6 +460,7 @@ resolve_resampling <- function(spec, data, test_ids = NULL, windows = NULL,
 #' @param test_ids   Sample ids forced into the test set.
 #' @param ...        Passed to the underlying runner (n_epochs, patience, ...).
 #' @return The runner's result, plus the plan and the data it used.
+#' @export
 dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
                       tune_grid = NULL, tune_length = 20L, n_seeds = 3L,
                       transform = NULL, clamp = c(0, Inf),

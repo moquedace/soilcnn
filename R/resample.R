@@ -50,6 +50,7 @@
 # Fold construction must not consume draws from the stream that initialises
 # model weights: otherwise changing k would silently change every model's
 # initialisation too, and the comparison between plans would be confounded.
+#' @export
 with_local_seed <- function(seed, expr) {
   if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
     old <- get(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
@@ -301,6 +302,7 @@ with_local_seed <- function(seed, expr) {
   g
 }
 
+#' @export
 holdout <- function(meta, validation_frac = 0.15, test_frac = 0.15,
                     test_ids = NULL, seed = 42L, group = "auto") {
   if (!"sample_id" %in% names(meta)) {
@@ -354,6 +356,7 @@ holdout <- function(meta, validation_frac = 0.15, test_frac = 0.15,
 #' @param k    Number of folds.
 #' @param seed Seed for the partition only (see with_local_seed): a fixed plan
 #'   reproduces even when the training seeds change.
+#' @export
 random_folds <- function(meta, k = 5L, test_frac = 0, test_ids = NULL,
                         seed = 42L, group = "auto") {
   k <- as.integer(k)
@@ -498,6 +501,7 @@ print_block_choice <- function(chosen) {
   invisible(chosen)
 }
 
+#' @export
 spatial_folds <- function(meta, k = 5L, test_frac = 0, block_size = NULL,
                           buffer = NULL,
                           buffer_metric = c("chebyshev", "euclidean"),
@@ -575,6 +579,7 @@ spatial_folds <- function(meta, k = 5L, test_frac = 0, block_size = NULL,
 #' @param meta  Patch store meta.
 #' @param group Group labels, one per row of `meta`.
 #' @param k     Number of folds; defaults to one per group.
+#' @export
 region_folds <- function(meta, group, k = NULL, test_frac = 0,
                         test_ids = NULL, seed = 42L) {
   if (length(group) != nrow(meta)) {
@@ -805,6 +810,7 @@ apply_buffer <- function(plan, meta, buffer,
 #' @param meta      Patch store meta with x/y.
 #' @param cell_size Raster resolution, in the units of x/y.
 #' @param windows   Window sizes to report overlap for.
+#' @export
 fold_leakage_report <- function(plan, meta, cell_size, windows = c(3L, 9L, 15L)) {
   stopifnot(inherits(plan, "fold_plan"))
   col_id <- floor(as.numeric(meta$x) / cell_size)
@@ -908,6 +914,7 @@ describe_subsample <- function(idx) {
 #' @param meta            The same point table.
 #' @param validation_frac Share of the non-test rows used to stop training.
 #' @return A one-fold `fold_plan`.
+#' @export
 refit_split <- function(plan, meta, validation_frac = 0.15) {
   stopifnot(inherits(plan, "fold_plan"))
   test_pos <- plan$folds[[1]]$test
@@ -954,6 +961,7 @@ refit_split <- function(plan, meta, validation_frac = 0.15) {
 #' arbitrary set of overlapping subsets.
 #'
 #' @return tibble, one row per fold.
+#' @export
 check_fold_plan <- function(plan, meta = NULL, group = "auto") {
   stopifnot(inherits(plan, "fold_plan"))
   val_seen <- integer(0)
@@ -1046,6 +1054,7 @@ check_fold_plan <- function(plan, meta = NULL, group = "auto") {
 }
 
 #' Print a fold plan, with its per-fold sizes.
+#' @export
 print.fold_plan <- function(x, ...) {
   cat("<fold_plan> ", x$method, " | ", x$n_folds, " fold(s) | ",
       x$n_rows, " rows in the store\n", sep = "")
@@ -1107,6 +1116,7 @@ print.fold_plan <- function(x, ...) {
 #'   first metric. Failed units are excluded from the statistics but counted in
 #'   `n_failed`, because a config that crashes 2 runs in 3 is not the same as
 #'   one that completed all three.
+#' @export
 summarise_resamples <- function(comparison,
                                 metrics = c("val_ccc", "val_mae", "val_rmse",
                                             "val_r2", "val_mqi",
@@ -1196,6 +1206,7 @@ na_to_zero <- function(x) {
 #' @param comparison Unit-level comparison table.
 #' @param metric     Metric column to measure.
 #' @return list(by_config = tibble, median_sd, max_sd, n_comparable)
+#' @export
 seed_noise_floor <- function(comparison, metric = "val_ccc") {
   if (!metric %in% names(comparison)) {
     stop("No column '", metric, "' in the comparison table.", call. = FALSE)
@@ -1274,6 +1285,7 @@ seed_noise_floor <- function(comparison, metric = "val_ccc") {
 #'   tied) and `simpler_than_best` (whether the rule actually moved the choice)
 #'   attached -- a selection rule that silently returns the same answer as the
 #'   default should say so.
+#' @export
 one_se <- function(by_config, metric = "val_ccc", complexity = "n_params",
                    maximise = NULL) {
   mean_col <- paste0(metric, "_mean")
@@ -1326,6 +1338,7 @@ one_se <- function(by_config, metric = "val_ccc", complexity = "n_params",
 }
 
 #' Say what one_se() did, including when it did nothing.
+#' @export
 print_one_se <- function(pick, metric = "val_ccc", digits = 4L) {
   n_tied <- attr(pick, "within_one_se")
   cat("  one_se (", metric, "): ", n_tied,
@@ -1341,6 +1354,7 @@ print_one_se <- function(pick, metric = "val_ccc", digits = 4L) {
 }
 
 #' Print a noise-floor report in the terms it should be read in.
+#' @export
 print_noise_floor <- function(nf, digits = 4L) {
   if (nf$n_comparable == 0L) {
     cat("  Noise floor: not estimable -- no config was trained under more ",
@@ -1395,6 +1409,7 @@ print_noise_floor <- function(nf, digits = 4L) {
 #' @param label_a,label_b Names for the report.
 #' @param conf      Interval level.
 #' @return An object of class "paired_comparison".
+#' @export
 paired_family_test <- function(a, b, metric = "val_ccc",
                                config_a = NULL, config_b = NULL,
                                label_a = "a", label_b = "b", conf = 0.95) {

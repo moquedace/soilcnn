@@ -38,6 +38,7 @@
 #'   the same arithmetic, so agreement should be exact; the tolerance exists
 #'   only to absorb CSV round-tripping of the point table.
 #' @return list(ok, n_points, n_channels, n_mismatch, worst, by_channel)
+#' @export
 check_patch_centres <- function(patch_dir, points, predictors,
                                 window = NULL, tol = 1e-6) {
 
@@ -206,6 +207,7 @@ spatial_overlap_report <- function(row_ids, col_ids, split,
 #' @param values  Named list/vector of scalars (numeric or character).
 #' @param dir     Where snapshots live.
 #' @param label   Snapshot name; defaults to a timestamp.
+#' @export
 write_run_snapshot <- function(values, dir, label = NULL) {
   dir.create(dir, recursive = TRUE, showWarnings = FALSE)
   if (is.null(label)) label <- format(Sys.time(), "%Y%m%d_%H%M%S")
@@ -242,6 +244,7 @@ write_run_snapshot <- function(values, dir, label = NULL) {
 #' @return list(has_previous, previous_file, diff) where `diff` is a tibble of
 #'   every key with old value, new value and a status: `=`, `changed`, `new`,
 #'   `gone`.
+#' @export
 compare_run_snapshot <- function(values, dir, exclude = character(0)) {
   # BY TIME, NOT BY NAME. This was sort(..., decreasing = TRUE) -- the same
   # mistake latest_run_dir() carried until it picked an unfinished run, and
@@ -286,6 +289,7 @@ compare_run_snapshot <- function(values, dir, exclude = character(0)) {
 # cat(), not message(): message() writes to stderr and print() to stdout, and
 # in the RStudio console the two land on the SAME line ("...changed:# A
 # tibble"). Report output has to leave through one channel to keep its order.
+#' @export
 print_snapshot_diff <- function(cmp, n_show = 40L) {
   if (!cmp$has_previous) {
     cat("  No previous snapshot -- this run becomes the reference.\n")

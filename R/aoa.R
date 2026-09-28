@@ -63,6 +63,7 @@
 #'   deserves.
 #' @param seed     Draw seed for that sample.
 #' @return An object of class "di_reference".
+#' @export
 di_reference <- function(x_train, weights = NULL, max_pairs = 2e6, seed = 42L) {
   x_train <- as.matrix(x_train)
   if (!is.numeric(x_train)) stop("x_train must be numeric.", call. = FALSE)
@@ -186,6 +187,7 @@ di_reference <- function(x_train, weights = NULL, max_pairs = 2e6, seed = 42L) {
 #' @return Numeric vector, one DI per row. 0 means identical to a training
 #'   point; 1 means as far from the training data as two training points are
 #'   from each other on average.
+#' @export
 dissimilarity_index <- function(ref, x, chunk = 2000L) {
   stopifnot(inherits(ref, "di_reference"))
   .di_nn_dist(ref, x, chunk = chunk) / ref$avg_dist
@@ -205,6 +207,7 @@ dissimilarity_index <- function(ref, x, chunk = 2000L) {
 #' @param k_iqr Outlier rule: threshold = Q75 + k_iqr * IQR. 1.5 is Tukey's
 #'   fence and the value Meyer & Pebesma use.
 #' @return The threshold, with the cross-validated DI attached as "cv_di".
+#' @export
 aoa_threshold <- function(ref, folds, k_iqr = 1.5) {
   stopifnot(inherits(ref, "di_reference"))
   folds <- as.integer(folds)
@@ -234,9 +237,11 @@ aoa_threshold <- function(ref, folds, k_iqr = 1.5) {
 #' @param di        From dissimilarity_index().
 #' @param threshold From aoa_threshold().
 #' @return Logical vector. TRUE means the cross-validated error applies here.
+#' @export
 inside_aoa <- function(di, threshold) as.numeric(di) <= as.numeric(threshold)
 
 #' Report what an AOA covers.
+#' @export
 print_aoa <- function(di, threshold, label = "prediction area") {
   inside <- inside_aoa(di, threshold)
   cat("\n-- Area of applicability --\n")
@@ -296,6 +301,7 @@ print.di_reference <- function(x, ...) {
 #' @param plan       The tuning run's fold plan.
 #' @return An `aoa_reference`: the DI reference, the AOA threshold, and each
 #'   used point's fold and cross-validated DI.
+#' @export
 aoa_reference <- function(points, predictors, qc_table, scaling, plan) {
   stopifnot(inherits(plan, "fold_plan"))
   if (!identical(as.character(scaling$predictor), as.character(predictors)) ||
@@ -343,6 +349,7 @@ aoa_reference <- function(points, predictors, qc_table, scaling, plan) {
 #' @param aref   From aoa_reference().
 #' @param values Matrix or data frame of raw values, columns in the model's order.
 #' @return The DI of each row; NA where a channel is missing after QC.
+#' @export
 aoa_di <- function(aref, values) {
   stopifnot(inherits(aref, "aoa_reference"))
   m <- as.matrix(values)

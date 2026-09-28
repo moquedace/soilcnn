@@ -81,6 +81,7 @@
 #'   other: a misspelt option for a table model used to vanish into fit()'s
 #'   `...` and train as if it had not been given.
 #' @return A model_spec.
+#' @export
 model_spec <- function(name, input, fit, predict,
                        default_grid = NULL, count_params = NULL,
                        description = "", fit_args = NULL) {
@@ -130,6 +131,7 @@ model_spec <- function(name, input, fit, predict,
 #' @param overwrite FALSE (default) refuses to replace an existing name. A
 #'   silent replacement is how two different models come to answer to the same
 #'   name in the same session, and the results carry no mark of which ran.
+#' @export
 register_model <- function(spec, overwrite = FALSE) {
   stopifnot(inherits(spec, "model_spec"))
   if (!overwrite && exists(spec$name, envir = .model_registry, inherits = FALSE)) {
@@ -143,6 +145,7 @@ register_model <- function(spec, overwrite = FALSE) {
 #' Fetch a registered model.
 #'
 #' @param name Registered name.
+#' @export
 get_model <- function(name) {
   if (!exists(name, envir = .model_registry, inherits = FALSE)) {
     stop("No model named '", name, "'. Registered: ",
@@ -152,6 +155,7 @@ get_model <- function(name) {
 }
 
 #' Every registered model, as a table.
+#' @export
 list_models <- function() {
   nms <- sort(ls(.model_registry))
   if (length(nms) == 0L) {

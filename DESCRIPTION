@@ -1,0 +1,46 @@
+Package: deeplearningcaret
+Title: Convolutional Neural Networks for Digital Soil Mapping
+Version: 0.0.0.9000
+Authors@R:
+    person("Cassio", "Moquedace", , "cassiomoquedace@gmail.com", role = c("aut", "cre"))
+Description: A framework, built on 'torch', for mapping a soil property from
+    point observations and a stack of aligned rasters with a convolutional
+    network that reads each point's neighbourhood. It extracts the patches,
+    resamples by spatial blocks or by k-fold nearest neighbour distance
+    matching, tunes and selects under a noise floor and the one-standard-error
+    rule, refits the selected configuration under several seeds, and predicts
+    median, mean and interval maps over rasters of any extent, with the area
+    of applicability beside them. Random forest and multilayer perceptron
+    baselines run under the same folds.
+License: MIT + file LICENSE
+URL: https://github.com/moquedace/r-cnn-soil-mapping
+BugReports: https://github.com/moquedace/r-cnn-soil-mapping/issues
+Depends:
+    R (>= 4.5.0)
+Imports:
+    callr,
+    coro,
+    dplyr,
+    janitor,
+    matrixStats,
+    parallel,
+    ps,
+    purrr,
+    readr,
+    stats,
+    terra,
+    tibble,
+    tools,
+    torch,
+    utils
+Suggests:
+    caret,
+    CAST,
+    FNN,
+    pkgload,
+    randomForest,
+    ranger,
+    sf
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2

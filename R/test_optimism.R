@@ -62,6 +62,7 @@
   trimws(out[1])
 }
 
+#' @export
 freeze_selection <- function(run_dir, config_id, rule = "one_se",
                              metric = "val_ccc", note = NA_character_) {
   stopifnot(is.character(config_id), length(config_id) >= 1L)
@@ -123,6 +124,7 @@ freeze_selection <- function(run_dir, config_id, rule = "one_se",
 #' @param allow_unfrozen Escape hatch for teaching or for a run whose selection
 #'   was recorded elsewhere. Not a default, and the report says it was used.
 #' @return An object of class "test_optimism".
+#' @export
 score_test_grid <- function(run_dir, data, transform = identity, device,
                             config_ids = NULL, allow_unfrozen = FALSE) {
 
@@ -234,6 +236,7 @@ score_test_grid <- function(run_dir, data, transform = identity, device,
 }
 
 #' Say what the grid did on the test set, and what that does and does not mean.
+#' @export
 print.test_optimism <- function(x, ...) {
   cat("\nTest-set scores across the grid\n")
   cat(strrep("-", 66), "\n")

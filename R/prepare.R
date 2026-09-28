@@ -61,6 +61,7 @@
 #'
 #' @param name "none" or "log1p".
 #' @return list(name, forward, inverse).
+#' @export
 target_transform_spec <- function(name) {
   if (is.null(name) || length(name) != 1L || is.na(name) ||
       !name %in% names(.target_transforms)) {
@@ -123,6 +124,7 @@ target_transform_spec <- function(name) {
 #' @param overwrite  A store_dir that already holds a store is refused unless
 #'   TRUE, in which case that store's files are removed first.
 #' @return A `dsm_store`, which dsm_load() accepts directly.
+#' @export
 dsm_prepare <- function(points, target, raster_dir, windows,
                         out_dir           = NULL,
                         store_dir         = NULL,

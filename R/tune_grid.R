@@ -223,6 +223,7 @@
 #'
 #' @return A tibble with one row per configuration.
 #'   window_sizes and conv_channels are stored as list-columns.
+#' @export
 make_tune_grid <- function(tune_length = 20L, seed = NULL, fixed = list(),
                            windows = NULL, n_train = NULL) {
   if (!is.null(seed)) set.seed(seed)
@@ -315,6 +316,7 @@ make_tune_grid <- function(tune_length = 20L, seed = NULL, fixed = list(),
 #'     gate_type     = c("vector_featurewise", "no_gate_concat"),
 #'     base_lr       = c(0.001, 0.0005)
 #'   )
+#' @export
 make_manual_tune_grid <- function(...) {
   overrides <- list(...)
   space     <- lapply(.cnn_param_space, function(x) {

@@ -59,6 +59,7 @@
 #' @param difficulty Optional per-point difficulty score (e.g. the ensemble
 #'   spread). When given, intervals scale with it. Must be positive.
 #' @return An object of class "conformal_cal".
+#' @export
 conformal_calibrate <- function(obs, pred, alpha = 0.1, difficulty = NULL) {
   stopifnot(length(obs) == length(pred))
   if (!is.numeric(alpha) || length(alpha) != 1L || alpha <= 0 || alpha >= 1) {
@@ -114,6 +115,7 @@ conformal_calibrate <- function(obs, pred, alpha = 0.1, difficulty = NULL) {
 #' @param lower_limit Floor for the lower bound, e.g. 0 for a stock. Clipping a
 #'   bound at a physical limit can only INCREASE coverage, so the guarantee
 #'   survives it.
+#' @export
 conformal_interval <- function(cal, pred, difficulty = NULL,
                                lower_limit = -Inf) {
   stopifnot(inherits(cal, "conformal_cal"))
@@ -169,6 +171,7 @@ picp <- function(obs, lower, upper) {
 #' @param group  Optional grouping (a spatial block, a region, a soil class).
 #' @param alpha  The nominal miscoverage, for the verdict.
 #' @return An object of class "picp_report".
+#' @export
 picp_report <- function(obs, lower, upper, group = NULL, alpha = 0.1) {
   overall <- picp(obs, lower, upper)
   by_group <- NULL
@@ -267,6 +270,7 @@ print.conformal_cal <- function(x, ...) {
 #' @param difficulty Optional column name holding a difficulty score.
 #' @param group    Optional column name to break coverage down by.
 #' @return A picp_report over the pooled out-of-calibration points.
+#' @export
 conformal_cv <- function(pred_obs, alpha = 0.1, difficulty = NULL,
                          group = NULL) {
   need <- c("fold", "obs", "pred")
@@ -352,6 +356,7 @@ conformal_cv <- function(pred_obs, alpha = 0.1, difficulty = NULL,
 #'   claim a certainty the data never gave.
 #' @param seed       Seed of the split.
 #' @return A `conformal_scaled` (also a `conformal_cal`).
+#' @export
 conformal_scaled_calibrate <- function(obs, pred, covariates, alpha = 0.1,
                                        fit_frac = 0.5, floor_frac = 0.05,
                                        seed = 42L) {
@@ -421,6 +426,7 @@ conformal_scaled_calibrate <- function(obs, pred, covariates, alpha = 0.1,
 #'   predictions -- the level, and the dissimilarity index computed the same
 #'   way as the calibration points' was.
 #' @param lower_limit Floor of the lower bound (0 for a stock).
+#' @export
 conformal_scaled_interval <- function(cal, pred, covariates, lower_limit = -Inf) {
   stopifnot(inherits(cal, "conformal_scaled"))
   half <- cal$q * .conformal_scale(cal$coef, cal$floor, covariates)
@@ -485,6 +491,7 @@ print.conformal_scaled <- function(x, ...) {
 #' @param role      Which role to keep. "validation" is the point of this.
 #' @return A tibble with sample_id, obs, pred (the seed ensemble's median), and
 #'   n_seeds; or NULL when the run wrote no usable predictions.
+#' @export
 cv_residuals <- function(run_dir, config_id, role = "validation") {
   pred_dir <- file.path(run_dir, "predictions")
   files <- list.files(pred_dir,
@@ -544,6 +551,7 @@ cv_residuals <- function(run_dir, config_id, role = "validation") {
 #'   configuration; FALSE says why and returns NULL.
 #' @return What cv_residuals() returns, with the run's own config_id attached
 #'   as attribute "config_id".
+#' @export
 cv_residuals_for_config <- function(run_dir, cfg_row, required = TRUE) {
   fail <- function(reason) {
     if (required) stop(reason, call. = FALSE)

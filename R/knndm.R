@@ -69,6 +69,7 @@
 #' @param crs   The CRS they are in. 4326 (lon/lat WGS84) by default.
 #' @param to    Target projection. Mollweide by default: equal-area, global.
 #' @return A two-column matrix of projected coordinates, in metres.
+#' @export
 project_xy <- function(x, y, crs = 4326,
                        to = "+proj=moll +lon_0=0 +datum=WGS84 +units=m") {
   .need_knndm()
@@ -97,6 +98,7 @@ project_xy <- function(x, y, crs = 4326,
 #' @param ...        Passed to CAST::knndm() -- `maxp`, `clustering`,
 #'   `samplesize`, `modeldomain`, `space`.
 #' @return A fold_plan.
+#' @export
 knndm_folds <- function(meta, k = 5L, predpoints = NULL, test_ids = NULL,
                         hold_out_test = FALSE, crs = 4326,
                         project_to = "+proj=moll +lon_0=0 +datum=WGS84 +units=m",
@@ -233,6 +235,7 @@ knndm_folds <- function(meta, k = 5L, predpoints = NULL, test_ids = NULL,
 #' @param raster A SpatRaster (terra) covering the prediction area.
 #' @param size   How many points to draw.
 #' @return A data frame with x and y, in the raster's own CRS.
+#' @export
 prediction_sample <- function(raster, size = 5000L) {
   if (!requireNamespace("terra", quietly = TRUE)) {
     stop("prediction_sample() needs the 'terra' package.", call. = FALSE)

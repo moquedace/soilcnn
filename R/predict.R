@@ -54,6 +54,7 @@
 #'
 #' @param model A dual_branch_cnn.
 #' @return A logical per branch.
+#' @export
 fcn_supported <- function(model) {
   br <- if (model$n_branches == 1L) list(model$branch1) else list(model$branch1, model$branch2)
   vapply(br, function(b) {
@@ -311,6 +312,7 @@ fcn_predict_strip <- function(model, x_strip, centres, engine = c("fcn", "patch"
 #' @param probe   Predict the profiles' own pixels first and compare with the
 #'   final run's stored predictions (see above). A failure stops the map.
 #' @return A `dsm_prediction`, printed.
+#' @export
 dsm_predict <- function(final, data, rasters = NULL, qc_table = NULL, extent = NULL,
                         config = NULL, calibration = NULL, alpha = 0.1, clamp = NULL,
                         bands = NULL, engine = c("auto", "patch"), output_dir = NULL,

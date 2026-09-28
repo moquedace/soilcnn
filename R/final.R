@@ -118,6 +118,7 @@
 #'   resume = TRUE to finish an interrupted fit.
 #' @param resume     Skip seeds whose checkpoint and record are already there.
 #' @return A `dsm_final`, printed with the report.
+#' @export
 dsm_final <- function(tuning, data = NULL, config = "auto",
                       rule = c("one_se", "rank1"), metric = "val_ccc",
                       seeds = 10L, validation_frac = 0.15, training = list(),
@@ -386,6 +387,7 @@ print.dsm_final <- function(x, ...) {
 #' @param tuning_dir The tuning run it was selected from.
 #' @param conformal_alpha As the run was calibrated; stage 04 used c(0.1, 0.05).
 #' @return A `dsm_final` describing the run, printed with the declaration.
+#' @export
 dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05),
                              verbose = TRUE) {
   summ_path <- file.path(run_dir, "comparison", "final_run_summary.rds")

@@ -16,3 +16,9 @@
 *.png    binary
 *.svg    text eol=lf
 *.zip    binary
+
+# Package metadata: no extension, so named one by one
+DESCRIPTION    text eol=lf
+NAMESPACE      text eol=lf
+LICENSE        text eol=lf
+.Rbuildignore  text eol=lf

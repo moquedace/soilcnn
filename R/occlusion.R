@@ -149,6 +149,7 @@ occlude_patch_array <- function(x, mask, method = c("permute", "zero"),
 #' @param clamp     Plausible range of the target, as in predict_loader().
 #'   The default floors at zero, which suits a stock and not a difference.
 #' @return An object of class "spatial_occlusion".
+#' @export
 spatial_occlusion <- function(model, cache, cfg, points_valid,
                               role = "validation", transform = identity,
                               device, method = c("permute", "zero"),
@@ -258,6 +259,7 @@ spatial_occlusion <- function(model, cache, cfg, points_valid,
 }
 
 #' Say what the occlusion found, including when it found nothing.
+#' @export
 print.spatial_occlusion <- function(x, ...) {
   cat("\nSpatial occlusion --", x$role, "| windows",
       paste(x$window_sizes, collapse = "+"), "| method", x$method, "\n")
@@ -349,6 +351,7 @@ print.spatial_occlusion <- function(x, ...) {
 #' @param config_id Which config.
 #' @param fold,seed_i Which unit of it.
 #' @param ...       Passed to spatial_occlusion().
+#' @export
 occlusion_report <- function(run_dir, data, config_id, fold = 1L, seed_i = 1L,
                              role = "validation", transform = identity,
                              device, ...) {

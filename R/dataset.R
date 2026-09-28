@@ -19,6 +19,7 @@
 # ── naming ────────────────────────────────────────────────────────────────────
 
 #' Storage key for a window size. Also the filename stem in the patch store.
+#' @export
 patch_window_key <- function(window_size) {
   paste0("w", sprintf("%02d", as.integer(window_size)))
 }
@@ -47,6 +48,7 @@ patch_window_key <- function(window_size) {
 # tensor the model actually consumes.
 
 #' Path of a window file inside a patch store.
+#' @export
 patch_window_path <- function(patch_dir, window_size) {
   file.path(patch_dir, paste0("patches_", patch_window_key(window_size), ".rds"))
 }
@@ -134,6 +136,7 @@ load_patch_window <- function(patch_dir, window_size, expect_points = NULL,
 #'   windows the manifest says were extracted.
 #' @param verbose      Print what was loaded and how big it is.
 #' @return list(windows, meta, manifest, predictors, n_channels)
+#' @export
 load_patch_store <- function(patch_dir, window_sizes = NULL, verbose = TRUE) {
 
   manifest_path <- file.path(patch_dir, "patch_manifest.rds")
@@ -343,6 +346,7 @@ check_store_spec <- function(store, predictors = NULL, windows = NULL,
 #' @param points Point-value table (see .point_contract).
 #' @param meta   The patch store's meta tibble.
 #' @return `points` reordered and subset to exactly match `meta` row for row.
+#' @export
 align_points_to_meta <- function(points, meta) {
   check_point_contract(points, need = "sample_id", what = "points")
   check_point_contract(meta,   need = "sample_id", what = "patch store meta")
@@ -402,6 +406,7 @@ align_points_to_meta <- function(points, meta) {
 #'   from the fold's training rows, which is the point of the whole design.
 #' @return list(cache, scaling) where `cache[[role]][[key]]` is a tensor and
 #'   `cache[[role]]$y` the target column.
+#' @export
 build_fold_cache <- function(store, points, type_table, index,
                              window_sizes = NULL, scaling = NULL,
                              verbose = TRUE) {
@@ -514,6 +519,7 @@ build_fold_cache <- function(store, points, type_table, index,
 #' @param features   Any of "centre", "window_mean".
 #' @return Named list by role: list(x = matrix, y = numeric). Column names are
 #'   `<predictor>` for the centre and `<predictor>_mean_w<W>` for the means.
+#' @export
 fold_table_view <- function(cache, predictors, windows = NULL,
                             features = c("centre", "window_mean")) {
   features <- match.arg(features, several.ok = TRUE)
@@ -591,6 +597,7 @@ fold_table_view <- function(cache, predictors, windows = NULL,
   out
 }
 
+#' @export
 fold_points_valid <- function(store, index) {
   setNames(lapply(names(index), function(r) store$meta[index[[r]], , drop = FALSE]),
            names(index))

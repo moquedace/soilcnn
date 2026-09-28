@@ -120,6 +120,7 @@ caret_grid <- function(method, tune_length = 6L, seed = 42L, x, y,
 #' @param ...     Extra arguments forwarded to every caret::train() call --
 #'   this is where a model's own arguments go (num.threads, nthread, ...).
 #' @return A model_spec with input == "table".
+#' @export
 caret_spec <- function(method, name = method, search = c("grid", "random"),
                        ...) {
   .need_caret()

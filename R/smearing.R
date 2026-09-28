@@ -98,6 +98,7 @@
 #'   above is specific to an exponential back-transform, and applying it to a
 #'   square root or an identity would scale a number that needs no scaling.
 #' @return An object of class "smearing_cal".
+#' @export
 smearing_factor <- function(obs_transform, pred_transform,
                             transform = c("log1p", "log")) {
   transform <- match.arg(transform)
@@ -170,6 +171,7 @@ smearing_factor <- function(obs_transform, pred_transform,
 #' @param lower_limit Floor, e.g. 0 for a stock. Applied after the correction.
 #' @return Numeric, in native units: an estimate of E[y | x] rather than of its
 #'   median.
+#' @export
 smear <- function(pred_transform, cal, lower_limit = 0) {
   s <- if (inherits(cal, "smearing_cal")) cal$s else as.numeric(cal)
   tr <- if (inherits(cal, "smearing_cal")) cal$transform else "log1p"
@@ -256,6 +258,7 @@ print.smearing_cal <- function(x, ...) {
 #' @param config_id Which config's residuals.
 #' @param role      Which role. "validation" is the point.
 #' @return A smearing_cal, or NULL when the run wrote no usable predictions.
+#' @export
 smearing_from_run <- function(run_dir, config_id, role = "validation",
                               transform = "log1p") {
   files <- list.files(

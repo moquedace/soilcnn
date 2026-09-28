@@ -38,6 +38,7 @@
 #'
 #' @param obs,pred Numeric vectors of the same length.
 #' @return A single numeric, or NA when fewer than two finite pairs remain.
+#' @export
 ccc <- function(obs, pred) {
   keep <- is.finite(obs) & is.finite(pred)
   obs  <- obs[keep]
@@ -64,6 +65,7 @@ ccc <- function(obs, pred) {
 #' @param pred Numeric vector of predicted values (same length as obs).
 #' @return A one-row tibble with columns: n, ccc, r2, mae, nse, rmse, rpd,
 #'   mqi, bias (signed, native units) and bias_pct (relative to mean(obs)).
+#' @export
 calc_metrics <- function(obs, pred) {
   obs  <- as.numeric(obs)
   pred <- as.numeric(pred)
