@@ -1399,6 +1399,18 @@ print.dsm_prediction <- function(x, ...) {
   if (is.null(mi)) NA_real_ else as.numeric(mi[["rss"]]) / 1e9
 }
 
+# Its private memory, in GB: what it has committed, in RAM or not. Windows
+# moves a process's pages out of its working set when another program needs
+# the RAM -- over Brazil one worker's working set fell 2.5 GB between two
+# units while the PC was in use (P5) -- so a leak can hide from the working
+# set, but not from the private memory. NA where ps does not report it (it
+# does on Windows).
+.predict_private_gb <- function() {
+  if (!requireNamespace("ps", quietly = TRUE)) return(NA_real_)
+  mi <- tryCatch(ps::ps_memory_info(ps::ps_handle()), error = function(e) NULL)
+  if (is.null(mi) || !"private" %in% names(mi)) NA_real_ else as.numeric(mi[["private"]]) / 1e9
+}
+
 .predict_worker <- function(job) {
   env <- .predict_worker_setup(job)
   on.exit(for (s in env$srcs) try(terra::readStop(s), silent = TRUE), add = TRUE)
@@ -1434,6 +1446,7 @@ print.dsm_prediction <- function(x, ...) {
       # resumed map starts new ones, so memory is followed by process.
       rec$pid     <- Sys.getpid()
       rec$rss_gb  <- rss
+      rec$private_gb <- .predict_private_gb()
       # The record LAST: its existence is what says the unit is finished.
       safe_save_rds(rec, done, compress = FALSE)
       s <- rec$seconds
@@ -2072,6 +2085,7 @@ print.dsm_prediction <- function(x, ...) {
     valid_px_per_s = r$n_valid / max(1e-9, r$total_s), worker = r$worker %||% NA_integer_,
     threads = r$threads %||% NA_integer_, step_rows = r$step_rows, chunk_cols = r$chunk_cols,
     peak_gb = r$peak_gb %||% NA_real_, rss_gb = r$rss_gb %||% NA_real_,
+    private_gb = r$private_gb %||% NA_real_,
     pid = r$pid %||% NA_integer_,
     finished_at = as.character(r$finished_at))))
 }

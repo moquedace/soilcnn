@@ -270,6 +270,7 @@ ok["a_worker_over_its_memory_gives_way_to_a_fresh_one"] <-
 ok["each_unit_names_its_process_and_each_exit_leaves_a_note"] <-
   length(unique(map_rc$units$pid)) == 3L && !anyNA(map_rc$units$pid) &&
   all(is.finite(map_rc$units$rss_gb)) && all(map_rc$units$rss_gb > 0) &&
+  (!identical(.Platform$OS.type, "windows") || isTRUE(all(map_rc$units$private_gb > 0))) &&
   length(Sys.glob(file.path(map_rc$run_dir, "units", "*", "recycled.rds"))) == 3L
 
 # ── 4. a part of the map, by the other engine ─────────────────────────────────
