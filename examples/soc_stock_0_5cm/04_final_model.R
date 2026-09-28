@@ -94,9 +94,9 @@ target_label <- "soc_stock_0_5cm"
 target_unit  <- "ton_ha"
 
 # Which tuning run to use. "latest" takes the newest FINISHED one (by the time
-# its ranking was written), or name a run_id. Check what it resolves to below:
-# on 2026-09-28 it is soc_0_5cm_design_spatial, not soc_0_5cm_20260916_232318,
-# the run the deployed model was selected from.
+# its ranking was written) -- what a fit right after stage 03 wants -- or name
+# a run_id. What it resolves to is printed below, beside the tuning run the
+# final model stage 05 maps now was selected from.
 tuning_run_id <- "latest"
 
 # Which configs to train as the final model. Each is trained with EVERY seed.
@@ -264,6 +264,26 @@ if (identical(tuning_run_id, "latest")) {
     label = "tuning_run_id")
 }
 tuning_dir <- file.path(output_tuning_dir, tuning_run_id)
+
+# THE FINAL MODEL STAGE 05 MAPS NOW, beside the run this fit comes from. The
+# fit takes its place, and "latest" need not be the run it was selected from:
+# on 2026-09-28 it resolved to soc_0_5cm_design_spatial, while the deployed
+# model came from soc_0_5cm_20260916_232318. Said here, at the start of an
+# hours-long fit, rather than found out from the next map.
+mapped_run <- latest_run_dir(final_model_dir, prefix = "final_",
+                             require_file = file.path("comparison", "final_run_summary.rds"),
+                             label = "final model stage 05 maps now", on_none = "null")
+if (!is.null(mapped_run)) {
+  mapped_from <- readRDS(file.path(final_model_dir, mapped_run, "comparison",
+                                   "final_run_summary.rds"))$tuning_run_id
+  message(if (identical(mapped_from, tuning_run_id)) {
+    paste0("  It was selected from this same tuning run. This fit refits it under ",
+           "new seeds and threads, and takes its place in stage 05.")
+  } else {
+    paste0("  It was selected from ", mapped_from, "; this fit comes from ",
+           tuning_run_id, ", and takes its place in stage 05.")
+  })
+}
 
 # ── The data ──────────────────────────────────────────────────────────────────
 #
