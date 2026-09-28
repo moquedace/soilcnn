@@ -49,6 +49,8 @@
 #' @param windows      Windows to load. NULL loads every window the store has,
 #'   which is the wrong default when the grid needs two of five -- pass the
 #'   windows the grid actually uses and the store reads only those.
+#'   integer(0) loads none: the store's table alone, from which a fold cache
+#'   reads each window it needs from its file (dsm_final()'s workers do).
 #' @param cell_size    Raster resolution in x/y units. NULL reads it from
 #'   `raster_table`, which is the only source that cannot drift.
 #' @param raster_table Path to raster_table_used.csv, for `cell_size`.
@@ -190,7 +192,9 @@ print.dsm_data <- function(x, ...) {
   cat("<dsm_data>\n")
   cat("  points     : ", format(nrow(x$store$meta), big.mark = ","), "\n", sep = "")
   cat("  channels   : ", x$store$n_channels, "\n", sep = "")
-  cat("  windows    : ", paste(x$store$window_sizes, collapse = ", "), "\n", sep = "")
+  cat("  windows    : ",
+      if (length(x$store$window_sizes)) paste(x$store$window_sizes, collapse = ", ")
+      else "none loaded (the table only)", "\n", sep = "")
   cat("  target     : ", x$target_col %||% "(not recorded)", "\n", sep = "")
   cat("  transform  : ",
       if (is.null(x$transform)) "(not recorded)" else x$transform$name, "\n", sep = "")

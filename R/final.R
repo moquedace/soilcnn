@@ -677,13 +677,25 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
   invisible(old)
 }
 
-# What a worker needs in memory, measured by T2: ~10 GB peak per process with
-# 1.26 GB of loaded windows (as doubles) -- a fixed ~1.5 GB (R, torch) and ~7x
-# the windows, the fold cache and its copies. An estimate, and said to be one:
-# the real peak of every worker is measured and reported beside it.
+# WHAT A WORKER NEEDS IN MEMORY, from T7's trace (2026-09-28): the deployed
+# cfg_003 on the dev store, private memory phase by phase.
+#
+#   R and torch, before anything is read      1.1 GB
+#   the fold cache                            half the windows as doubles
+#   what training and the final evaluation    4.7 GB, held from the first
+#   keep in mimalloc's pool                   unit on and reused after it
+#
+# and, while each window is read, its R array (doubles) beside the cache built
+# so far. The copies the cache used to leave behind -- 2.4 GB there, about 4x
+# the cache -- are gone (build_fold_cache()), and with them T2's 7x rule.
+# An estimate, and said to be one: the pool is the deployed configuration's
+# (a heavier network keeps more), and every worker's real peak is measured
+# and reported beside it.
 .final_worker_gb <- function(store, windows) {
-  win_gb <- nrow(store$meta) * store$n_channels * sum(as.numeric(windows)^2) * 8 / 1e9
-  1.5 + 7 * win_gb
+  per_window <- nrow(store$meta) * store$n_channels * as.numeric(windows)^2 * 8 / 1e9
+  cache <- sum(per_window) / 2
+  max(1.1 + cache + max(per_window),      # reading the largest window
+      1.1 + cache + 4.7)                  # training
 }
 
 .final_train_units <- function(todo, selected, data, index, scaling, windows,
@@ -811,6 +823,10 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
   # takes pages out of a working set when the PC needs them, and a leak hides
   # there (P5). Written after the setup and after every unit, so a worker that
   # dies leaves its trace up to its last unit.
+  #
+  # The phases: start (the framework loaded), store_loaded (the table: no
+  # window is loaded here), fold_cache (every role of every window, read
+  # from the store's files), then each unit's.
   t0 <- Sys.time()
   trace <- list()
   mark <- function(phase, unit_id = NA_character_, epoch = NA_integer_) {
@@ -833,8 +849,12 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
   }
 
   mark("start")
+  # THE TABLE ONLY. The fold cache reads each window from the store's file and
+  # keeps only the roles cut from it; a window loaded here as a tensor would be
+  # released once the cache existed, and mimalloc keeps a block that size
+  # (T7: the store's raw windows were 0.61 GB of the 2.4 left behind).
   data <- dsm_load(job$patch_dir, points = job$points, type_table = job$type_table,
-                   windows = job$windows, cell_size = job$cell_size,
+                   windows = integer(0), cell_size = job$cell_size,
                    target_col = job$target_col, verbose = FALSE)
   mark("store_loaded")
   fold <- build_fold_cache(data$store, data$points, data$type_table, job$index,
@@ -843,9 +863,7 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
   pv    <- fold_points_valid(data$store, job$index)
   n_ch  <- data$store$n_channels
   cache <- fold$cache
-  data$store$windows <- NULL
-  invisible(gc(verbose = FALSE))
-  mark("store_dropped")
+  rm(fold)
   save_trace()
   device <- torch::torch_device("cpu")
 

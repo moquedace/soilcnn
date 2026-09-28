@@ -91,12 +91,56 @@ save_patch_window <- function(arr, patch_dir, window_size) {
   )
 }
 
-#' Read one window and hand back the float32 tensor the model consumes.
-#'
-#' The double array is released before returning, so the caller is left
-#' holding half the memory it took to get there.
+# ── from the store's arrays to float32, without the copies ───────────────────
+#
+# A WINDOW USED TO LEAVE ABOUT FOUR TIMES ITSELF BEHIND. T7 (2026-09-28) traced
+# a training worker on the dev store's 15x15 window, 1.21 GB as doubles:
+# loading it kept +1.75 GB of private memory -- the float tensor's 0.61, and
+# the double copy torch_tensor() makes of the whole array before it casts --
+# and the fold cache kept +1.25 -- its own 0.61, and the clone it scaled. With
+# the store's raw tensor released after that, ~2.4 GB were blocks nothing
+# used: mimalloc under libtorch here neither returns nor reuses a freed block
+# that size (T6), and the training that followed allocated past them. On the
+# full data set, with windows ~11x larger, that is ~27 GB a worker.
+#
+# So a window is copied a slab of points at a time into a tensor made once,
+# and every copy along the way is small enough to be reused. The values are
+# the same element for element: the cast from double to float32 is
+# elementwise, and so is the scaling applied after it. tests/test_fold_cache.R
+# compares the tensors EXACTLY with the path this replaced.
+#
+# `src` is an R array (a window as the store keeps it) or a float tensor (a
+# window already loaded), `rows` which of its points to take, in that order.
+# The result is always a tensor of its own. That matters beyond memory: a role
+# cut as x[1:24, , , ] can be a view of the store's raw tensor, and the
+# scaling that follows is done in place.
+#
+# options(dsm.slab_mb = ) sets the slab, 16 MB by default: T6 found blocks of
+# ~20 MB reused, and blocks of 64-100 MB only sometimes.
+.rows_to_float <- function(src, rows = NULL, slab_mb = getOption("dsm.slab_mb", 16)) {
+  is_tensor <- inherits(src, "torch_tensor")
+  d <- if (is_tensor) as.integer(src$shape) else dim(src)
+  if (is.null(rows)) rows <- seq_len(d[1])
+  n   <- length(rows)
+  out <- torch::torch_empty(c(n, d[2], d[3], d[4]), dtype = torch::torch_float())
+  if (n == 0L) return(out)
+  per_point <- prod(as.numeric(d[-1])) * (if (is_tensor) 4 else 8)
+  slab <- max(1L, as.integer(floor(slab_mb * 1e6 / per_point)))
+  for (s in seq.int(1L, n, by = slab)) {
+    e <- min(s + slab - 1L, n)
+    part <- if (is_tensor) {
+      src[rows[s:e], , , , drop = FALSE]
+    } else {
+      torch::torch_tensor(src[rows[s:e], , , , drop = FALSE], dtype = torch::torch_float())
+    }
+    out[s:e, , , ] <- part
+  }
+  out
+}
+
+#' Read one window's array from the store, checked against what it must be.
 #' @noRd
-load_patch_window <- function(patch_dir, window_size, expect_points = NULL,
+.read_patch_array <- function(patch_dir, window_size, expect_points = NULL,
                               expect_channels = NULL) {
   f <- patch_window_path(patch_dir, window_size)
   if (!file.exists(f)) stop("Missing window file: ", f, call. = FALSE)
@@ -120,8 +164,18 @@ load_patch_window <- function(patch_dir, window_size, expect_points = NULL,
     stop(basename(f), " holds a ", d[3], "x", d[4], " window, expected ",
          window_size, "x", window_size, call. = FALSE)
   }
+  arr
+}
 
-  x <- torch::torch_tensor(arr, dtype = torch::torch_float())
+#' Read one window and hand back the float32 tensor the model consumes.
+#'
+#' Filled a slab at a time (.rows_to_float()), and the double array released
+#' before returning: the caller holds the float tensor and nothing else.
+#' @noRd
+load_patch_window <- function(patch_dir, window_size, expect_points = NULL,
+                              expect_channels = NULL) {
+  arr <- .read_patch_array(patch_dir, window_size, expect_points, expect_channels)
+  x <- .rows_to_float(arr)
   rm(arr); gc(verbose = FALSE)
   x
 }
@@ -136,9 +190,12 @@ load_patch_window <- function(patch_dir, window_size, expect_points = NULL,
 #' @param patch_dir    Directory holding patches_wNN.pt, patch_meta.csv and
 #'   patch_manifest.rds.
 #' @param window_sizes Integer vector of windows to load. NULL loads all the
-#'   windows the manifest says were extracted.
+#'   windows the manifest says were extracted; integer(0) loads none, and the
+#'   store is its table -- build_fold_cache() then reads each window it needs
+#'   from its file.
 #' @param verbose      Print what was loaded and how big it is.
-#' @return list(windows, meta, manifest, predictors, n_channels)
+#' @return list(windows, meta, manifest, predictors, n_channels, window_sizes,
+#'   patch_dir)
 #' @noRd
 load_patch_store <- function(patch_dir, window_sizes = NULL, verbose = TRUE) {
 
@@ -197,7 +254,9 @@ load_patch_store <- function(patch_dir, window_sizes = NULL, verbose = TRUE) {
 
   if (verbose) {
     message("Loading patch store: ", nrow(meta), " points x ", n_channels,
-            " channels | windows ", paste(window_sizes, collapse = ", "))
+            " channels | windows ",
+            if (length(window_sizes)) paste(window_sizes, collapse = ", ")
+            else "none (the table only)")
   }
 
   windows <- list()
@@ -218,7 +277,7 @@ load_patch_store <- function(patch_dir, window_sizes = NULL, verbose = TRUE) {
 
   list(windows = windows, meta = meta, manifest = manifest,
        predictors = predictors, n_channels = n_channels,
-       window_sizes = window_sizes)
+       window_sizes = window_sizes, patch_dir = patch_dir)
 }
 
 # ── split as an index ─────────────────────────────────────────────────────────
@@ -406,7 +465,8 @@ align_points_to_meta <- function(points, meta) {
 #' @param type_table   Tibble with predictor / is_dummy / is_percentage, in
 #'   channel order.
 #' @param index        One fold of a fold_plan: named list of row positions.
-#' @param window_sizes Windows to include (default: all loaded).
+#' @param window_sizes Windows to include (default: all loaded). One the store
+#'   has not loaded is read from its file.
 #' @param scaling      Optional precomputed scaling; when NULL it is fitted
 #'   from the fold's training rows, which is the point of the whole design.
 #' @return list(cache, scaling) where `cache[[role]][[key]]` is a tensor and
@@ -452,17 +512,31 @@ build_fold_cache <- function(store, points, type_table, index,
   for (w in window_sizes) {
     key <- patch_window_key(w)
     x   <- store$windows[[key]]
-    if (is.null(x)) stop("Window ", w, " is not loaded in this store.",
-                         call. = FALSE)
-
-    # Clone before scaling in place: the store's raw tensor must survive, since
-    # the next fold needs it unscaled. The clone is freed as soon as the
-    # per-role slices are taken.
-    xs <- scale_patches(x$clone(), scaling, inplace = TRUE)
-    for (r in roles) {
-      cache[[r]][[key]] <- xs[index[[r]], , , , drop = FALSE]
+    # NOT LOADED, SO READ FROM THE STORE'S FILE. dsm_final()'s workers load the
+    # table alone (dsm_load(windows = integer(0))) and cut their roles straight
+    # from the array, which then goes: a window held as a tensor and released
+    # once the cache exists is one more block mimalloc keeps (T7). The array
+    # passes the checks a load makes.
+    if (is.null(x)) {
+      if (is.null(store$patch_dir)) {
+        stop("Window ", w, " is not loaded in this store, and the store does not ",
+             "say where its files are.", call. = FALSE)
+      }
+      x <- .read_patch_array(store$patch_dir, w, expect_points = nrow(store$meta),
+                             expect_channels = store$n_channels)
     }
-    rm(xs); gc(verbose = FALSE)
+
+    # Each role is gathered into a tensor of its own and scaled THERE, in
+    # place. The store's raw tensor is never written -- the next fold needs it
+    # unscaled -- and a role is a new tensor even where x[1:24, , , ] would be
+    # a view of it (.rows_to_float()). This replaced a clone of the whole
+    # window, scaled, then sliced: the same numbers, and a window's worth of
+    # memory left behind (T7).
+    for (r in roles) {
+      cache[[r]][[key]] <- scale_patches(.rows_to_float(x, index[[r]]), scaling,
+                                         inplace = TRUE)
+    }
+    rm(x); gc(verbose = FALSE)
 
     if (verbose) {
       message(sprintf("  %s scaled and split: %s",

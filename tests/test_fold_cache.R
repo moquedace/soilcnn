@@ -11,7 +11,8 @@
 # store_complete verdict (refused since 2026-09-19), of the patch-centre check
 # (the one diagnostic that can tell a store built from the wrong rasters), and
 # of two torch helpers -- clone_state_dict() and set_optimizer_lr() -- that
-# were used on every training path and asserted nowhere.
+# were used on every training path and asserted nowhere. And since T7, of the
+# cache being the same tensors without the copies it used to leave behind.
 #
 # Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tests/test_fold_cache.R")
 
@@ -187,11 +188,65 @@ set_optimizer_lr(opt, 0.001)
 ok["set_optimizer_lr_reaches_every_param_group"] <-
   all(vapply(opt$param_groups, function(g) g$lr, numeric(1)) == 0.001)
 
+# ── 6. the same tensors, without the copies they left behind ─────────────────
+#
+# T7 (2026-09-28): a training worker's setup kept about 4x its cache in
+# memory -- the double copy torch_tensor() makes of a whole window, the clone
+# the cache scaled, the store's raw windows -- because mimalloc under libtorch
+# here neither returns nor reuses a block that size (T6). A window is now cast
+# a slab of points at a time, and each role gathered into a tensor of its own
+# before it is scaled. The numbers must not move: the cast and the scaling are
+# elementwise, so every tensor is compared EXACTLY -- with the path this
+# replaced, and between a cache cut from the loaded store and one cut straight
+# from the store's files (dsm_final()'s workers). Slabs of a few points
+# (options(dsm.slab_mb)) put slab boundaries all through 40 points, and a
+# last slab of one row.
+old_opt <- options(dsm.slab_mb = 0.0005)     # 500 bytes: 2 points as doubles, 4 as floats
+reordered <- list(train = c(3L, 17L, 1L, 30:40, 5L), validation = c(2L, 4L, 6:16, 18:29))
+x_arr    <- readRDS(patch_window_path(store_dir, win))
+x_tensor <- store$windows$w03
+
+ok["a_window_cast_in_slabs_is_the_window_cast_whole"] <-
+  torch::torch_equal(.rows_to_float(x_arr), torch::torch_tensor(x_arr, dtype = torch::torch_float()))
+ok["rows_gathered_in_slabs_are_the_rows_gathered_at_once"] <-
+  torch::torch_equal(.rows_to_float(x_tensor, reordered$train),
+                     x_tensor[reordered$train, , , , drop = FALSE])
+ok["no_rows_is_an_empty_tensor_of_the_window_shape"] <-
+  identical(as.integer(.rows_to_float(x_arr, integer(0))$shape), c(0L, n_ch, win, win))
+
+# The path this replaced, written out: the whole window cast, cloned, scaled,
+# and only then sliced.
+fc_new <- suppressMessages(build_fold_cache(store, points, type_table, reordered))
+old_xs <- scale_patches(torch::torch_tensor(x_arr, dtype = torch::torch_float())$clone(),
+                        fc_new$scaling, inplace = TRUE)
+ok["the_cache_is_exactly_what_the_old_path_computed"] <-
+  all(vapply(names(reordered), function(r)
+    torch::torch_equal(fc_new$cache[[r]]$w03, old_xs[reordered[[r]], , , , drop = FALSE]),
+    logical(1)))
+
+# The table only -- what dsm_final()'s workers load -- and every window read
+# from its file by the cache.
+store_table <- load_patch_store(store_dir, window_sizes = integer(0), verbose = FALSE)
+ok["a_store_loaded_with_no_window_is_its_table"] <-
+  length(store_table$windows) == 0L && nrow(store_table$meta) == n_pts &&
+  identical(store_table$patch_dir, store_dir)
+fc_files <- suppressMessages(build_fold_cache(store_table, points, type_table, reordered,
+                                              window_sizes = win))
+ok["the_cache_from_the_files_is_the_cache_from_the_loaded_store"] <-
+  all(vapply(names(reordered), function(r)
+    torch::torch_equal(fc_files$cache[[r]]$w03, fc_new$cache[[r]]$w03) &&
+      torch::torch_equal(fc_files$cache[[r]]$y, fc_new$cache[[r]]$y), logical(1)))
+ok["the_store_is_still_raw_after_both"] <-
+  isTRUE(all.equal(as.array(store$windows$w03), x_arr, tolerance = 1e-6,
+                   check.attributes = FALSE))
+options(old_opt)
+
 unlink(store_dir, recursive = TRUE, force = TRUE)
 
 cat(sprintf("  scaling                  : centre %.3f from 24 training rows (all-row mean %.3f)\n",
             sc$center[1], mean(points$pred_1)))
 cat("  store_complete = FALSE   : refused at load\n")
 cat("  patch centres            : one moved value -> one mismatch, in its channel\n")
+cat("  cache without copies     : the old path's tensors, exactly, from the store and from its files\n")
 
 .report(ok, "test_fold_cache")

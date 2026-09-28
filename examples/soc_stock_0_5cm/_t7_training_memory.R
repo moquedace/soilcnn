@@ -30,11 +30,16 @@
 # its private memory, its peak working set and R's own heap:
 #
 #   start          the framework loaded, nothing else
-#   store_loaded   dsm_load(): the windows as float tensors
-#   fold_cache     build_fold_cache(): scaled, and split by role
-#   store_dropped  the store's raw windows released
+#   store_loaded   dsm_load(): the store's table (the first run, at 995eba9,
+#                  loaded the windows here as float tensors)
+#   fold_cache     build_fold_cache(): every role of every window, scaled
 #   and per unit   unit_start (its loaders built), every epoch, unit_trained,
 #                  unit_released (after the unit's collection)
+#
+# The first run found ~2.4 GB of copies the setup left behind -- about 4x the
+# cache -- and the worker no longer makes them. Every run is written as
+# t7_trace_<commit>.csv and printed beside the newest trace already on disk,
+# so a change to the worker is read as a difference, not as two tables.
 #
 # One worker of 5 threads, the shape of a real fit; the deployed
 # configuration; three seeds of 30 epochs each, without early stopping. Three
@@ -45,13 +50,16 @@
 # WHAT IT PRINTS: the level after each setup phase and what each phase added;
 # per unit, the level at its start, at epochs 1, 10 and the last, and after
 # it, with the slope per epoch; the level each unit leaves for the next; the
-# phase that set the peak. The checks say only that the measurement is
-# complete and that the original tuning run was not touched: what the numbers
-# mean is read from the tables.
+# phase that set the peak. The checks say that the measurement is complete,
+# that the original tuning run was not touched, and -- since the worker's
+# setup changed between runs -- that no number did: each seed must give
+# exactly what the newest earlier run with the same seeds, epochs, threads and
+# configuration gave (t7_04). What the memory numbers mean is read from the
+# tables.
 #
 # WHAT IT WRITES, all under capability_sweep/t7_memory/: a final run of three
 # seeds (three checkpoints, their tables and logs), the copy of the tuning run
-# it was fitted from, the trace and the checks.
+# it was fitted from, the trace (t7_trace_<commit>.csv) and the checks.
 #
 # COST: ~10 min.
 #
@@ -187,9 +195,9 @@ after <- fingerprint()
 
 trace_file <- file.path(run_dir, "logs", "worker_01_mem_trace.rds")
 tr <- if (file.exists(trace_file)) readRDS(trace_file) else NULL
-setup_phases <- c("start", "store_loaded", "fold_cache", "store_dropped")
+setup_phases <- c("start", "store_loaded", "fold_cache")
 
-required <- c("t7_01", "t7_02", "t7_03")
+required <- c("t7_01", "t7_02", "t7_03", "t7_04")
 L <- check_ledger("T7")
 
 ledger_check(L, "t7_01", "the fit finished every seed",
@@ -218,6 +226,48 @@ ledger_check(L, "t7_03", "the original tuning run is untouched",
              identical(before$md5, after$md5) && identical(before$n_files, after$n_files),
              sprintf("%d file(s) fingerprinted | %d file(s) in the run before, %d after",
                      length(before$md5), before$n_files, after$n_files))
+
+# THE SAME NUMBERS AS THE RUN BEFORE. The tensors a worker trains from are the
+# same whichever way its setup builds them (tests/test_fold_cache.R compares
+# them exactly), so a seed at the same epochs and threads must give what the
+# same seed gave before. Compared through the per-seed tables both runs
+# assembled from their CSVs, hence 1e-12 and not 0 (P3's reason). No earlier
+# run to compare with is a failure that says so, not a skip.
+ledger_check(L, "t7_04", "each seed gives exactly what the run before gave", {
+  if (inherits(fin, "error")) {
+    list(ok = FALSE, measured = "the fit did not finish")
+  } else {
+    dirs <- list.dirs(file.path(t7_dir, "final"), recursive = FALSE, full.names = TRUE)
+    dirs <- dirs[basename(dirs) != run_id]
+    cand <- Filter(Negate(is.null), lapply(dirs, function(d) {
+      f <- file.path(d, "comparison", "final_run_summary.rds")
+      if (!file.exists(f)) return(NULL)
+      s <- readRDS(f)
+      same <- identical(as.integer(s$seeds), t7_seeds) &&
+        identical(as.integer(s$threads_per_unit), t7_threads) &&
+        identical(as.integer(s$training$n_epochs), t7_epochs) &&
+        identical(as.character(s$selected_config_ids), config_id)
+      if (same) list(dir = d, summ = s, mtime = as.numeric(file.info(f)$mtime)) else NULL
+    }))
+    if (length(cand) == 0L) {
+      list(ok = FALSE, measured = paste("no earlier T7 run with these seeds, epochs, threads",
+                                        "and configuration to compare with"))
+    } else {
+      prev <- cand[[which.max(vapply(cand, function(z) z$mtime, numeric(1)))]]
+      a <- prev$summ$all_seed_results
+      b <- fin$all_seed_results
+      a <- a[order(a$seed), , drop = FALSE]
+      b <- b[order(b$seed), , drop = FALSE]
+      cols  <- c("ccc", "mae", "rmse", "r2", "best_epoch")
+      worst <- max(vapply(cols, function(k)
+        max(abs(as.numeric(a[[k]]) - as.numeric(b[[k]]))), numeric(1)))
+      list(ok = identical(as.integer(a$seed), as.integer(b$seed)) && is.finite(worst) &&
+             worst < 1e-12,
+           measured = sprintf("against %s: worst |difference| %.2e over %d seed(s) (ccc, mae, rmse, r2, best epoch)",
+                              basename(prev$dir), worst, nrow(b)))
+    }
+  }
+})
 
 if (!is.null(tr) && nrow(tr) > 0L) {
   # ── the setup ───────────────────────────────────────────────────────────────
@@ -263,11 +313,37 @@ if (!is.null(tr) && nrow(tr) > 0L) {
                   pk, tr$phase[first],
                   if (!is.na(tr$unit_id[first])) paste0(" of ", tr$unit_id[first]) else ""))
   if (!inherits(fin, "error")) {
-    message(sprintf("  dsm_final()'s estimate for such a worker: %.1f GB (1.5 + 7 x the windows, from T2).",
+    message(sprintf("  dsm_final()'s estimate for such a worker: %.1f GB (.final_worker_gb(): R and torch, the cache, the training pool).",
                     fin$per_worker_gb_estimate))
   }
   create_output_dirs(t7_dir)
-  safe_write_csv2(tr, file.path(t7_dir, "t7_trace.csv"))
+  this_trace <- file.path(t7_dir, sprintf("t7_trace_%s.csv", code_tag))
+  safe_write_csv2(tr, this_trace)
+
+  # ── beside the trace before it ──────────────────────────────────────────────
+  # The level the setup leaves (what training starts from), the level after
+  # the first unit and after the last, and the peak working set. The first
+  # run's file is t7_trace.csv; the setup phases differ between the two
+  # workers, so "before training" is the last setup mark of each.
+  summarise_trace <- function(t) {
+    setup <- t[is.na(t$unit_id), , drop = FALSE]
+    rel   <- t$private_gb[!is.na(t$unit_id) & t$phase == "unit_released"]
+    c(private_before_training = setup$private_gb[nrow(setup)],
+      private_after_first_unit = rel[1],
+      private_after_last_unit  = rel[length(rel)],
+      peak_working_set         = max(t$peak_gb, na.rm = TRUE))
+  }
+  earlier <- list.files(t7_dir, pattern = "^t7_trace.*[.]csv$", full.names = TRUE)
+  earlier <- earlier[basename(earlier) != basename(this_trace)]
+  if (length(earlier)) {
+    prev_file <- earlier[which.max(file.info(earlier)$mtime)]
+    before_s  <- summarise_trace(safe_read_csv2(prev_file))
+    now_s     <- summarise_trace(tr)
+    message("\n-- Beside the trace before it (", basename(prev_file), "), GB --")
+    print_wide(tibble::tibble(measure = names(now_s), before = round(before_s, 2),
+                              now = round(now_s, 2), change = round(now_s - before_s, 2)),
+               n = Inf)
+  }
 }
 
 # ── mimalloc, in its own words ────────────────────────────────────────────────
@@ -286,4 +362,4 @@ if (file.exists(log_file)) {
 
 create_output_dirs(t7_dir)
 v <- ledger_verdict(L, required, file.path(t7_dir, "t7_checks.csv"))
-message("\nTrace: ", file.path(t7_dir, "t7_trace.csv"))
+message("\nTrace: ", file.path(t7_dir, sprintf("t7_trace_%s.csv", code_tag)))

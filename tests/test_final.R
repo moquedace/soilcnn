@@ -165,7 +165,7 @@ ok["and_an_identical_ensemble"] <- identical(
 # patience 3 cannot run out before a fourth), and a level at each.
 tr1 <- readRDS(file.path(fin1$run_dir, "logs", "worker_01_mem_trace.rds"))
 ok["the_trace_has_every_phase_and_every_epoch"] <-
-  all(c("start", "store_loaded", "fold_cache", "store_dropped", "unit_start",
+  all(c("start", "store_loaded", "fold_cache", "unit_start",
         "epoch", "unit_trained", "unit_released") %in% tr1$phase) &&
   identical(as.integer(table(tr1$unit_id[tr1$phase == "epoch"])), rep(3L, 3L)) &&
   all(is.finite(tr1$rss_gb)) && all(is.finite(tr1$r_heap_gb))

@@ -26,7 +26,9 @@ NULL for a store written by dsm_prepare(), which carries its own copy.}
 
 \item{windows}{Windows to load. NULL loads every window the store has,
 which is the wrong default when the grid needs two of five -- pass the
-windows the grid actually uses and the store reads only those.}
+windows the grid actually uses and the store reads only those.
+integer(0) loads none: the store's table alone, from which a fold cache
+reads each window it needs from its file (dsm_final()'s workers do).}
 
 \item{cell_size}{Raster resolution in x/y units. NULL reads it from
 \code{raster_table}, which is the only source that cannot drift.}
