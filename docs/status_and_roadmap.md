@@ -191,8 +191,11 @@ would hit it:
 5. ~~Table-model `...`~~ — **done 2026-09-28** (e16fdca): `model_spec()`
    records `fit_args`, derived from `fit()`'s formals; `dsm_train()` refuses
    any other option for a table model at the door.
-6. **Two Portuguese file names** kept by decision (`06_avaliacao_grafica.R`
-   and its output slugs); rename when the package boundary is drawn.
+6. ~~Two Portuguese file names~~ -- **done 2026-09-28**, once the package
+   boundary was drawn: `06_graphical_evaluation.R` and its README, its
+   function (`make_evaluation_figures()`), its figures and files, all in
+   English; new runs write to `outputs/graphical_evaluation/`, and the old
+   `outputs/avaliacao_grafica/` is left as it was.
 
 ### Toward a package
 

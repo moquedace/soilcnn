@@ -603,7 +603,7 @@ The [`examples/soc_stock_0_5cm/`](examples/soc_stock_0_5cm/) directory contains 
 | [`05b_merge_spatial_parts.R`](examples/soc_stock_0_5cm/05b_merge_spatial_parts.R) | Mosaics all finished tiles into the final wall-to-wall rasters |
 | [`05c_estimate_eta.R`](examples/soc_stock_0_5cm/05c_estimate_eta.R) | Re-runnable at any time while `05a_run_parallel.R` is in flight — reports progress and ETA |
 | [`05_dsm_predict_global.R`](examples/soc_stock_0_5cm/05_dsm_predict_global.R) | The global 250 m map in one `dsm_predict()` call: every band for both calibration sources (block, kNNDM), 249 units of 256 rows, resumable, the probe first; ~33 h at 2 workers x 7 threads (T3). For the global map it replaces 05, 05a, 05b, 05c and 07's rasters |
-| [`06_avaliacao_grafica.R`](examples/soc_stock_0_5cm/06_avaliacao_grafica.R) | Graphical evaluation of the final model · it was this script, computing the bias itself, that first exposed the −24.4% back-transform defect |
+| [`06_graphical_evaluation.R`](examples/soc_stock_0_5cm/06_graphical_evaluation.R) | Graphical evaluation of the final model · it was this script, computing the bias itself, that first exposed the −24.4% back-transform defect |
 | [`07_area_of_applicability.R`](examples/soc_stock_0_5cm/07_area_of_applicability.R) | Dissimilarity index and AOA mask over the prediction grid |
 | [`99_check_pipeline.R`](examples/soc_stock_0_5cm/99_check_pipeline.R) | Numeric consistency across every artefact the pipeline wrote, against a saved snapshot |
 | [`99b_check_pipeline_visual.R`](examples/soc_stock_0_5cm/99b_check_pipeline_visual.R) | The same, but showing the actual thing on screen: where the profiles are, whether tuning improved anything, what the patches look like |

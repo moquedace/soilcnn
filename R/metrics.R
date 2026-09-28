@@ -116,8 +116,8 @@ calc_metrics <- function(obs, pred) {
   # scatter, so a low CCC never says which one it is.
   #
   # The consequence was measured on this project's own final model, by a script
-  # (06_avaliacao_grafica.R) that had not run in months and computed the bias
-  # itself:
+  # (06_graphical_evaluation.R, then called 06_avaliacao_grafica.R) that had not
+  # run in months and computed the bias itself:
   #
   #   observed on test   mean 39.45   median 31.18
   #   predicted          mean 29.84   median 25.60

@@ -1,6 +1,7 @@
 # Scripts e texto: LF no repositorio, checkout nativo no Windows
 *.R      text eol=lf
 *.md     text eol=lf
+*.Rmd    text eol=lf
 *.txt    text eol=lf
 *.csv    text eol=lf
 *.json   text eol=lf

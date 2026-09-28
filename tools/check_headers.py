@@ -15,7 +15,7 @@ ROOT = 'D:/usuario_armazenamento/cassio/R/deep_learning_caret/'
 files = sorted(glob.glob(ROOT + 'examples/**/*.R', recursive=True)) + \
         sorted(glob.glob(ROOT + 'tests/*.R')) + sorted(glob.glob(ROOT + 'R/*.R'))
 
-DEF = re.compile(r'^\s*(project_root|\.dlc_root|root)\s*<-')
+DEF = re.compile(r'^\s*(project_root|\.script_root|root)\s*<-')
 USE = re.compile(r'\bproject_root\b')
 RM_ALL = re.compile(r'^\s*rm\(list\s*=\s*ls\(\)\)')
 RM_KEEP = re.compile(r'^\s*rm\(list\s*=\s*setdiff\(')
