@@ -6,18 +6,13 @@
 # Trains nothing and changes none of the results it reads. The figures are
 # base R; the framework only finds the run.
 
-# WHERE THIS PROJECT IS, FOUND RATHER THAN REMEMBERED.
+# The project root, found from where this file is: Rscript's --file, then the
+# source() frame, then the working directory, climbing to R/cnn_architecture.R.
 #
 # Resolved HERE, while this file is being source()d, and not in the default
 # argument below: a default is evaluated when the function is CALLED, and by
 # then the source() frame -- the only thing that knows where this file is --
 # has gone.
-#
-# This was a hardcoded "D:/usuario_armazenamento/...", which meant the script
-# ran on exactly one machine and had to be edited on every other. The same
-# snippet is in every tests/*.R: it asks Rscript (--file),
-# then source() (the ofile of an enclosing frame), then the working directory,
-# and climbs until it finds the directory that holds R/cnn_architecture.R.
 .script_root <- (function() {
   cand <- character(0)
   a <- commandArgs(trailingOnly = FALSE)

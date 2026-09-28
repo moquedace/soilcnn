@@ -65,13 +65,8 @@ gc()
 
 options(width = 200)
 
-# WHERE THIS PROJECT IS, FOUND RATHER THAN REMEMBERED.
-#
-# This was a hardcoded "D:/usuario_armazenamento/...", which meant the script
-# ran on exactly one machine and had to be edited on every other. The same
-# snippet is in every tests/*.R: it asks Rscript (--file),
-# then source() (the ofile of an enclosing frame), then the working directory,
-# and climbs until it finds the directory that holds R/cnn_architecture.R.
+# The project root, found from where this file is: Rscript's --file, then the
+# source() frame, then the working directory, climbing to R/cnn_architecture.R.
 project_root <- (function() {
   cand <- character(0)
   a <- commandArgs(trailingOnly = FALSE)
