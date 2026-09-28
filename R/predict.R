@@ -1055,19 +1055,27 @@ print.dsm_prediction <- function(x, ...) {
 # for 1 s -- P4 measured that rate for the deployed network -- and a cache
 # capped at the 1 GB light-collection threshold; see .predict_gc_hook()).
 #
+# And 0.25 GB for every thread above 7, MEASURED RATHER THAN DERIVED. With 7
+# threads the model met T3's peak (14.7 GB against 14.6); with 15 it fell
+# short, by 1.3 GB at full width (T3) and by ~1.9 GB over Brazil, where a
+# fresh worker held a median 9.45 GB after its first unit against 7.6 (P5).
+# mimalloc keeps what a thread frees in that thread's own heap (T6), so what 7
+# threads share 15 hold apart: the likely cause, not a proven one. The term
+# puts every run measured so far within the 25% t3_03 and p5_03 allow.
+#
 # The first version counted neither the halo's clone nor the R vectors, and a
 # band's copies as three doubles; on full-width rows T3 measured 24-32 GB
 # against its 12.4 (with the reader's own garbage, since fixed). The clone
 # left the model with the window that replaced it. An estimate, said to be
 # one: the real peak of every worker is measured and written beside it.
 .predict_worker_gb <- function(g, h, w_out, n_ch, chunk_cols, conv_sum, n_seeds = 10L,
-                               n_bands = 21L, n_iv = 4L) {
+                               n_bands = 21L, n_iv = 4L, threads = 7L) {
   w_buf <- w_out + 2 * h
   bytes <- (g + 2 * h) * w_buf * (4 * n_ch + 1) +
     g * w_buf * 20 +
     2 * (g + 2 * h) * (min(chunk_cols, w_out) + 2 * h) * (n_ch + 4 * conv_sum) * 4 +
     g * w_out * (8 * (2 * n_seeds + n_bands + 4 * n_iv) + 16)
-  bytes / 1e9 + 0.5 + 2 + 3.5
+  bytes / 1e9 + 0.5 + 2 + 3.5 + 0.25 * max(0, threads - 7)
 }
 
 .predict_work_plan <- function(grid, inp, cfg, band_tbl, n_cores, tpw, max_ram_gb,
@@ -1077,7 +1085,8 @@ print.dsm_prediction <- function(x, ...) {
   iv <- band_tbl[band_tbl$kind == "interval", , drop = FALSE]
   n_iv <- nrow(unique(iv[, c("source", "label", "method"), drop = FALSE]))
   gb <- function(g) .predict_worker_gb(g, grid$h, grid$n_cols_out, n_ch, chunk_cols, conv_sum,
-                                       n_seeds = n_seeds, n_bands = nrow(band_tbl), n_iv = n_iv)
+                                       n_seeds = n_seeds, n_bands = nrow(band_tbl), n_iv = n_iv,
+                                       threads = tpw)
   n_workers <- max(1L, n_cores %/% tpw)
   budget <- max_ram_gb
   if (is.null(budget) && requireNamespace("ps", quietly = TRUE)) {
