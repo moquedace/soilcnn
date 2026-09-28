@@ -13,9 +13,10 @@
 #   a pkg:: call on a package DESCRIPTION does not declare installs fine and
 #     fails on the next machine.
 #
-# And the two guards that keep workers on the session's own code
-# (.pkg_loader(), .pkg_check_portable() in R/utils.R), checked here without
-# starting a process; tests/test_package_install.R starts them.
+# And the guards that keep a session on the package's own code: the two for
+# workers (.pkg_loader(), .pkg_check_portable() in R/utils.R), checked here
+# without starting a process -- tests/test_package_install.R starts them --
+# and .onAttach()'s refusal of copies source()d into the global environment.
 #
 # Verified:
 #   1. DESCRIPTION names the package, and declares every package R/ calls with ::
@@ -26,6 +27,8 @@
 #   6. the session's loader describes the source tree, with a fingerprint
 #   7. the loader refuses a framework that is not a namespace
 #   8. a job carrying a function of the namespace is refused; plain data passes
+#   9. a copy source()d from R/ is refused at attach, with the way out; a
+#      function of the user's own with the same name is not
 #
 # Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tests/test_package_metadata.R")
 
@@ -149,6 +152,35 @@ msg <- tryCatch({ .pkg_check_portable(list(a = 1, nested = list(fit = dsm_train)
 ok["namespace_function_in_a_job_is_refused"] <- grepl("job\\$nested\\$fit", msg)
 closure <- local({ x <- 1; function() x })       # enclosed by this test, not the package
 ok["foreign_closure_passes"] <- isTRUE(.pkg_check_portable(list(f = closure), "test"))
+
+# ── 9. copies of the package source()d into the global environment ───────────
+# A function whose source reference says R/metrics.R is what a session from
+# before the package left behind; a user's own function of the same name
+# (ccc() is a common one to write) comes from somewhere else and must pass.
+# .onAttach() is called by hand: attaching again would reload the package.
+if (exists("ccc", envir = globalenv(), inherits = FALSE)) {
+  stop("test_package_metadata puts a ccc() in the global environment and ",
+       "needs it free of one first.", call. = FALSE)
+}
+fn_from <- function(file, text) {
+  eval(parse(text = text, keep.source = TRUE, srcfile = srcfilecopy(file, text)))
+}
+copy <- fn_from(file.path(root, "R", "metrics.R"), "function(x, y) 0")
+own  <- fn_from(file.path(tempdir(), "my_functions.R"), "function(x, y) 1")
+on_attach <- get(".onAttach", envir = ns)
+probe <- function(f) {
+  assign("ccc", f, envir = globalenv())
+  on.exit(rm("ccc", envir = globalenv()))
+  list(found  = .pkg_stale_copies(),
+       attach = tryCatch({ on_attach(dirname(root), pkg); "" },
+                         error = function(e) conditionMessage(e)))
+}
+p_copy <- probe(copy)
+p_own  <- probe(own)
+ok["copy_sourced_from_R_is_found"]     <- identical(p_copy$found, "ccc")
+ok["attach_refuses_it_and_says_how"]   <- grepl(".pkg_stale_copies()", p_copy$attach, fixed = TRUE)
+ok["own_function_of_that_name_passes"] <- length(p_own$found) == 0L && identical(p_own$attach, "")
+ok["the_probe_left_nothing_behind"]    <- !exists("ccc", envir = globalenv(), inherits = FALSE)
 
 cat("  imports declared/used    : ", length(imports), " / ", sum(imports %in% used), "\n", sep = "")
 cat("  exports, S3 methods      : ", length(exported), ", ", length(registered), "\n", sep = "")

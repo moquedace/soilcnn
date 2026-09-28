@@ -569,6 +569,12 @@ framework the way its session did — the source tree, or that same installed
 copy — and stops before its first unit if the code there is not the code its
 session loaded.
 
+A session that loaded the framework the old way, by `source()`ing `R/`, still
+holds those copies in its global environment — RStudio's *Restart R* keeps
+it — and they would answer every call in place of the package. The package
+refuses to attach while one is there, and says how to remove them:
+`rm(list = soilcnn:::.pkg_stale_copies(), envir = globalenv())`.
+
 A CUDA-capable GPU is strongly recommended. CPU training is supported but ~10–20× slower; `setup_torch_device()` uses every physical core but one unless told otherwise.
 
 ---

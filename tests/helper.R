@@ -100,7 +100,10 @@
 #' A global environment that still holds functions the package defines -- what
 #' a session that source()d R/load_all.R, before this was a package, leaves
 #' behind -- is refused: those copies would answer the test instead of the
-#' package.
+#' package. The package's own .onAttach() already refuses the copies source()d
+#' from its R/; this also catches a function of the same name from anywhere
+#' else. One that IS the package's function (the `%>%` utils.R used to bind
+#' there is magrittr's own) changes nothing and passes.
 #'
 #' @param root The project root.
 #' @return The package's namespace, invisibly.
@@ -116,13 +119,18 @@
   pkg <- read.dcf(file.path(root, "DESCRIPTION"), fields = "Package")[1, 1]
   ns  <- asNamespace(pkg)
   both <- intersect(ls(globalenv(), all.names = TRUE), ls(ns, all.names = TRUE))
-  shadow <- Filter(function(n) is.function(get(n, envir = globalenv())), both)
+  shadow <- Filter(function(n) {
+    f <- get(n, envir = globalenv())
+    is.function(f) && !identical(f, get(n, envir = ns))
+  }, both)
   if (length(shadow)) {
     stop("The global environment holds ", length(shadow), " function(s) the ",
          "package also defines (", paste(utils::head(shadow, 4), collapse = ", "),
          if (length(shadow) > 4L) ", ..." else "", ") -- left by an earlier ",
          "source(). They would answer this test's calls instead of the package.",
-         "\n  Restart R (Ctrl+Shift+F10 in RStudio) and run it again.", call. = FALSE)
+         "\n  Remove them -- rm(list = ls(all.names = TRUE)) clears the whole ",
+         "workspace -- and run it again. RStudio's Restart R keeps the global ",
+         "environment, so a restart alone does not clear them.", call. = FALSE)
   }
   invisible(ns)
 }

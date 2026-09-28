@@ -5515,10 +5515,24 @@ O item "Toward a package" do roadmap. Os commits:
   `R CMD INSTALL` direto no diretório copiaria o `data/` inteiro para a
   biblioteca, com as subpastas; o `.Rbuildignore` deixa `data/`, `outputs/`,
   `examples/`, `tests/` e `docs/` fora do tarball.
-- **Uma sessão que já fez `source(R/load_all.R)` precisa ser reiniciada.** As
-  cópias que ele deixou no ambiente global responderiam às chamadas diretas
-  dos testes no lugar do pacote. O `.load_framework()` dos testes recusa essa
-  sessão e diz para reiniciar.
+- **Uma sessão que já fez `source(R/load_all.R)` precisa remover as cópias
+  que ele deixou no ambiente global. Reiniciar não basta:** o *Restart R* do
+  RStudio guarda o ambiente global. A primeira rodada mostrou o estrago.
+  - O `run_all.R` parou certo: 300 funções no ambiente global.
+  - O P4 não parou. O script dele não limpa o workspace (21 dos exemplos não
+    limpam, inclusive o `05_dsm_predict_global.R`), então o `dsm_predict()`
+    chamado foi a cópia velha. Os workers dela fizeram `source()` de um
+    `R/load_all.R` que não existe mais: "não é possível abrir a conexão".
+
+  Agora o `.onAttach()` do pacote (`R/zzz.R`) se recusa a anexar enquanto
+  houver no ambiente global uma função `source()`ada do `R/` dele. A mensagem
+  diz como removê-las:
+  `rm(list = soilcnn:::.pkg_stale_copies(), envir = globalenv())`.
+  A origem vem da referência de código que a função carrega. Perderam:
+  - apagar as cópias sozinho: um pacote não apaga objetos do usuário;
+  - checar em cada script: são 21 sem limpeza, e o console ficaria de fora;
+  - checar só pelo nome, como o teste faz: um `ccc()` do próprio usuário seria
+    recusado.
 
 ### As decisões, e o que perdeu
 
