@@ -453,6 +453,7 @@ random_folds <- function(meta, k = 5L, test_frac = 0, test_ids = NULL,
 block_share <- function(meta, block_sizes = c(0.25, 0.5, 1, 2, 3)) {
   x <- as.numeric(meta$x); y <- as.numeric(meta$y)
   n <- length(x)
+  if (n == 0L) stop("block_share(): there are no points to block.", call. = FALSE)
   rows <- lapply(block_sizes, function(bs) {
     blk <- paste(floor((x - min(x)) / bs), floor((y - min(y)) / bs), sep = "_")
     tab <- table(blk)

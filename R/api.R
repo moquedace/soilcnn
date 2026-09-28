@@ -396,6 +396,13 @@ resolve_resampling <- function(spec, data, test_ids = NULL, windows = NULL,
   if (inherits(spec, "fold_plan")) return(spec)
   stopifnot(inherits(spec, "resample_spec"), inherits(data, "dsm_data"))
   meta <- data$store$meta
+  # Refused, not measured: over no points every block size is computed from
+  # min() and max() of nothing -- Inf, -Inf and NA, a warning for each of the
+  # seven candidate sizes -- before anything says what is actually wrong.
+  if (is.null(meta) || nrow(meta) == 0L) {
+    stop("resolve_resampling(): `data` holds no points -- its store has no ",
+         "rows. Load it with dsm_load().", call. = FALSE)
+  }
   if (is.null(windows)) windows <- data$store$window_sizes
 
   auto_buffer <- function(b) {

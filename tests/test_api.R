@@ -317,6 +317,18 @@ ok["print_dsm_data_works"] <- !inherits(
 ok["print_spec_works"] <- !inherits(
   tryCatch(utils::capture.output(print(sp)), error = function(e) e), "error")
 
+# A dsm_data with no points is refused by name, and without the 36 warnings
+# it used to raise first: every candidate block size measured over nothing,
+# min() and max() of empty vectors (test_train_defaults hit it, by design).
+no_points <- structure(list(store = list(meta = fake_data$store$meta[0, ])), class = "dsm_data")
+warned <- 0L
+msg <- withCallingHandlers(
+  tryCatch({ resolve_resampling(spatial_cv(), no_points, verbose = FALSE); "" },
+           error = function(e) conditionMessage(e)),
+  warning = function(w) { warned <<- warned + 1L; invokeRestart("muffleWarning") })
+ok["no_points_refused_by_name"] <- grepl("holds no points", msg)
+ok["no_points_refused_without_warnings"] <- warned == 0L
+
 cat(sprintf("  auto buffer              : %.6f  (15 px x %.8f)\n",
             p_auto$params$buffer, CELL))
 cat(sprintf("  auto block size          : %g  (largest block %.1f%% of points)\n",
