@@ -1,5 +1,10 @@
 # Revisão de concepção e prospecção — setembro/2026
 
+**Estado em 2026-09-28:** registro da revisão de 14/09. O que ela propôs foi
+decidido depois. O estado atual e os próximos passos estão em
+`status_and_roadmap.md`, e as decisões, com o porquê, em `project_log.md`.
+Desde então o framework virou o pacote `soilcnn`.
+
 Auditoria do projeto desde a concepção e prospecção de rumos. **Nada aqui foi
 executado** — é material para decidir o que fazer, com o porquê, o custo e o
 risco de cada caminho.

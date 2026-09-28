@@ -5657,3 +5657,109 @@ O item "Toward a package" do roadmap. Os commits:
 - **O `quickstart.R` como vinheta.** O exemplo do SOC fica fora do pacote.
 - **Os sete `docs/*.md` desatualizados.**
 - **Curar a lista de exportação.**
+
+Feito logo em seguida; ver a entrada abaixo.
+
+## 2026-09-28 — O resto do pacote: API, ajuda, vinheta, o 06 em inglês, os docs
+
+Pedido do autor: "faça tds". São cinco partes, cada uma no seu commit.
+
+### 1. A lista de exportação desenhada (efaf07c)
+
+A primeira lista era a API como os scripts a usavam: 100 funções. Agora são
+64, o que um usuário do front end procura:
+
+- as `dsm_*()`, os specs de reamostragem e os construtores de folds;
+- o registro de modelos, com o `caret_available()` agora público ao lado do
+  `caret_spec()`;
+- as ferramentas aplicadas aos resultados (AOA, intervalos conformes,
+  smearing, métricas, piso de ruído, `one_se()`, testes pareados, oclusão, o
+  teste congelado);
+- `latest_run_dir()` e `selected_config_id()`, para achar uma rodada.
+
+Viraram internas 37 funções: os runners que o `dsm_train()` e o
+`dsm_final()` conduzem, o encanamento do store e da predição, e os
+utilitários dos scripts. Nenhum script quebra, porque os scripts carregam o
+código-fonte, onde tudo é visível.
+
+Perdeu: manter as 100. Toda exportação é uma promessa, e 37 delas eram peças
+que um usuário não deveria precisar tocar.
+
+### 2. As páginas de ajuda (c7f50ab)
+
+Um levantamento antes de o roxygen2 rodar encontrou lacuna em 52 dos 84 itens
+públicos (64 funções mais 20 métodos `print`). Agora:
+
+- todo argumento tem `@param` e toda função tem `@return`;
+- os specs herdam os argumentos dos construtores de folds, e estes do
+  `holdout()`, o único lugar onde `test_frac`, `test_ids`, `seed` e `group`
+  são descritos;
+- os métodos `print` ganharam páginas próprias, fora do índice;
+- 81 blocos internos receberam `@noRd`.
+
+Dois defeitos que o roxygen2 teria produzido:
+
+- no `dsm_prepare()`, `@param coords, crs` (com espaço depois da vírgula)
+  documentaria um parâmetro chamado `coords,`, e o `crs` ficaria sem
+  documentação;
+- o bloco do `freeze_selection()` estava acima do `.git_commit_at()`, inserido
+  depois entre os dois, e iria parar na função errada.
+
+Um defeito de verdade apareceu no caminho (b35965e). O `score_test_grid()` e o
+`occlusion_report()` tinham `transform = identity` por padrão. Num store
+`log1p`, uma chamada sem `transform` pontuava o teste na escala log: números
+plausíveis, na unidade errada, ao lado de uma tabela de tuning em unidades
+nativas. Agora o padrão é `NULL`, o inverso do próprio store, como no
+`dsm_train()`. Os scripts passam `expm1` explícito e não mudam. O
+`test_package_metadata` trava a convenção.
+
+As páginas em si (`man/`) saem na primeira vez que o `roxygenise()` rodar.
+
+### 3. A vinheta (0fbde99)
+
+`vignettes/soilcnn.Rmd` ("Getting started with soilcnn") percorre a cadeia do
+`dsm_prepare()` ao `dsm_predict()`, com o porquê de cada passo. Nada é avaliado
+na construção, porque os passos leem dados que o pacote não traz e o tuning
+leva horas.
+
+O `examples/quickstart.R` faz os mesmos passos com os dados do SOC. A última
+seção dele usava o cache dos folds e a visão em tabela, que agora são
+internos; ela termina no `dsm_final()` e no `dsm_predict()`.
+
+Perdeu: levar o exemplo do SOC inteiro para `inst/`. São os caminhos, os dados
+e as checagens deste projeto, não documentação de pacote.
+
+### 4. O 06 em inglês (903c9fc)
+
+O item 6 do roadmap esperava "a fronteira do pacote". Ela existe: os exemplos
+ficam fora. Mudou para inglês:
+
+- o nome do arquivo, `06_graphical_evaluation.R`, e o README dele (o antigo
+  LEIA_ME);
+- a função, `make_evaluation_figures()`;
+- os identificadores, as figuras e os arquivos de saída.
+
+As rodadas novas gravam em `outputs/graphical_evaluation/`. O
+`outputs/avaliacao_grafica/` fica como estava. Junto, o `tools/__pycache__`
+saiu do git (e07a149): mudava a cada lint.
+
+### 5. Os docs anteriores ao pacote
+
+- **`architecture.md`**: ganhou o `conv_padding` e o mapa totalmente
+  convolucional.
+- **`tuning_guide.md`**: ganhou o `embed_pool` e o `conv_padding`, e
+  explica o grid que o `dsm_train()` sorteia.
+- **`design_decisions.md`**:
+  - explica por que a mediana não é a média do solo (-24,4%) e que a média
+    suavizada é escrita ao lado dela;
+  - descreve a escala que o mapa aplica, conferida pelo probe;
+  - fecha com uma tabela das decisões posteriores e de onde cada uma está
+    escrita.
+- **`test_plan.md`**: registra o resultado de cada teste.
+- **Registros históricos, marcados como tais**: `b2_two_configs_decision.md`
+  (dizia "bloqueado", mas a decisão foi tomada no dia 18),
+  `reference_performance.md` e `revisao_e_prospeccao_2026_09.md`. O
+  `execution_plan.md` já se declarava encerrado.
+
+Perdeu: reescrever os registros. Eles valem pelo que diziam na data em que
+foram escritos.

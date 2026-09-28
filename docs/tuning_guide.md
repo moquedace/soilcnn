@@ -2,6 +2,8 @@
 
 This document explains every tuneable parameter in the framework: what it controls architecturally, why the search range was defined the way it is, and how each choice relates to digital soil mapping (DSM).
 
+The space itself is `.cnn_param_space` in `R/tune_grid.R`; this guide follows it (current as of 2026-09-28). `dsm_train()` draws its grid from that space over the windows the loaded store holds, and a grid given by hand is checked against the same space at the door.
+
 ---
 
 ## 1. Spatial architecture
@@ -126,6 +128,33 @@ All gate and head operations happen in this space.
 **Trade-off:**  
 Larger embedding → more representational capacity, but quadratically more parameters in the linear projection (e.g., for a 9×9 patch with 128 final channels: flatten = 128 × 81 = 10 368 → linear 10 368 × embedding_dim).  
 For datasets with < 30 000 samples, 256–384 is usually a good balance.
+
+---
+
+### `embed_pool`
+
+**What it is:** How each branch reduces its `C_final × w × w` feature map before the linear projection.
+
+**Range:** `"flatten"`, `"gap"`
+
+**Trade-off:**  
+`"flatten"` keeps every cell. The linear layer then grows with window², and a 15×15 branch concentrates ~11 M parameters in it. That is best for small windows, or when the arrangement inside the patch matters.  
+`"gap"` (global average pool) reduces the map to `C_final`, whatever the window. Large windows stay light (a dual `c(3, 15)` model drops from ~12.3 M to ~0.86 M parameters) and overfit less, but the arrangement inside the patch is averaged away.  
+Both branches of a dual model share the choice. `"flatten"` is listed first, so it stays the default; keep `"gap"` in the search when large windows risk overfitting, especially at fine resolution. See `docs/architecture.md`.
+
+---
+
+### `conv_padding`
+
+**What it is:** Whether the convolutions pad each patch with zeros.
+
+**Range:** `"same"`, `"valid_large"` (the model also accepts `"valid"`)
+
+**Trade-off:**  
+`"same"` keeps the spatial size by padding with a ring of zeros, so every output position of a small patch depends partly on invented values. With window 3 and two blocks the centre's receptive field is already 5×5, larger than the patch.  
+`"valid"` pads nothing and uses only measured values; the map shrinks by 2 per block, so it needs a window larger than 2 × blocks and is not available to a 3×3 branch.  
+`"valid_large"` is valid on the large branch and same on the small one. A 15×15 branch loses 4 of its 15 pixels and keeps only real data, while the 3×3 branch, which cannot afford to shrink, is untouched. The large branch is where the gain is: a w × w patch re-reads each pixel w² times across the dataset, so the 15 branch is 225× redundant and the 3 branch only 9×.  
+`"same"` is listed first so it remains the default. `"valid_large"` also lets the map run the large branch fully convolutionally, which is exact only without padding (`fcn_supported()`).
 
 ---
 
@@ -264,7 +293,7 @@ Pure L1 loss. Equally robust to outliers, but the gradient is constant (not smoo
 
 **Early stopping monitor:** validation SmoothL1 loss (or the configured `loss_fn`).  
 **Patience:** number of epochs without improvement before stopping.  
-**Model selection across configs:** ranked by **validation CCC** (descending), then validation MAE (ascending), or by `one_se()` — the simplest config within one standard error of the best — which is stage 04's default. The test set is **not scored during tuning** (`evaluate_test = FALSE`); its columns hold `NA`. It is opened once, in stage 04, on the config chosen without it. Every config is fitted on every fold with several seeds, and the gap between two configs is read against the seed noise floor before it is called a difference.
+**Model selection across configs:** ranked by **validation CCC** (descending), then validation MAE (ascending), or by `one_se()` — the simplest config within one standard error of the best — which is the default of `dsm_final()`. The test set is **not scored during tuning** (`evaluate_test = FALSE`); its columns hold `NA`. It is opened once, after the choice: by `score_test_grid()` once `freeze_selection()` has recorded it, and by `dsm_final()` on the refit. Every config is fitted on every fold with several seeds, and the gap between two configs is read against the seed noise floor before it is called a difference.
 
 The separation between early stopping metric (loss) and selection metric (CCC/MAE) is deliberate:  
 - Loss guides training stability (smooth, differentiable, robust to outliers).  
@@ -273,6 +302,8 @@ The separation between early stopping metric (loss) and selection metric (CCC/MA
 ---
 
 ## How to build your own tuning grid
+
+Usually there is no need. `dsm_train(data, tune_length = 30)` draws 30 configurations over the windows the store holds (every window alone and every pair), with batch sizes the smallest fold can fill. A grid of your own goes in as `dsm_train(data, tune_grid = grid, ...)`. It is checked against the parameter space before anything trains: a missing or misspelt column is refused and the near name offered, `dropout` alone is expanded into its five sites, and values and ranges are checked.
 
 ```r
 # Fix some parameters, vary others:

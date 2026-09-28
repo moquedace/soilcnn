@@ -491,6 +491,14 @@ The **median** is the headline ensemble map. Reasons:
 
 Mean, SD, MAD, min, and max are also written as separate layers for users who need them.
 
+**The median is not the mean of the soil.** A model trained on log1p and
+back-transformed estimates the conditional *median* of the stock, which sits
+below its conditional *mean*. On this project's test set the gap was -24.4%
+(`06_graphical_evaluation.R` found it). So `dsm_predict()` writes the smeared
+mean beside the median, using Duan's estimator calibrated on the tuning run's
+cross-validated residuals (`R/smearing.R`). The median is the right map of a
+typical value; the smeared mean is the one that may be summed over an area.
+
 ### What the ensemble uncertainty represents
 SD and MAD between seeds measure **epistemic uncertainty due to training stochasticity**:
 how stable is the prediction across different weight initialisation and training trajectories.
@@ -524,8 +532,9 @@ the test columns of the comparison table exist and hold `NA`. An earlier version
 "for diagnostic reference"; there is no such thing — a test score beside the selection metric
 is selection on the test set performed by whoever reads the table. Stage 04 scores the test
 set once, on the config chosen without it, and `score_test_grid()` can measure the optimism
-afterwards. Ranking is by validation CCC then MAE, or by `one_se()` — the simplest config
-within one standard error of the best — which is the default in stage 04.
+afterwards -- it refuses to run before `freeze_selection()` has recorded the choice. Ranking
+is by validation CCC then MAE, or by `one_se()` — the simplest config within one standard
+error of the best — which is the default of `dsm_final()` (stage 04 before it).
 
 ---
 
@@ -566,7 +575,7 @@ and penalises failure modes that matter for SOC stock mapping (bias, scale, and 
 ### What it is
 Before the patches reach the CNN, each predictor channel is scaled using statistics computed
 **from the training rows of the fold being fitted** — once per fold in tuning
-(`build_fold_cache()`), and once more in stage 04 from the refit rows:
+(`build_fold_cache()`), and once more by `dsm_final()` from the refit rows:
 
 | Predictor type | Transform |
 |----------------|-----------|
@@ -574,8 +583,9 @@ Before the patches reach the CNN, each predictor channel is scaled using statist
 | Proportions (0–100) | `x / 100` |
 | Binary/dummy (0–1) | identity (no change) |
 
-The same parameters are stored in `predictor_scaling.csv` and applied identically during
-spatial prediction.
+The patch store keeps the patches RAW: scaling depends on the fold, so it cannot be baked
+into data shared by every fold. The final model's parameters are stored beside its weights
+in `predictor_scaling.csv`, and `dsm_predict()` applies exactly those.
 
 ### Why
 Although BatchNorm normalises activations inside the network, all channels arrive at the first
@@ -595,10 +605,13 @@ of the validation and test sets. Computing from training only is the methodologi
 approach.
 
 ### Critical consistency requirement
-The scaling transform applied during patch extraction (script 02) **must be identical** to the
-transform applied during spatial prediction (script 05). Any mismatch — different statistics,
-different column order, omitted QC steps — will cause the spatial prediction to receive inputs
-from a different distribution than the training data, producing systematic map artefacts.
+The scaling and the QC a model was trained with **must be identical** to what the map applies.
+A mismatch (different statistics, a different channel order, an omitted QC step) feeds the
+prediction inputs from another distribution, and the map shows systematic artefacts rather
+than an error. So `dsm_predict()` reads the final model's own scaling and the store's own QC
+rules, in the store's channel order. Before it maps, its probe predicts the profiles' own
+pixels through the whole chain and compares them with the final model's stored predictions:
+a mismatch stops the run in seconds.
 
 ### Out-of-range proportions: clamp, don't discard
 Proportion channels (e.g. potential-natural-vegetation class fractions, clay mineralogy) are
@@ -623,3 +636,21 @@ invalidate the window; only the harmless boundary noise is preserved instead of 
 into missingness. Applied identically in scripts 01, 02, and 05, per the consistency requirement
 above.
 The `predictor_scaling.csv` file is the single source of truth for both scripts.
+
+---
+
+## 15. The decisions made since, and where they are written
+
+This document covers the network and its training. The decisions around it came later,
+and each is written where the code that implements it lives:
+
+| decision | where |
+|---|---|
+| spatial folds with a Chebyshev buffer, and folds matched to the map's distances (kNNDM) | `R/resample.R`, `R/knndm.R`; README, "One line decides who trains and who scores" |
+| the seed noise floor, and `one_se()` against it | `R/resample.R`; README, "Numbers you can defend" |
+| the frozen test set, and the optimism measured after the choice | `R/test_optimism.R` |
+| conformal intervals, and the residuals that calibrate them | `R/conformal.R`; README, "Calibrated uncertainty" |
+| the smeared mean beside the median | `R/smearing.R` (and section 11 above) |
+| the dissimilarity index and the area of applicability | `R/aoa.R` |
+| the map: the network run fully convolutionally where that is exact | `R/predict.R`; `architecture.md` |
+| the package: one way to load, and workers that load what their session loaded | `project_log.md`, 2026-09-28 |

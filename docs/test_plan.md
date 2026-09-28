@@ -1,5 +1,11 @@
 # Capability test plan
 
+**Status 2026-09-28:** tier A and every tier B test have run, and C1 and C2 are
+done; C3 is open (there is still no region column). The results are in the
+tables below and in `status_and_roadmap.md`. The tests that came after this
+plan (P1-P5 for the package functions, T1-T6 for threads and memory) are in
+`status_and_roadmap.md` and `project_log.md`.
+
 ## What "the pipeline is closed" actually proved
 
 On 2026-09-16/17 the chain 01 → 02 → 03 → 03b → 04 → 05 → 07 ran end to end.
@@ -114,12 +120,12 @@ printed rather than asserted.
 
 | # | capability | why it is not in tier A | cost |
 |---|---|---|---|
-| B1 | `knndm_cv()` on the real points | needs `predpoints` from the 20 km raster and CAST on 3,728 points; the projection and the cost were measured on paper, never on this data | minutes to build the plan; a full `rf` run on it after |
-| B2 | Two configs in stage 04 | exercises `paired_by_seed.csv`, a branch that has never run | 2 × 10 seeds |
+| B1 (done, 13/13) | `knndm_cv()` on the real points | needs `predpoints` from the 20 km raster and CAST on 3,728 points; the projection and the cost were measured on paper, never on this data | minutes to build the plan; a full `rf` run on it after |
+| B2 (done, 13/13) | Two configs in stage 04 | exercises `paired_by_seed.csv`, a branch that has never run | 2 × 10 seeds |
 | B3 (done) | D4 augmentation on/off | a training-time axis never varied on real data; it changes what the model sees, so only a CNN can answer | 2 × 9 units |
-| B4 | `05a` / `05b` / `05c` | the parallel path and the mosaic have not run since the refactor, and `05` now writes **10 bands instead of 7** (smearing added one more after this was written) — the merge walks that list | a 2 × 2 shard run at 20 km |
-| B5 | `06` and `99b` | the graphical evaluation and the visual pipeline check, never run against this API | minutes |
-| B6 | resume after an interruption | kill 03 midway, restart, confirm it picks up and that `check_plan_unchanged()` stays quiet | one interrupted run |
+| B4 (done: the mosaic equals the 1×1 map to 1e-4 t/ha) | `05a` / `05b` / `05c` | the parallel path and the mosaic have not run since the refactor, and `05` now writes **10 bands instead of 7** (smearing added one more after this was written) — the merge walks that list | a 2 × 2 shard run at 20 km |
+| B5 (done: 06 exposed the −24% bias) | `06` and `99b` | the graphical evaluation and the visual pipeline check, never run against this API | minutes |
+| B6 (done, 15/15) | resume after an interruption | kill 03 midway, restart, confirm it picks up and that `check_plan_unchanged()` stays quiet | one interrupted run |
 
 ---
 
@@ -127,8 +133,8 @@ printed rather than asserted.
 
 | # | capability | where it gets exercised |
 |---|---|---|
-| C1 | `gate_type`, `use_se_block`, `embed_pool`, `conv_padding` | the `tune_length = 24` grid covers all of them by construction |
-| C2 | Normalised conformal intervals | blocked: needs a difficulty score comparable between calibration and prediction. The dissimilarity index from `R/aoa.R` is the right one — see `reference_performance.md` |
+| C1 (done, 9/9: `_c1_design_comparison.R`, the same grid under two designs) | `gate_type`, `use_se_block`, `embed_pool`, `conv_padding` | the `tune_length = 24` grid covers all of them by construction |
+| C2 (done: the level-and-DI interval, `conformal_scaled_calibrate()`, which `dsm_predict()` writes) | Normalised conformal intervals | blocked: needs a difficulty score comparable between calibration and prediction. The dissimilarity index from `R/aoa.R` is the right one — see `reference_performance.md` |
 | C3 | `region_folds()` with a real region layer | no region column exists in the point table today |
 
 **The `tune_length = 24` run is not a capability test.** It is the science run

@@ -1,5 +1,9 @@
 # CNN Architecture
 
+The network is `dual_branch_cnn()` in `R/cnn_architecture.R`. The
+configurations it takes are drawn in `R/tune_grid.R`, and
+`docs/tuning_guide.md` says what each knob does. Current as of 2026-09-28.
+
 ## Overview
 
 ```
@@ -51,6 +55,11 @@ Input (N profiles)
 
 *C = number of predictor channels (raster layers). w1, w2 = window sizes. e = embedding_dim.*
 
+*The flatten step is one of two choices (`embed_pool`, below): "flatten" keeps
+every cell, "gap" averages the feature map to C_final. The conv blocks pad
+or do not according to `conv_padding` (below), so the feature map entering it
+is w x w or smaller.*
+
 ---
 
 ## Single-branch mode
@@ -78,6 +87,31 @@ x ──────────────────────────
 ```
 
 The activation is applied **after** the addition (standard ResNet order).
+
+The diagrams show `p=1`, the "same" padding. Under "valid" the padding is 0,
+the map loses one pixel per side per block, and the shortcut is centre-cropped
+by the same pixel so that the two terms of the sum line up.
+
+---
+
+## Convolution padding (`conv_padding`)
+
+| `conv_padding` | What each branch does |
+|---|---|
+| `"same"` (default) | pads each patch with a ring of zeros, keeping its size |
+| `"valid"` | no padding: only measured values, the map shrinks by 2 per block |
+| `"valid_large"` | valid on the large branch, same on the small one |
+
+With "same", every output position of a small patch depends partly on invented
+values. With window 3 and two blocks, the centre's receptive field is already
+5 x 5, larger than the patch. "valid" needs a window larger than 2 x blocks,
+so a 3 x 3 branch cannot have it.
+
+"valid_large" is the useful middle. A 15 x 15 branch loses 4 of its 15
+pixels and keeps only real data. A w x w patch re-reads each pixel w^2 times
+across the dataset, so that branch is 225x redundant and trading border for
+honesty costs it almost nothing. The 3 x 3 branch, only 9x redundant, is left
+as it is.
 
 ---
 
@@ -176,3 +210,35 @@ With ~25 000 training samples the `"flatten"` variant is a sizeable network, so 
 regularisers (dropout, weight decay, SE, D4 augmentation, BatchNorm) and early
 stopping matter — especially for the larger windows. The single-branch 3×3 variant,
 or any `"gap"` variant, is by contrast tiny (~0.5–1 M total).
+
+---
+
+## Over a raster: fully convolutional where it is exact
+
+`dsm_predict()` does not cut a patch around every pixel of a map. A
+convolution, a BatchNorm in eval mode, the activation and the residual shortcut
+compute at every position what they compute inside a patch. So the conv blocks
+run once over a whole strip of the raster, and what is left per pixel is cheap:
+
+- "gap": the patch's mean feature is a moving average of the strip's feature
+  map (`avg_pool2d`, stride 1);
+- "flatten": the patch's features are a window of the strip's feature map,
+  gathered at the pixels being predicted and passed through the branch's own
+  linear layer;
+- SE with "gap": the SE weight is constant over the patch, so it commutes with
+  the mean, which is exact;
+- then the embedding's BatchNorm, the gate and the head, per pixel.
+
+That is about 200 k multiply-adds per pixel per seed instead of 27 M.
+
+It is not exact everywhere:
+
+- A "same" branch pads each patch at its own border, where a strip has real
+  neighbours.
+- SE does not commute with the linear layer of a "flatten" branch.
+
+Those branches run patch by patch. For the usual case, the small 3 x 3 branch
+of a `valid_large` model, that costs little. `fcn_supported()` says which
+branch takes which path. `tests/test_fcn.R` compares the strip against the
+network patch by patch (4.5e-08 at worst), and P4 reproduced stage 05's map to
+3.4e-05.

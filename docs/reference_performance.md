@@ -1,5 +1,9 @@
 # Reference performance — full data, before the rebuild
 
+**Status 2026-09-28:** a record. What the rebuilt pipeline has measured since
+is in `status_and_roadmap.md` §1. The four relations at the bottom of this file
+are still the ones a rebuilt result is read against.
+
 Recorded 2026-09-14, immediately before deleting every output to restart on a
 fast development configuration. These are the numbers the rebuilt pipeline is
 answerable to.

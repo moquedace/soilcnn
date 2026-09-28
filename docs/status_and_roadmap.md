@@ -224,16 +224,20 @@ of the package that were `source()`d from `R/`.
   session loaded and stop if the code changed since; `dsm_prepare()`'s band
   workers never load the package. `tests/test_package_install.R` builds,
   installs into a temporary library and loads it in a fresh process.
-- **The help pages.** `roxygen2::roxygenise()` writes `man/` from the `#'`
-  blocks the modules already carry; roxygen2 is not installed yet.
-- **`examples/`.** The worked example stays outside the package — it is the
-  SOC project, with its paths and its data, and the tarball leaves it out;
-  `quickstart.R` becomes a vignette. 03, 03b and 04 still type
-  `n_threads = 30` where `setup_torch_device()` would read the machine (T1
-  measured 30 and 15 a wash).
-- **The export list is the API as the scripts use it**, not yet as designed:
-  some helpers only the check scripts call (`patch_gather()`,
-  `patch_window_key()`) may not belong in it. Curated when the examples move.
+- ~~The export list~~ — **done** (efaf07c). There are 64 exports: the front
+  end, the resampling specs and fold constructors, the registry, and the tools
+  applied to results. The runners, the store's plumbing and the scripts'
+  helpers (37) are internal.
+- **The help pages.** The blocks are complete (c7f50ab): every argument, every
+  return, and the print methods on pages of their own. `@noRd` sits on the 81
+  internal blocks. `man/` is written the first time `roxygen2::roxygenise()`
+  runs.
+- ~~The vignette~~ — **done** (0fbde99). `vignettes/soilcnn.Rmd` walks the
+  chain from `dsm_prepare()` to `dsm_predict()`, and `examples/quickstart.R`
+  runs the same steps on the SOC data. The worked example stays outside the
+  package: it is the SOC project, with its paths and its data, and the
+  tarball leaves it out. 03, 03b and 04 still type `n_threads = 30` where
+  `setup_torch_device()` would read the machine (T1 measured 30 and 15 a wash).
 - ~~**The example headers.**~~ **Done, 2026-09-21.** 26 files carried
   `project_root <- "D:/usuario_armazenamento/..."` and 15 of them fetched
   `install_load_pkg()` from a GitHub URL on every run — so the project ran on
@@ -250,8 +254,17 @@ of the package that were `source()`d from `R/`.
   and no amount of self-location can find it. It is a setting and it belongs
   in sight at the top of the script that needs it.
 
-- The seven `docs/*.md` files that predate the last month (see the audit's
-  drift list).
+- ~~The docs that predate the package~~ — **done 2026-09-28**.
+  - `architecture.md` has conv_padding and the fully convolutional map.
+  - `tuning_guide.md` has embed_pool, conv_padding and the grid dsm_train()
+    draws.
+  - `design_decisions.md` has the smeared mean and the scaling the map
+    applies, plus a closing table of the decisions made since and where each
+    one is written.
+  - `test_plan.md` records each test's result.
+  - `b2_two_configs_decision.md`, `reference_performance.md`,
+    `revisao_e_prospeccao_2026_09.md` and `execution_plan.md` are marked as the
+    records they are.
 
 ---
 

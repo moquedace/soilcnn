@@ -1,6 +1,12 @@
 # B2 — two configs in stage 04: the decision that blocks it
 
-**Status:** blocked on one decision, which belongs to you. Everything below is
+**Status 2026-09-28:** decided and implemented. Options 3 and 6 were taken on
+2026-09-18 (`project_log.md`, "Options 3 and 6 of docs/b2_two_configs_decision.md,
+implemented"), and `_b2_two_config_check.R` passed 13/13. Stage 04 has since
+become `dsm_final()`. Kept as the record of the decision; the paragraph below
+is its status when it was written.
+
+**Status (2026-09-18):** blocked on one decision, which belongs to you. Everything below is
 verified against the code and the files on disk as of 2026-09-18. Nothing here
 was run; no R was executed to write it.
 
