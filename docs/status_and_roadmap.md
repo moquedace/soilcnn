@@ -197,8 +197,16 @@ would hit it:
 ### Toward a package
 
 `R/load_all.R` said it: "when this becomes a package this file disappears and
-`library()` takes its place." **It has, 2026-09-28** (0616460, bcd3b0b): the
-repository is the package `soilcnn`, and `R/load_all.R` is gone.
+`library()` takes its place." **It has, 2026-09-28** (0616460 to da449d9):
+the repository is the package `soilcnn` (SoilCNN), and `R/load_all.R` is
+gone. Verified the same day:
+- `tests/run_all.R` passed 31/31, including a tarball installed into a
+  temporary library and loaded with `library(soilcnn)` in a fresh process;
+- P4 passed 10/10 through the package's own workers: stage 05's 20 km map
+  to 3.4e-05, and the probe on the 250 m grid to 1.78e-07.
+
+`.onAttach()` refuses a session whose global environment still holds copies
+of the package that were `source()`d from `R/`.
 
 - ~~`DESCRIPTION`, `NAMESPACE` (roxygen)~~ — **done.** Imports are what a core
   call uses unconditionally; what sits behind a `requireNamespace()` guard is

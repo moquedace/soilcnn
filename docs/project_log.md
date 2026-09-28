@@ -5628,6 +5628,27 @@ O item "Toward a package" do roadmap. Os commits:
     despacha, e os três modelos estão registrados;
   - um worker dessa sessão abre a mesma cópia instalada.
 
+### Validado (da449d9)
+
+- **`run_all.R`: 31/31 em 12,0 min.**
+  - O `test_package_metadata` passou com 22 asserções: 15 imports declarados
+    e usados, 100 exports, 20 métodos S3.
+  - O `test_package_install` passou com 14. O tarball
+    `soilcnn_0.0.0.9000.tar.gz` tem 30 arquivos, e numa biblioteca temporária
+    o `library(soilcnn)` registra `cnn`, `mlp` e `rf`.
+  - O `test_final` deu 2 workers = 1, e o `test_prepare` deu 2 núcleos = 1.
+- **P4: 10/10 pelos workers do pacote.** O mapa de 20 km é o do estágio 05:
+  - bandas do ensemble com erro até 3,4e-05;
+  - máscara idêntica, pixel a pixel;
+  - DI até 1,5e-07;
+  - 3 workers × 5 threads, 6.369 px válidos/s (33× o estágio 05);
+  - pico de 5,8 GB por worker, contra 8,2 GB estimados.
+
+  O probe na grade de 250 m passou com 1,78e-07.
+- **Antes disso, as duas rodadas que pararam no carregamento** foram a guarda
+  do `.onAttach()` fazendo o que devia. As 293 cópias do ambiente global
+  saíram com `rm(list = ls(all.names = TRUE))`.
+
 ### O que falta do item
 
 - **As páginas de ajuda.** O `roxygen2::roxygenise()` escreve o `man/` a
