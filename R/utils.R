@@ -238,7 +238,9 @@ resolve_cores <- function(n_cores = NULL, what = "this step") {
 }
 
 .dlc_loader <- function() {
-  ns <- environment(.dlc_loader)
+  # The environment of THIS function, not of whatever the name finds: a
+  # source()d copy would otherwise find the attached package's and pass.
+  ns <- environment(sys.function())
   if (!isNamespace(ns)) {
     stop("dsm_final() and dsm_predict() start workers that load the framework ",
          "as a package, and this session has it some other way -- its files ",
@@ -295,7 +297,7 @@ resolve_cores <- function(n_cores = NULL, what = "this step") {
 # worker load it while reading its arguments (see .dlc_loader()). Checked
 # before any worker starts, because what it prevents fails without a word.
 .dlc_check_portable <- function(x, who) {
-  ns  <- environment(.dlc_check_portable)
+  ns  <- environment(sys.function())
   bad <- character(0)
   walk <- function(v, where) {
     e <- if (is.function(v)) environment(v) else if (is.environment(v)) v else NULL
