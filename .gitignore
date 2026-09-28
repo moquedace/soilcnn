@@ -28,3 +28,6 @@ Thumbs.db
 # Vignettes built by devtools::build_vignettes()
 /doc/
 /Meta/
+
+# Python bytecode of tools/
+__pycache__/
