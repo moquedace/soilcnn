@@ -234,16 +234,17 @@ Beside `R/`:
 
 ## Quickstart
 
-```r
-pkgload::load_all(".")          # the package, from this source tree (or library(soilcnn))
+The whole chain, one call per step. The vignette (`vignette("soilcnn")`, from
+[`vignettes/soilcnn.Rmd`](vignettes/soilcnn.Rmd)) walks it with the reasons, and
+[`examples/quickstart.R`](examples/quickstart.R) runs it on the SOC data.
 
-data <- dsm_load(
-  patch_dir    = "outputs/patches/.../",
-  points       = "data/processed/.../full_modeling_dataset_raw.csv",
-  type_table   = "outputs/metadata/.../predictor_type_table.csv",
-  raster_table = "outputs/metadata/.../raster_table_used.csv",
-  windows      = c(3L, 9L, 15L)
-)
+```r
+library(soilcnn)                # or pkgload::load_all(".") on the source tree
+
+store <- dsm_prepare(points = "profiles.gpkg", target = "soc_stock",
+                     raster_dir = "predictors/", windows = c(3, 9, 15),
+                     out_dir = "outputs", transform = "log1p")
+data  <- dsm_load(store)
 
 fit <- dsm_train(
   data,
@@ -261,6 +262,9 @@ fit <- dsm_train(
 fit$by_config                            # mean ± sd, one row per config
 print_noise_floor(seed_noise_floor(fit$comparison))
 print_one_se(one_se(fit$by_config))      # the simplest config within 1 SE
+
+final <- dsm_final(fit, seeds = 10)      # the selected config, under ten seeds
+map   <- dsm_predict(final, data)        # median, mean, intervals, DI and AOA bands
 ```
 
 `dsm_load()` opens the store, reads the points and predictor types, aligns
@@ -560,9 +564,13 @@ To install a copy, build the tarball first: `R CMD INSTALL` of the directory
 itself copies `data/` into the library, subdirectories and all.
 
 ```r
-tgz <- pkgbuild::build("<project root>", dest_path = tempdir(), vignettes = FALSE)
+tgz <- pkgbuild::build("<project root>", dest_path = tempdir())
 install.packages(tgz, repos = NULL, type = "source")
+vignette("soilcnn")                         # the tour, built into the copy
 ```
+
+Building the vignette needs knitr, rmarkdown and pandoc (RStudio ships
+pandoc). Without them, `vignettes = FALSE` builds the package without it.
 
 `dsm_final()` and `dsm_predict()` start worker processes, and each loads the
 framework the way its session did — the source tree, or that same installed

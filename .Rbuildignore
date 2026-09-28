@@ -16,3 +16,6 @@
 ^.*\.Rproj$
 ^\.gitattributes$
 ^\.gitignore$
+^doc$
+^Meta$
+^vignettes/\.gitignore$

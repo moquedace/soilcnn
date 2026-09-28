@@ -37,10 +37,13 @@ Suggests:
     caret,
     CAST,
     FNN,
+    knitr,
     pkgload,
     randomForest,
     ranger,
+    rmarkdown,
     sf
+VignetteBuilder: knitr
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.2

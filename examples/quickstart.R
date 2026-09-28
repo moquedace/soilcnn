@@ -1,14 +1,18 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# The whole framework, in one page.
+# The whole framework, in one page, on the SOC data.
 #
-# This is what using it looks like once the patches exist. The numbered scripts
-# in examples/soc_stock_0_5cm/ do the same things with every knob exposed and
-# every decision commented -- they are the worked example. This is the tour.
+# The same tour as the package's vignette (vignettes/soilcnn.Rmd), with this
+# project's paths, so it runs. The numbered scripts in examples/soc_stock_0_5cm/
+# do the same things with every knob exposed and every decision commented --
+# they are the worked example. This is the tour.
 #
 # WHAT IS DELIBERATELY NOT HERE: no source() list, no manual alignment of
 # points to the store, no raster opened to read a resolution, no buffer
 # arithmetic, no block size copied from another run. Each of those was a step
 # someone had to get right, and each has cost this project a run.
+#
+# COST: hours. Step 3 tunes 30 configurations x 5 folds x 3 seeds, step 6
+# refits ten seeds; the map in step 7 is one small extent.
 # ══════════════════════════════════════════════════════════════════════════════
 
 # WHERE THIS PROJECT IS, FOUND RATHER THAN REMEMBERED.
@@ -44,9 +48,11 @@ base <- function(...) file.path(project_root, ..., "soc_stock_modeling", target_
 
 # ── 1. Load ───────────────────────────────────────────────────────────────────
 #
-# One call: opens the store, reads the points and the predictor types, aligns
-# them, reads the raster resolution, and REFUSES if the store was built under a
-# different predictor set, window set, target or resolution.
+# One call: opens the store 01 built, reads the points and the predictor types,
+# aligns them, reads the raster resolution, and REFUSES if the store was built
+# under a different predictor set, window set, target or resolution. (A store
+# written by dsm_prepare() carries its own tables: dsm_load(store_dir) alone.
+# The arguments below also serve a store from before it.)
 
 data <- dsm_load(
   patch_dir    = base("outputs", "patches"),
@@ -62,6 +68,7 @@ data <- dsm_load(
 # it is one line. Swap it and nothing else changes:
 #
 #   spatial_cv(k = 5)                        blocks of ground, buffered
+#   knndm_cv(k = 5, predpoints = ...)        folds at the distances the map predicts at
 #   random_cv(k = 10)                        ignores geography, on purpose
 #   holdout_cv(validation_frac = 0.2)        a single split
 #   region_cv(group = data$points$biome)     leave-one-region-out
@@ -76,10 +83,13 @@ cv <- spatial_cv(k = 5, block_size = "auto", buffer = "auto", test_frac = 0.15)
 plan <- resolve_resampling(cv, data)
 print(plan)
 
-# ── 3. Fit ────────────────────────────────────────────────────────────────────
+# ── 3. Tune ───────────────────────────────────────────────────────────────────
 #
 # tune_length is a budget, not a lattice -- the same meaning caret gives it.
-# n_seeds is what turns "A beat B" into a claim with an error bar.
+# n_seeds is what turns "A beat B" into a claim with an error bar. expm1 is the
+# inverse of the log1p the target was trained on: a store written by
+# dsm_prepare() records it and dsm_train() reads it, and given here it is
+# checked against the store's.
 
 fit <- dsm_train(
   data,
@@ -87,7 +97,7 @@ fit <- dsm_train(
   resampling  = plan,          # or `cv` directly; the plan is resolved either way
   tune_length = 30,
   n_seeds     = 3,
-  transform   = expm1,         # the target was trained on log1p
+  transform   = expm1,
   output_dir  = base("outputs", "tuning"),
   n_epochs    = 500L,
   patience    = 60L
@@ -100,9 +110,9 @@ print_one_se(one_se(fit$by_config))      # the simplest config within 1 SE
 # ── 4. The baselines that give the number a scale ─────────────────────────────
 #
 # THE SAME PLAN, so the comparison is between models rather than between
-# experiments. The gap between rf_context and the CNN is what the convolution
-# is worth; if it is smaller than the noise floor, the convolution is doing
-# averaging.
+# experiments. The gap between rf_ctx and the CNN is what the arrangement of
+# the neighbourhood is worth; if it is smaller than the noise floor, the
+# convolution is doing averaging.
 
 rf_ctx <- dsm_train(data, model = "rf", resampling = plan,
                     features = c("centre", "window_mean"),
@@ -114,26 +124,38 @@ rf_pt  <- dsm_train(data, model = "rf", resampling = plan,
                     tune_length = 4, n_seeds = 3, transform = expm1,
                     output_dir = base("outputs", "tuning"))
 
-# Borrowing a fourth family from caret costs one line -- caret carries the
-# parameter names, the grid generator and the fit/predict for ~230 methods.
-# register_model(caret_spec("xgbTree"), overwrite = TRUE)
-# xgb <- dsm_train(data, model = "xgbTree", resampling = plan, ...)
+# Borrowing a family from caret costs one line -- caret carries the parameter
+# names, the grid generator and the fit/predict for ~230 methods.
+#   caret_available("^xgb")
+#   register_model(caret_spec("xgbTree"), overwrite = TRUE)
+#   xgb <- dsm_train(data, model = "xgbTree", resampling = plan, ...)
 
-# ── 5. Where the map may be believed ──────────────────────────────────────────
+# ── 5. The test set, once ─────────────────────────────────────────────────────
 #
-# A map has a value at every pixel, including pixels whose predictor
-# combination the model never saw, and nothing in the raster tells them apart.
-# The cross-validated CCC does not describe those. Meyer & Pebesma (2021): the
-# area of applicability belongs beside the map, not in a footnote.
+# Nothing has scored it yet. The choice is written to disk first, and
+# score_test_grid() refuses to run until it is: the order is enforced, not
+# recommended.
 
-fold_cache <- build_fold_cache(data$store, data$points, data$type_table,
-                              plan$folds[[1]], data$store$window_sizes)
-tab <- fold_table_view(fold_cache$cache, data$store$predictors,
-                       features = "centre")
-ref <- di_reference(tab$train$x)
-th  <- aoa_threshold(ref, rep_len(seq_len(plan$n_folds), nrow(tab$train$x)))
+chosen <- one_se(fit$by_config)$config_id[1]
+freeze_selection(fit$run_dir, config_id = chosen)
+score_test_grid(fit$run_dir, data, transform = expm1, device = setup_torch_device())
 
-# At prediction time the same reference is applied chunk by chunk:
-#   di <- dissimilarity_index(ref, chunk_of_scaled_centre_pixels)
-#   inside <- inside_aoa(di, th)
-print_aoa(dissimilarity_index(ref, tab$validation$x), th, "validation points")
+# ── 6. Refit the chosen configuration under ten seeds ─────────────────────────
+#
+# Side by side, with the conformal intervals and the smearing factor calibrated
+# on the tuning run's cross-validated residuals, and final_report.md declaring
+# every hyperparameter of the chosen network.
+
+final <- dsm_final(fit, seeds = 10, transform = expm1)
+
+# ── 7. The map, and where it may be believed ──────────────────────────────────
+#
+# One small extent (in the rasters' CRS: xmin, xmax, ymin, ymax); drop it for
+# the whole grid, which 05_dsm_predict_global.R does. The probe runs first: the
+# profiles' own pixels through the whole chain, against the final model's
+# stored predictions. The di_* and aoa_* bands say where the cross-validated
+# error describes the map (Meyer & Pebesma, 2021) -- beside the map, not in a
+# footnote.
+
+map <- dsm_predict(final, data, extent = c(-56, -50.5, -15, -13.8))
+map

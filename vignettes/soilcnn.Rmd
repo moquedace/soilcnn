@@ -1,0 +1,201 @@
+---
+title: "Getting started with soilcnn"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Getting started with soilcnn}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+# Nothing here is evaluated when the vignette is built: every step reads data
+# the package does not ship, and the tuning step trains for hours.
+knitr::opts_chunk$set(eval = FALSE, collapse = TRUE, comment = "#>")
+```
+
+soilcnn maps a soil property from point observations and a stack of aligned
+rasters. A point-based model reads the covariates under each point. The
+convolutional network here reads the *neighbourhood* around it, at one or two
+window sizes, and everything around the network is there to keep the result
+honest:
+
+- spatial folds with a buffer;
+- a frozen test set;
+- a noise floor measured from the seeds;
+- conformal intervals calibrated on held-out residuals;
+- the area where the map may be believed.
+
+This vignette walks the whole chain. Each step is one call.
+
+```{r}
+library(soilcnn)
+```
+
+## 1. Points and rasters become a patch store
+
+`dsm_prepare()` reads the points and every raster in a folder, runs the
+quality control, classifies the predictors, and cuts a patch around each point
+at every window you ask for. It writes all of that as a *store*, together with
+a recipe (the target transform, the QC rules, the predictor types), so later
+steps need only the store.
+
+```{r}
+store <- dsm_prepare(
+  points     = "profiles.gpkg",        # an sf object, a data frame, or a file sf reads
+  target     = "soc_stock",
+  raster_dir = "predictors/",          # aligned single-band rasters, one per predictor
+  windows    = c(3, 9, 15),            # in pixels: 0.75, 2.25 and 3.75 km at 250 m
+  out_dir    = "outputs",
+  transform  = "log1p",                # the space the network trains in
+  target_min = 0
+)
+```
+
+`windows` is required. A window's ground extent is its width times the
+resolution, so no default would be right at every resolution.
+
+## 2. Load
+
+```{r}
+data <- dsm_load(store)
+```
+
+`dsm_load()` opens the store and reads its own tables. It refuses a store whose
+recipe does not fit together. It also refuses one whose manifest says the
+extraction did not finish.
+
+## 3. Decide who trains and who scores
+
+This is the most consequential line of the chain.
+
+```{r}
+cv <- spatial_cv(k = 5, block_size = "auto", buffer = "auto", test_frac = 0.15)
+```
+
+"auto" means *measured*:
+
+- the block size comes from how these points are spread;
+- the buffer is the largest window times the resolution. That is the exact
+  distance at which two patches stop sharing a pixel.
+
+The other designs are one line each, and everything downstream is unchanged:
+
+```{r}
+random_cv(k = 10)                         # ignores geography, on purpose
+holdout_cv(validation_frac = 0.2)         # a single split
+region_cv(group = data$points$biome)      # leave one region out
+knndm_cv(k = 5, predpoints = prediction_sample(terra::rast("predictors/elev.tif")))
+```
+
+`knndm_cv()` shapes the folds so that the distance from a validation point to
+its nearest training point is distributed like the distance from a map pixel to
+its nearest training point. It needs a sample of where the map will be drawn,
+and it needs the CAST and sf packages.
+
+A plan is worth looking at before a night is spent on it:
+
+```{r}
+plan <- resolve_resampling(cv, data)
+print(plan)
+```
+
+## 4. Tune
+
+```{r}
+fit <- dsm_train(
+  data,
+  model       = "cnn",
+  resampling  = plan,
+  tune_length = 30,      # a budget, as in caret, not a lattice
+  n_seeds     = 3        # what turns "A beat B" into a claim with an error bar
+)
+
+fit$by_config                                   # mean and sd, one row per config
+print_noise_floor(seed_noise_floor(fit$comparison))
+print_one_se(one_se(fit$by_config))             # the simplest config within one SE
+```
+
+The grid is drawn over the windows the store holds: every window alone, and
+every pair. The batch sizes are ones the smallest fold can fill. The predictions
+are scored in native units through the inverse of the store's own transform.
+
+## 5. The baselines that give the number a scale
+
+Train them under the same plan, so the comparison is between models and not
+between experiments:
+
+```{r}
+rf_context <- dsm_train(data, model = "rf", resampling = plan,
+                        features = c("centre", "window_mean"), tune_length = 4)
+rf_point   <- dsm_train(data, model = "rf", resampling = plan,
+                        features = "centre", tune_length = 4)
+```
+
+The gap between `rf_context` and the CNN is what the spatial *arrangement* of
+the neighbourhood is worth. If it is smaller than the noise floor, the
+convolution is only averaging.
+
+The same plan runs any of caret's ~230 methods:
+
+```{r}
+caret_available("^xgb")
+register_model(caret_spec("xgbTree"))
+xgb <- dsm_train(data, model = "xgbTree", resampling = plan, tune_length = 4)
+```
+
+## 6. The test set, once
+
+The test set is carved out when the plan is made, and nothing scores it while
+a configuration is being chosen. Record the choice first, then score the test
+set:
+
+```{r}
+freeze_selection(fit$run_dir, config_id = one_se(fit$by_config)$config_id[1])
+score_test_grid(fit$run_dir, data, device = setup_torch_device())
+```
+
+`score_test_grid()` refuses to run before `freeze_selection()`, and it prints
+both timestamps.
+
+## 7. Refit the chosen configuration
+
+```{r}
+final <- dsm_final(fit, seeds = 10)
+```
+
+`dsm_final()` refits the configuration the tuning run selects under ten seeds,
+side by side. It calibrates the conformal intervals and the smearing factor on
+the tuning run's cross-validated residuals. It writes `final_report.md`, which
+declares every hyperparameter of the chosen network and whether the search
+chose it.
+
+## 8. The map
+
+```{r}
+map <- dsm_predict(final, data, extent = c(-56, -50.5, -15, -13.8))
+map
+```
+
+The map is one VRT per band:
+
+- the ensemble median, mean, sd, mad, min and max over the seeds;
+- the smeared mean;
+- the 90% conformal intervals;
+- the dissimilarity index and the area of applicability.
+
+`bands.csv`, beside the bands, says what each one is.
+
+Before it maps, `dsm_predict()` runs a *probe*. It predicts the profiles' own
+pixels through the whole chain and compares them with the final model's stored
+predictions, so a wrong band order or a wrong scaling stops the run in seconds
+instead of producing a plausible map. Drop `extent` for the whole grid. The run
+resumes where it stopped, and it refuses to continue if anything that changes
+the numbers has changed.
+
+## Where the map may be believed
+
+A map has a value at every pixel, including pixels whose predictor combination
+the model never met, and nothing in the raster tells them apart. The
+cross-validated error does not describe those pixels. The `di_*` and `aoa_*`
+bands (Meyer & Pebesma, 2021) say where it does, and they belong beside the
+map, not in a footnote.

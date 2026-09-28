@@ -24,3 +24,7 @@ _test_gpu/
 # OS
 .DS_Store
 Thumbs.db
+
+# Vignettes built by devtools::build_vignettes()
+/doc/
+/Meta/
