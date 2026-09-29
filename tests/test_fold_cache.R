@@ -15,7 +15,7 @@
 # cache being the same tensors without the copies it used to leave behind --
 # and since 2026-09-28, through one buffer for every fold of a loop.
 #
-# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tests/test_fold_cache.R")
+# Run: source("<package root>/tests/test_fold_cache.R")
 
 suppressMessages({
   library(torch)

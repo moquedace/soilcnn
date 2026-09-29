@@ -22,7 +22,7 @@
 # flatten) fcn_supported() must say so, and the fcn path must fall back rather
 # than return a different number.
 #
-# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tests/test_fcn.R")
+# Run: source("<package root>/tests/test_fcn.R")
 
 suppressMessages(library(torch))
 root <- (function() {

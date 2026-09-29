@@ -24,7 +24,7 @@
 #   6. a frozen test set survives a change of resampling method
 #   7. the failures a user will actually hit say what to do
 #
-# Run: source("D:/.../tests/test_api.R")     (no tensors)
+# Run: source("<package root>/tests/test_api.R")     (no tensors)
 
 suppressMessages({
   library(tibble)
@@ -51,7 +51,7 @@ root <- (function() {
       if (file.exists(file.path(r, "R", "cnn_architecture.R"))) return(r)
     }
   }
-  stop("Project root not found. setwd() to the deep_learning_caret root, ",
+  stop("Project root not found. setwd() to the package root, ",
        "or source() this file with its full path.", call. = FALSE)
 })()
 

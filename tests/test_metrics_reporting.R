@@ -22,7 +22,7 @@
 #   6. snapshots round-trip, including the decimal that broke them once
 #   7. a changed / new / removed value is each reported as what it is
 #
-# Run: source("D:/.../tests/test_reporting.R")    (CPU, no tensors)
+# Run: source("<package root>/tests/test_reporting.R")    (CPU, no tensors)
 
 suppressMessages({
   library(tibble)
@@ -50,7 +50,7 @@ root <- (function() {
       if (file.exists(file.path(r, "R", "cnn_architecture.R"))) return(r)
     }
   }
-  stop("Project root not found. setwd() to the deep_learning_caret root, ",
+  stop("Project root not found. setwd() to the package root, ",
        "or source() this file with its full path.", call. = FALSE)
 })()
 

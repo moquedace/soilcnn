@@ -24,7 +24,7 @@
 # No model is trained here: the refusals all happen before any torch call, and
 # they are the part that carries the guarantee.
 #
-# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tests/test_selection_order.R")
+# Run: source("<package root>/tests/test_selection_order.R")
 
 suppressMessages({
   library(tibble)

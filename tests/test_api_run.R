@@ -24,7 +24,7 @@
 #   5. the plan dsm_train() used is the plan it was given
 #   6. a run is resumable through the front door
 #
-# Run: source("D:/.../tests/test_api_run.R")   (trains; ~1 min on CPU)
+# Run: source("<package root>/tests/test_api_run.R")   (trains; ~1 min on CPU)
 
 suppressMessages({
   library(torch)
@@ -53,7 +53,7 @@ root <- (function() {
       if (file.exists(file.path(r, "R", "cnn_architecture.R"))) return(r)
     }
   }
-  stop("Project root not found. setwd() to the deep_learning_caret root, ",
+  stop("Project root not found. setwd() to the package root, ",
        "or source() this file with its full path.", call. = FALSE)
 })()
 

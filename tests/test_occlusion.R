@@ -15,7 +15,7 @@
 # the mask, the permutation, the cache copy, the loader, the metric -- one of
 # those two comes out wrong.
 #
-# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tests/test_occlusion.R")
+# Run: source("<package root>/tests/test_occlusion.R")
 
 suppressMessages({
   library(torch)

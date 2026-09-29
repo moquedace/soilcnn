@@ -16,7 +16,7 @@
 #   7. build_cnn_from_config() on a config with no embed_pool column defaults
 #      to "flatten" WITHOUT emitting a tibble warning
 #
-# Run: source("D:/.../tests/test_validation.R")     (CPU, no GPU needed)
+# Run: source("<package root>/tests/test_validation.R")     (CPU, no GPU needed)
 
 suppressMessages({
   library(torch)
@@ -43,7 +43,7 @@ root <- (function() {
       if (file.exists(file.path(r, "R", "cnn_architecture.R"))) return(r)
     }
   }
-  stop("Project root not found. setwd() to the deep_learning_caret root, ",
+  stop("Project root not found. setwd() to the package root, ",
        "or source() this file with its full path.", call. = FALSE)
 })()
 source(file.path(root, "tests", "helper.R"))

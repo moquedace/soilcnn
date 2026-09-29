@@ -39,7 +39,7 @@
 #      the simplest model within one standard error of it are different
 #      configs, which is the only case where the rule earns its existence
 #
-# Run: source("D:/.../tests/test_resample.R")    (CPU, no tensors)
+# Run: source("<package root>/tests/test_resample.R")    (CPU, no tensors)
 
 suppressMessages({
   library(tibble)
@@ -66,7 +66,7 @@ root <- (function() {
       if (file.exists(file.path(r, "R", "cnn_architecture.R"))) return(r)
     }
   }
-  stop("Project root not found. setwd() to the deep_learning_caret root, ",
+  stop("Project root not found. setwd() to the package root, ",
        "or source() this file with its full path.", call. = FALSE)
 })()
 

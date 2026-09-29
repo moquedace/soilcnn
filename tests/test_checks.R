@@ -7,7 +7,7 @@
 # having checked nothing: an empty ledger, and a ledger missing the check that
 # mattered because the script returned early. This project has hit both.
 #
-# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tests/test_checks.R")
+# Run: source("<package root>/tests/test_checks.R")
 
 suppressMessages({
   library(tibble)

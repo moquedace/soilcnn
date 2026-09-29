@@ -32,7 +32,7 @@
 #      authors -- read from the installed copy, which is the only place
 #      citation() reads (a session with the source tree loaded cannot)
 #
-# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tests/test_package_install.R")
+# Run: source("<package root>/tests/test_package_install.R")
 #      (~2 min: a build, an install, four R processes)
 
 root <- (function() {

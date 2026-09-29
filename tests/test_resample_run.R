@@ -27,7 +27,7 @@
 #      fold's roles in tensors of their own (options(dsm.fold_buffer = FALSE)),
 #      and the fold loop's memory trace (options(dsm.train.trace_mem = TRUE))
 #
-# Run: source("D:/.../tests/test_resample_run.R")    (CPU, ~1 min)
+# Run: source("<package root>/tests/test_resample_run.R")    (CPU, ~1 min)
 
 suppressMessages({
   library(torch)
@@ -57,7 +57,7 @@ root <- (function() {
       if (file.exists(file.path(r, "R", "cnn_architecture.R"))) return(r)
     }
   }
-  stop("Project root not found. setwd() to the deep_learning_caret root, ",
+  stop("Project root not found. setwd() to the package root, ",
        "or source() this file with its full path.", call. = FALSE)
 })()
 

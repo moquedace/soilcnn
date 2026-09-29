@@ -1,6 +1,6 @@
 # R CMD check on the package, from a staged copy of its own files.
 #
-#   source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tools/check_package.R")
+#   source("<package root>/tools/check_package.R")
 #
 # WHAT IT DOES. Copies DESCRIPTION, NAMESPACE, LICENSE, .Rbuildignore, R/,
 # man/, vignettes/ and inst/ into a staging folder -- R CMD build lists every file

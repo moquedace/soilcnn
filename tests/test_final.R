@@ -30,7 +30,7 @@
 # enough blocks that a spatial tuning plan and its refit split both have
 # something to cut. Every unit trains for 3 epochs: this is about the wiring.
 #
-# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tests/test_final.R")
+# Run: source("<package root>/tests/test_final.R")
 # (trains; ~1-2 min on CPU, most of it starting worker processes)
 
 suppressMessages({

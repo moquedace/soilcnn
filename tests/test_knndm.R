@@ -22,7 +22,7 @@
 # argument contract runs either way, which is why those checks were moved ahead
 # of the dependency check in knndm_folds().
 #
-# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tests/test_knndm.R")
+# Run: source("<package root>/tests/test_knndm.R")
 
 suppressMessages({
   library(tibble)

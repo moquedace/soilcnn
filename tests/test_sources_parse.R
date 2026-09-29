@@ -23,7 +23,7 @@
 #   1. every .R file under R/, tests/ and tools/ parses
 #   2. the report names the file AND the line, so the fix is immediate
 #
-# Run: source("D:/.../tests/test_sources_parse.R")     (no packages needed)
+# Run: source("<package root>/tests/test_sources_parse.R")     (no packages needed)
 
 # -- project root: works under source() in the console AND under Rscript ------
 
@@ -45,7 +45,7 @@ root <- (function() {
       if (file.exists(file.path(r, "R", "cnn_architecture.R"))) return(r)
     }
   }
-  stop("Project root not found. setwd() to the deep_learning_caret root, ",
+  stop("Project root not found. setwd() to the package root, ",
        "or source() this file with its full path.", call. = FALSE)
 })()
 

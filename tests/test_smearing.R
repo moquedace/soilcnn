@@ -12,7 +12,7 @@
 # built on distributions whose true conditional mean is known in closed form,
 # rather than on the numbers this project happened to measure.
 #
-# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tests/test_smearing.R")
+# Run: source("<package root>/tests/test_smearing.R")
 
 suppressMessages({
   library(tibble)

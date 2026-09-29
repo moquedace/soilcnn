@@ -19,7 +19,7 @@
 #   7. far points fall outside the AOA and near points inside
 #   8. degenerate input is refused, not answered
 #
-# Run: source("D:/.../tests/test_aoa.R")     (no tensors: base R on small matrices)
+# Run: source("<package root>/tests/test_aoa.R")     (no tensors: base R on small matrices)
 
 # -- project root: works under source() in the console AND under Rscript ------
 
@@ -41,7 +41,7 @@ root <- (function() {
       if (file.exists(file.path(r, "R", "cnn_architecture.R"))) return(r)
     }
   }
-  stop("Project root not found. setwd() to the deep_learning_caret root, ",
+  stop("Project root not found. setwd() to the package root, ",
        "or source() this file with its full path.", call. = FALSE)
 })()
 

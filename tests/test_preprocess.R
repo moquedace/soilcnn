@@ -19,7 +19,7 @@
 #   6. channel-count mismatch is caught instead of silently broadcasting
 #   7. QC order: the NA floor wins over the clamp
 #
-# Run: source("D:/.../tests/test_preprocess.R")    (CPU, no GPU needed)
+# Run: source("<package root>/tests/test_preprocess.R")    (CPU, no GPU needed)
 
 suppressMessages({
   library(torch)
@@ -47,7 +47,7 @@ root <- (function() {
       if (file.exists(file.path(r, "R", "cnn_architecture.R"))) return(r)
     }
   }
-  stop("Project root not found. setwd() to the deep_learning_caret root, ",
+  stop("Project root not found. setwd() to the package root, ",
        "or source() this file with its full path.", call. = FALSE)
 })()
 source(file.path(root, "tests", "helper.R"))

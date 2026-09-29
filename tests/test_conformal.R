@@ -16,7 +16,7 @@
 #   5. the marginal guarantee can hide a broken group, and picp_report shows it
 #   6. every way of mixing normalised and constant calibration is refused
 #
-# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tests/test_conformal.R")
+# Run: source("<package root>/tests/test_conformal.R")
 
 suppressMessages({
   library(tibble)

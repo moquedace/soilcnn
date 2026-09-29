@@ -18,7 +18,7 @@
 #   5. safe_torch_save() REFUSES a tensor above 2^31 instead of corrupting it
 #   6. a truncated file is detected
 #
-# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tests/test_patch_store_io.R")
+# Run: source("<package root>/tests/test_patch_store_io.R")
 
 suppressMessages({
   library(torch)

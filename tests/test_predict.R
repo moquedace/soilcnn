@@ -31,7 +31,7 @@
 # between sites and the 0.7-degree buffer drops nobody. One dual-branch config
 # (3 x 3 "same", 7 x 7 "valid": one branch per engine), 2 epochs.
 #
-# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tests/test_predict.R")
+# Run: source("<package root>/tests/test_predict.R")
 # (trains and starts worker processes; ~2-4 min on CPU)
 
 suppressMessages({

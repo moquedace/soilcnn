@@ -24,7 +24,7 @@
 # store of one window, and the store's inverse actually applied -- is in
 # test_api_run.R.
 #
-# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tests/test_train_defaults.R")
+# Run: source("<package root>/tests/test_train_defaults.R")
 
 root <- (function() {
   cand <- character(0)

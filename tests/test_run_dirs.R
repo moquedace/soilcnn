@@ -18,7 +18,7 @@
 # times set explicitly -- because the defect was in how files were chosen, and a
 # fixture that hands the function a tidy vector would test the fixture.
 #
-# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tests/test_run_dirs.R")
+# Run: source("<package root>/tests/test_run_dirs.R")
 
 suppressMessages({
   library(tibble)

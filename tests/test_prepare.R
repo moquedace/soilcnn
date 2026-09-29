@@ -26,7 +26,7 @@
 #   const_glacier.tif                 0 everywhere -> a constant "dummy"
 #   drop_me.tif                       declared in `drop`
 #
-# Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tests/test_prepare.R")
+# Run: source("<package root>/tests/test_prepare.R")
 
 suppressMessages({
   library(tibble)

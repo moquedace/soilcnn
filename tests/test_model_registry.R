@@ -17,7 +17,7 @@
 #   6. the RF spec fits and predicts through the registry's contract
 #   7. a reordered prediction table is refused
 #
-# Run: source("D:/.../tests/test_model_registry.R")     (torch for tensors
+# Run: source("<package root>/tests/test_model_registry.R")     (torch for tensors
 #      only -- nothing is trained)
 
 suppressMessages({
@@ -45,7 +45,7 @@ root <- (function() {
       if (file.exists(file.path(r, "R", "cnn_architecture.R"))) return(r)
     }
   }
-  stop("Project root not found. setwd() to the deep_learning_caret root, ",
+  stop("Project root not found. setwd() to the package root, ",
        "or source() this file with its full path.", call. = FALSE)
 })()
 
