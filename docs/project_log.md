@@ -6267,3 +6267,14 @@ O GitHub guarda três coisas nos ajustes, fora dos arquivos:
 - o wiki, habilitado e vazio.
 
 Sugeri alinhá-los ao pacote.
+
+### A verificação da arrumação (código c2c4a3e)
+
+- **`tests/run_all.R`: 31/31 em 7,9 min.** O `test_sources_parse` agora cobre
+  79 arquivos: `R/`, `examples/`, `examples/soc_stock_0_5cm/`, `checks/` e
+  `tests/`. Os scripts movidos e o `quickstart.R` fazem parte deles.
+- **R CMD check: `Status: OK`**, com o `.Rbuildignore` enxuto.
+- **Na página do repositório**, o usuário trocou a descrição e pôs oito
+  tópicos: `conformal-prediction`, `deep-learning`, `digital-soil-mapping`,
+  `pedometrics`, `r-package`, `soil-organic-carbon`,
+  `spatial-cross-validation` e `torch`.
