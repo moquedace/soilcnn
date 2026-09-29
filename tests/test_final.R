@@ -383,9 +383,8 @@ writeLines("1073741825", file.path(lock, "pid"))   # no such process
 ok["a_lock_left_by_a_dead_worker_is_taken_over"] <-
   identical(.final_one_reader(lock_dir, "read"), "read") && !dir.exists(lock)
 dir.create(lock)                                   # made, and the worker died before its id
-Sys.setFileTime(lock, Sys.time() - 120)
-t_lock <- system.time(taken <- .final_one_reader(lock_dir, "read"))[["elapsed"]]
-ok["a_lock_left_without_an_id_is_taken_over_after_a_minute"] <-
+t_lock <- system.time(taken <- .final_one_reader(lock_dir, "read", no_id_s = 0))[["elapsed"]]
+ok["a_lock_left_without_an_id_is_taken_over"] <-
   identical(taken, "read") && !dir.exists(lock) && t_lock < 30
 
 # The budget: every worker training, ONE at its peak -- the one reading.

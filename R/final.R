@@ -740,9 +740,9 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
 # says whose it is, and the lock of a process that no longer exists is taken
 # over -- or one crashed worker would leave every other waiting, and the fit
 # would hang with nothing said. The id is written a moment after the directory
-# is made; a lock that stays without one for a minute lost its worker in that
-# moment. `expr` is evaluated only once the lock is held.
-.final_one_reader <- function(claims_dir, expr) {
+# is made; a lock that stays without one for `no_id_s` seconds (a minute) lost
+# its worker in that moment. `expr` is evaluated only once the lock is held.
+.final_one_reader <- function(claims_dir, expr, no_id_s = 60) {
   lock     <- file.path(claims_dir, ".reading")
   pid_file <- file.path(lock, "pid")
   said <- FALSE
@@ -751,7 +751,7 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
     holder <- suppressWarnings(as.integer(
       tryCatch(readLines(pid_file, warn = FALSE), error = function(e) character(0))[1]))
     gone <- if (is.na(holder)) {
-      isTRUE(difftime(Sys.time(), file.mtime(lock), units = "secs") > 60)
+      isTRUE(difftime(Sys.time(), file.mtime(lock), units = "secs") > no_id_s)
     } else {
       !ps::pid_exists(holder)
     }
