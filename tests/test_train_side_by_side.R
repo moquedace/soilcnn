@@ -13,7 +13,8 @@
 #      rest another way is refused: another threads_per_unit, the session, or a
 #      run from before the record
 #   4. a resume trains nothing that finished
-#   5. a unit that fails is a row that says so, not a lost worker
+#   5. a unit that fails is a row that says so, not a lost worker; a worker
+#      that dies stops the run, naming the units it left without a record
 #   6. the door: a device with in_session = FALSE, a thread count that is not
 #      a whole number
 #   7. the worker's memory trace, when asked, fold by fold and unit by unit
@@ -245,6 +246,19 @@ ok["a_failed_unit_is_a_row"] <- nrow(cmp_bad) == nrow(grid) * plan$n_folds &&
   all(nzchar(cmp_bad$error_message[cmp_bad$status == "failed"]))
 ok["the_other_config_still_trained"] <- sum(cmp_bad$status == "success") == plan$n_folds &&
   nrow(bad$by_config) == 1L
+
+# A worker that dies leaves its units without a record, and the run stops
+# naming them. Here the one worker dies at once, on a store that is not there.
+lost_store <- data$store
+lost_store$patch_dir <- file.path(tempdir(), "dlc_side_no_store")
+m_lost <- err(suppressMessages(run_cnn_resample(
+  tune_grid = grid[1, , drop = FALSE], store = lost_store, points = data$points,
+  type_table = data$type_table, plan = plan, transform = expm1, output_dir = out_root,
+  device = NULL, run_id = "side_lost", n_seeds = 1L, in_session = FALSE,
+  threads_per_unit = 1L, n_cores = 1L,
+  n_epochs = 2L, patience = 2L, print_every = 100L, augment = FALSE)))
+ok["a_unit_whose_worker_died_stops_the_run_by_name"] <-
+  grepl("did not finish", m_lost) && grepl(paste0(grid$config_id[1], "_f1_s1"), m_lost)
 
 # =============================================================================
 # 6. The door

@@ -202,11 +202,12 @@
   write_comparison(comparison, comparison_path,
                    file.path(run_dir, "comparison", "comparison_all.rds"))
 
-  # EVERY UNIT, OR STOP. A unit with no row never finished -- its worker died
-  # under it -- and a table without it would rank the configurations on
-  # different numbers of repetitions without saying so. Said here, while the
-  # run is still in front of someone; the next call trains only what is missing.
-  missing <- setdiff(units$unit_id, comparison$unit_id)
+  # EVERY UNIT, OR STOP. A unit this call set out to train and left without a
+  # record never finished -- its worker died under it. Its row, if the table
+  # has one, is the last call's (a failure, or other hyperparameters), and a
+  # table ranked with it would say nothing about it. Said here, while the run is
+  # still in front of someone; the next call trains only what is missing.
+  missing <- todo$unit_id[!file.exists(.train_unit_record_path(run_dir, todo$unit_id))]
   if (length(missing) > 0L) {
     stop(length(missing), " unit(s) did not finish: ",
          paste(utils::head(missing, 6), collapse = ", "),
