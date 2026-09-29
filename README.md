@@ -66,9 +66,18 @@ remotes::install_github("moquedace/soilcnn")
 torch::install_torch()          # once: the C++ backend the torch package needs
 ```
 
-`build_vignettes = TRUE` also builds the tour (`vignette("soilcnn")`); it needs
-knitr, rmarkdown and pandoc. To work on the source tree instead, clone the
-repository and load it with `pkgload::load_all("<clone>")`.
+The tour, `vignette("soilcnn")`, is there only when the install builds it,
+which needs knitr, rmarkdown and pandoc (RStudio ships pandoc):
+
+```r
+remotes::install_github("moquedace/soilcnn", build_vignettes = TRUE)
+vignette("soilcnn")
+```
+
+Over a copy already installed from the same commit, add `force = TRUE`:
+remotes skips a commit it has already installed, and the vignette with it.
+To work on the source tree instead, clone the repository and load it with
+`pkgload::load_all("<clone>")`.
 
 ---
 
