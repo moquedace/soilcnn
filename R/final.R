@@ -104,7 +104,11 @@
 #' @param metric     The selection metric, as in the tuning table.
 #' @param seeds      A count (seeds 42, 43, ...) or the seeds themselves.
 #' @param validation_frac Share of the non-test rows the refit stops on,
-#'   carved by the tuning plan's own criterion (refit_split()).
+#'   carved by the tuning plan's own criterion (refit_split()): blocks, random
+#'   rows, whole regions, or kNNDM against the same prediction points.
+#' @param predpoints For a kNNDM tuning run made before its plan kept its
+#'   prediction points (2026-09-29): those points, a data frame with x and y.
+#'   NULL takes the plan's.
 #' @param training   Overrides of the refit schedule (.final_training_defaults)
 #'   -- any argument of train_one_cnn().
 #' @param transform  NULL for the store's own inverse (see dsm_train()).
@@ -128,7 +132,8 @@
 #' @export
 dsm_final <- function(tuning, data = NULL, config = "auto",
                       rule = c("one_se", "rank1"), metric = "val_ccc",
-                      seeds = 10L, validation_frac = 0.15, training = list(),
+                      seeds = 10L, validation_frac = 0.15, predpoints = NULL,
+                      training = list(),
                       transform = NULL, n_cores = NULL, threads_per_unit = 5L,
                       max_ram_gb = NULL, conformal_alpha = c(0.1, 0.05),
                       output_dir = NULL, run_id = NULL, resume = TRUE,
@@ -224,7 +229,8 @@ dsm_final <- function(tuning, data = NULL, config = "auto",
   # Same test set, validation carved the same way the selection was: a model
   # selected on spatial folds that then stopped on a random validation set
   # would have changed the question between the two stages.
-  refit <- refit_split(tuning_plan, data$store$meta, validation_frac = validation_frac)
+  refit <- refit_split(tuning_plan, data$store$meta, validation_frac = validation_frac,
+                       predpoints = predpoints)
   index <- refit$folds[[1]]
   n_train <- length(index$train)
   too_big <- selected$batch_size > n_train
@@ -348,7 +354,7 @@ dsm_final <- function(tuning, data = NULL, config = "auto",
     tuning_dir = tuning_dir,
     # What makes a seed's numbers reproducible, beside the seed itself.
     threads_per_unit = tpu, n_workers = run_info$n_workers, training = training,
-    validation_frac = validation_frac, n_train = n_train,
+    validation_frac = validation_frac, refit_method = refit$method, n_train = n_train,
     n_validation = length(index$validation), n_test = length(index$test),
     torch_version = as.character(utils::packageVersion("torch")),
     r_version = R.version.string, git_commit = .git_commit_at(run_dir),
@@ -366,6 +372,7 @@ dsm_final <- function(tuning, data = NULL, config = "auto",
     per_worker_gb_estimate = run_info$per_worker_gb_estimate,
     split = c(train = n_train, validation = length(index$validation),
               test = length(index$test)),
+    refit_method = refit$method,
     target = data$target_col, fitted_by = "dsm_final()",
     minutes = as.numeric(difftime(Sys.time(), t_start, units = "mins"))),
     class = "dsm_final")
@@ -1245,7 +1252,8 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
     }
   }
   L <- c(L, "", "## The refit", "",
-         sprintf("- Split from the tuning plan: %d training, %d validation (early stopping), %d test.",
+         sprintf("- Split from the tuning plan%s: %d training, %d validation (early stopping), %d test.",
+                 if (is.null(x$refit_method)) "" else sprintf(", by its own criterion (`%s`)", x$refit_method),
                  x$split[["train"]], x$split[["validation"]], x$split[["test"]]),
          if (is.na(x$threads_per_unit)) {
            sprintf("- Seeds: %s. The thread count they trained with was not recorded by the stage that fitted them -- and a seed's numbers depend on it (T1).",

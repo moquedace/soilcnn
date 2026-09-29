@@ -12,6 +12,7 @@ dsm_final(
   metric = "val_ccc",
   seeds = 10L,
   validation_frac = 0.15,
+  predpoints = NULL,
   training = list(),
   transform = NULL,
   n_cores = NULL,
@@ -43,7 +44,12 @@ of the best) or "rank1" (the best mean).}
 \item{seeds}{A count (seeds 42, 43, ...) or the seeds themselves.}
 
 \item{validation_frac}{Share of the non-test rows the refit stops on,
-carved by the tuning plan's own criterion (refit_split()).}
+carved by the tuning plan's own criterion (refit_split()): blocks, random
+rows, whole regions, or kNNDM against the same prediction points.}
+
+\item{predpoints}{For a kNNDM tuning run made before its plan kept its
+prediction points (2026-09-29): those points, a data frame with x and y.
+NULL takes the plan's.}
 
 \item{training}{Overrides of the refit schedule (.final_training_defaults)
 -- any argument of train_one_cnn().}

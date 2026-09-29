@@ -1113,4 +1113,39 @@ ok["an_empty_directory_is_fine"] <-
 
 unlink(plan_dir, recursive = TRUE)
 
+# -- 16. refit_split(): the final fit's validation, by the plan's own rules --
+#
+# dsm_final() stops the final fit on a validation set cut the way the tuning
+# folds were. The test set is the plan's, verbatim; the rest is split once.
+# Blocks and random rows take the first of k = 1/validation_frac folds, as
+# they always did. Regions -- which could not be refitted before 2026-09-29 --
+# take whole regions: the fold closest to the share asked for.
+refit_is_sound <- function(rf, plan) {
+  f    <- rf$folds[[1]]
+  test <- sort(as.integer(plan$folds[[1]]$test))
+  rf$n_folds == 1L && identical(sort(as.integer(f$test)), test) &&
+    length(intersect(f$train, f$validation)) == 0L &&
+    length(intersect(c(f$train, f$validation), test)) == 0L
+}
+rs <- refit_split(sp, meta, 0.15)
+rr <- refit_split(rp, meta, 0.15)
+rg <- refit_split(gp, meta, 0.15)
+ok["refit_spatial_is_sound"] <- refit_is_sound(rs, sp) && identical(rs$method, "refit_spatial_folds")
+ok["refit_random_is_sound"]  <- refit_is_sound(rr, rp) && identical(rr$method, "refit_random_folds")
+ok["refit_region_is_sound"]  <- refit_is_sound(rg, gp) && identical(rg$method, "refit_region_folds")
+ok["refit_spatial_takes_the_first_fold_as_it_did"] <- identical(rs$params$refit_fold, 1L)
+ok["refit_region_validates_whole_regions"] <- {
+  f <- rg$folds[[1]]
+  length(intersect(meta$site[f$validation], meta$site[f$train])) == 0L
+}
+ok["refit_region_covers_every_non_test_row"] <- {
+  f <- rg$folds[[1]]
+  identical(sort(as.integer(c(f$train, f$validation))),
+            as.integer(setdiff(seq_len(nrow(meta)), gp$folds[[1]]$test)))
+}
+cat(sprintf("  refit by region          : %d site(s) validate, %d train, the test's %d untouched\n",
+            length(unique(meta$site[rg$folds[[1]]$validation])),
+            length(unique(meta$site[rg$folds[[1]]$train])),
+            length(unique(meta$site[gp$folds[[1]]$test]))))
+
 .report(ok, "test_resample")

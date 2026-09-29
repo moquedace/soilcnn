@@ -18,6 +18,8 @@
 #      call freezes no choice
 #   7. a final model dsm_final() did not start gets its declaration, and is
 #      never fitted into
+#   9. a kNNDM tuning run refits: the final fit's validation cut by kNNDM,
+#      against the prediction points the tuning plan kept
 #
 # The fixture: 96 points in 8 sites two degrees apart, 3 channels, window 3 --
 # enough blocks that a spatial tuning plan and its refit split both have
@@ -326,6 +328,34 @@ changed$base_lr <- 0.123
 ok["a_config_with_other_hyperparameters_gets_none"] <-
   is.null(suppressMessages(cv_residuals_for_config(fit$run_dir, changed, required = FALSE))) &&
   grepl("No configuration", err(cv_residuals_for_config(fit$run_dir, changed)))
+
+# ── 9. a kNNDM tuning run refits too ─────────────────────────────────────────
+#
+# The final fit's validation is cut by the tuning plan's own criterion, and for
+# kNNDM that is kNNDM again, against the prediction points the plan kept. Until
+# 2026-09-29 dsm_final() stopped on a kNNDM run ("Unknown plan method").
+# Guarded as tests/test_knndm.R guards it: CAST and sf are optional.
+if (requireNamespace("CAST", quietly = TRUE) && requireNamespace("sf", quietly = TRUE)) {
+  pp <- tibble::tibble(x = stats::runif(300, -1, 8), y = stats::runif(300, -1, 4))
+  fit_k <- suppressMessages(dsm_train(
+    data, model = "cnn",
+    resampling = knndm_cv(k = 2L, predpoints = pp, hold_out_test = TRUE, seed = 5L),
+    tune_grid = grid[1, , drop = FALSE], n_seeds = 1L, output_dir = out_root,
+    run_id = "tuning_knndm", device = setup_torch_device(n_threads = 1L, use_cuda = FALSE),
+    n_epochs = 3L, patience = 3L, print_every = 100L, augment = FALSE, verbose = FALSE))
+  fin_k <- suppressMessages(do.call(dsm_final, c(list(fit_k, n_cores = 1L, run_id = "knndm"),
+                                                 final_args)))
+  ok["a_knndm_tuning_run_refits_by_knndm"] <-
+    identical(fin_k$refit_method, "refit_knndm_folds") &&
+    all(file.exists(file.path(fin_k$run_dir, fin_k$selected_config_ids[1], "models",
+                              sprintf("seed%04d_best.pt", 1:3))))
+  ok["its_test_set_is_the_tuning_runs"] <-
+    identical(as.integer(fin_k$split[["test"]]), length(fit_k$plan$folds[[1]]$test))
+  cat(sprintf("  kNNDM refit              : %s | split %s\n", fin_k$refit_method,
+              paste(sprintf("%s %d", names(fin_k$split), fin_k$split), collapse = ", ")))
+} else {
+  cat("  CAST or sf missing       : the kNNDM refit is not exercised\n")
+}
 
 unlink(base, recursive = TRUE)
 

@@ -260,6 +260,21 @@ if (identical(tuning_run_id, "latest")) {
 }
 tuning_dir <- file.path(output_tuning_dir, tuning_run_id)
 
+# A kNNDM TUNING RUN cuts the refit's validation against its prediction points
+# (refit_split()), and its plan keeps them from 2026-09-29 on. C1's kNNDM run
+# is older: it was cut against B1's points, which are handed over here.
+tuning_plan <- readRDS(file.path(tuning_dir, "fold_plan.rds"))
+refit_predpoints <- NULL
+if (identical(tuning_plan$method, "knndm_folds") && is.null(tuning_plan$knndm)) {
+  pp_file <- file.path(output_tuning_dir, "capability_sweep", "b1_knndm", "predpoints.csv")
+  if (!file.exists(pp_file)) {
+    stop("Tuning run ", tuning_run_id, " is a kNNDM plan from before plans kept their ",
+         "prediction points, and B1's points, which it was cut against, are not at\n  ",
+         pp_file, "\n  Run _b1_knndm_folds.R first.", call. = FALSE)
+  }
+  refit_predpoints <- safe_read_csv2(pp_file)
+}
+
 # THE FINAL MODEL STAGE 05 MAPS NOW, beside the run this fit comes from. The
 # fit takes its place, and "latest" need not be the run it was selected from:
 # on 2026-09-28 it resolved to soc_0_5cm_design_spatial, while the deployed
@@ -312,6 +327,7 @@ final <- dsm_final(
   metric           = selection_metric,
   seeds            = seeds,
   validation_frac  = validation_frac,
+  predpoints       = refit_predpoints,
   training         = training_args,
   n_cores          = n_cores,
   threads_per_unit = threads_per_unit,

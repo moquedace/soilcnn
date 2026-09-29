@@ -960,9 +960,11 @@ describe_subsample <- function(idx) {
 #' @param plan            The fold_plan used for tuning.
 #' @param meta            The same point table.
 #' @param validation_frac Share of the non-test rows used to stop training.
+#' @param predpoints      kNNDM plans only: the prediction points, for a plan
+#'   made before knndm_folds() kept them with the plan. NULL takes the plan's.
 #' @return A one-fold `fold_plan`.
 #' @noRd
-refit_split <- function(plan, meta, validation_frac = 0.15) {
+refit_split <- function(plan, meta, validation_frac = 0.15, predpoints = NULL) {
   stopifnot(inherits(plan, "fold_plan"))
   test_pos <- plan$folds[[1]]$test
   test_ids <- if (length(test_pos)) meta$sample_id[test_pos] else NULL
@@ -979,8 +981,8 @@ refit_split <- function(plan, meta, validation_frac = 0.15) {
       buffer        = plan$params$buffer,
       buffer_metric = plan$params$buffer_metric %||% "chebyshev",
       seed = seed),
-    region_folds  = stop("refit_split() for region_folds needs the group ",
-                         "vector -- pass it explicitly.", call. = FALSE),
+    region_folds  = .refit_region_plan(plan, meta, k, test_ids, seed),
+    knndm_folds   = .refit_knndm_plan(plan, meta, k, test_ids, seed, predpoints),
     random_folds  = random_folds(meta, k = k, test_ids = test_ids, seed = seed),
     holdout       = holdout(meta, validation_frac = validation_frac,
                             test_ids = test_ids, seed = seed),
@@ -989,11 +991,83 @@ refit_split <- function(plan, meta, validation_frac = 0.15) {
 
   if (identical(plan$method, "holdout")) return(sub_plan)
 
-  idx <- sub_plan$folds[[1]]
+  # WHICH OF THE k FOLDS VALIDATES. Blocks and random folds come out balanced
+  # -- blocks dealt greedily, rows drawn at random -- and the first is taken,
+  # as it always was. kNNDM builds its folds from clusters and lets one hold
+  # up to half the points (CAST's maxp), and a region is as large as it is:
+  # there the fold closest in size to validation_frac of the pool validates,
+  # so the refit trains on the share it was asked to.
+  pick <- 1L
+  if (plan$method %in% c("knndm_folds", "region_folds")) {
+    f1 <- sub_plan$folds[[1]]
+    n_pool <- length(f1$train) + length(f1$validation)
+    sizes  <- vapply(sub_plan$folds, function(f) length(f$validation), integer(1))
+    pick   <- which.min(abs(sizes - validation_frac * n_pool))
+  }
+  idx <- sub_plan$folds[[pick]]
   .new_fold_plan(list(idx), paste0("refit_", plan$method),
                  c(sub_plan$params, list(refit_of = plan$method,
-                                         validation_frac = validation_frac)),
+                                         validation_frac = validation_frac,
+                                         refit_fold = pick)),
                  meta, assignment = sub_plan$assignment)
+}
+
+# A kNNDM plan's criterion is its prediction points: the refit runs kNNDM
+# again, over the non-test rows, against the same points, in the same frame
+# and with the same CAST options. A plan from before knndm_folds() kept them
+# has only its projection in params; its points must be given, and its CRS is
+# taken as 4326 -- the default, and the one thing such a plan did not record.
+.refit_knndm_plan <- function(plan, meta, k, test_ids, seed, predpoints) {
+  kn   <- plan$knndm
+  args <- kn$args %||% list()
+  if (!is.null(predpoints) && !is.null(kn$predpoints) &&
+      !isTRUE(all.equal(as.data.frame(predpoints), as.data.frame(kn$predpoints),
+                        check.attributes = FALSE))) {
+    stop("This kNNDM plan carries its own prediction points, and they are not ",
+         "the ones given: the refit's validation must be cut against the points ",
+         "the tuning folds were. Leave predpoints out.", call. = FALSE)
+  }
+  pp <- predpoints %||% kn$predpoints
+  if (is.null(pp) && is.null(args$modeldomain)) {
+    stop("This kNNDM plan does not carry its prediction points: it was made ",
+         "before knndm_folds() kept them with the plan (2026-09-29). The refit's ",
+         "validation is cut against them, as the tuning folds were -- pass the ",
+         "same points as predpoints = <a data frame with x and y>.", call. = FALSE)
+  }
+  project_to <- if (!is.null(kn)) {
+    kn$project_to
+  } else {
+    pr <- plan$params$projection
+    if (is.null(pr) || identical(pr, "none (already projected)")) NULL else pr
+  }
+  do.call(knndm_folds, c(list(meta = meta, k = k, predpoints = pp,
+                              test_ids = test_ids, crs = kn$crs %||% 4326,
+                              project_to = project_to, seed = seed), args))
+}
+
+# A region plan keeps each folded row's group in its assignment (region_folds()
+# writes it there). The test rows get a group of their own, which the frozen
+# test set then keeps out of every fold; k is capped at the groups there are.
+.refit_region_plan <- function(plan, meta, k, test_ids, seed) {
+  asg <- plan$assignment
+  if (is.null(asg) || !"group" %in% names(asg)) {
+    stop("This region plan does not carry its groups, so the refit cannot cut ",
+         "whole regions out of it.", call. = FALSE)
+  }
+  pos <- match(as.character(asg$sample_id), as.character(meta$sample_id))
+  if (anyNA(pos)) {
+    stop("The region plan names ", sum(is.na(pos)), " sample_id(s) this store ",
+         "does not hold.", call. = FALSE)
+  }
+  g <- rep(".test", nrow(meta))
+  g[pos] <- as.character(asg$group)
+  test_pos <- if (length(test_ids)) match(as.character(test_ids), as.character(meta$sample_id)) else integer(0)
+  if (!setequal(which(g == ".test"), test_pos)) {
+    stop("The region plan's groups do not cover every row outside its test set.",
+         call. = FALSE)
+  }
+  region_folds(meta, group = g, k = min(k, dplyr::n_distinct(asg$group)),
+               test_ids = test_ids, seed = seed)
 }
 
 # -- validation and reporting -------------------------------------------------

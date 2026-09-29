@@ -223,6 +223,15 @@ knndm_folds <- function(meta, k = 5L, predpoints = NULL, test_ids = NULL,
                       else project_to),
     meta, assignment = asg
   )
+  # WHAT A REFIT NEEDS TO CUT ITS VALIDATION THE SAME WAY. The final model
+  # stops on a validation set carved by the tuning plan's own criterion
+  # (refit_split()), and kNNDM's criterion IS the prediction points, in the
+  # frame their distances were measured in. Kept beside the plan rather than
+  # in params, which print.fold_plan() prints: a table of points is not a
+  # parameter. A plan made before this (2026-09-29) has none, and a refit of
+  # it must be given the points.
+  plan$knndm <- list(predpoints = predpoints, crs = crs, project_to = project_to,
+                     args = dots)
   plan
 }
 

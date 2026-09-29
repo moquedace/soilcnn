@@ -188,8 +188,48 @@ if (has_cast && has_sf) {
   ok["front_end_plan_matches_the_direct_call"] <-
     identical(plan_api$assignment$fold, plan$assignment$fold)
 
+  # ── 5. the refit: the final model's validation, by the same criterion ─────
+  #
+  # dsm_final() stops the final fit on a validation set carved the way the
+  # tuning folds were (refit_split()). For kNNDM that is kNNDM again, over the
+  # non-test rows, against the same prediction points -- which the plan
+  # therefore keeps beside itself.
+  ok["the_plan_keeps_what_a_refit_needs"] <-
+    isTRUE(all.equal(as.data.frame(plan_t$knndm$predpoints), as.data.frame(predpts))) &&
+    identical(plan_t$knndm$crs, 4326) && grepl("moll", plan_t$knndm$project_to)
+  rf   <- refit_split(plan_t, meta, validation_frac = 0.15)
+  f    <- rf$folds[[1]]
+  pool <- setdiff(seq_len(nrow(meta)), plan_t$folds[[1]]$test)
+  ok["the_refit_is_one_knndm_fold"] <-
+    rf$n_folds == 1L && identical(rf$method, "refit_knndm_folds")
+  ok["the_refit_keeps_the_frozen_test_set"] <-
+    identical(sort(f$test), sort(plan_t$folds[[1]]$test))
+  ok["the_refit_splits_the_rest_once"] <-
+    identical(sort(as.integer(c(f$train, f$validation))), as.integer(pool)) &&
+    length(intersect(f$train, f$validation)) == 0L
+  ok["the_refit_validates_about_the_share_asked"] <- {
+    s <- length(f$validation) / length(pool)
+    s > 0.05 && s < 0.35
+  }
+  ok["the_refit_is_reproducible"] <-
+    identical(refit_split(plan_t, meta, validation_frac = 0.15)$folds[[1]], f)
+  # A plan from before the points were kept: they must be given, and given,
+  # the refit is the same one. Other points than a plan's own are refused.
+  legacy <- plan_t
+  legacy$knndm <- NULL
+  e_old <- tryCatch(refit_split(legacy, meta, 0.15), error = function(e) conditionMessage(e))
+  ok["an_old_plan_without_its_points_says_what_to_pass"] <- grepl("predpoints =", e_old, fixed = TRUE)
+  ok["given_its_points_an_old_plan_refits_the_same_way"] <-
+    identical(refit_split(legacy, meta, 0.15, predpoints = predpts)$folds[[1]], f)
+  e_other <- tryCatch(refit_split(plan_t, meta, 0.15, predpoints = predpts[1:100, ]),
+                      error = function(e) conditionMessage(e))
+  ok["other_points_for_a_plan_with_its_own_are_refused"] <-
+    grepl("Leave predpoints out", e_other, fixed = TRUE)
+
   cat(sprintf("  knndm W                  : %.4f (3 folds, %d points, %d predpoints)\n",
               plan$params$W, nrow(meta), nrow(predpts)))
+  cat(sprintf("  knndm refit              : %d of %d non-test points validate (fold %d of 7)\n",
+              length(f$validation), length(pool), rf$params$refit_fold))
 } else {
   cat("  CAST missing             : fold-plan checks skipped\n")
   cat("                             install.packages(c(\"CAST\", \"sf\"))\n")
