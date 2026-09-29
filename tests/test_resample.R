@@ -664,6 +664,15 @@ ok["one_se_band_is_best_minus_se"] <- isTRUE(all.equal(
 # rule must NOT reach for it: "within one standard error" is the whole point.
 ok["one_se_does_not_reach_outside"] <- pick$config_id != "cfg_C"
 
+# A best config trained once has no standard error, and one_se() refuses --
+# saying what to do: more seeds on a single split, or rule = "rank1".
+bc_once <- bc
+bc_once$val_ccc_se <- NA_real_
+e_once <- tryCatch(one_se(bc_once, complexity = "n_params"),
+                   error = function(e) conditionMessage(e))
+ok["one_se_without_se_says_what_to_do"] <-
+  grepl("n_seeds >= 2", e_once, fixed = TRUE) && grepl("rank1", e_once, fixed = TRUE)
+
 # When the best is also the simplest, the rule changes nothing -- and has to
 # say so, or it looks like it did work it did not do.
 bc2 <- bc

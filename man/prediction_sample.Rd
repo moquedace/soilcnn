@@ -9,7 +9,9 @@ prediction_sample(raster, size = 5000L)
 \arguments{
 \item{raster}{A SpatRaster (terra) covering the prediction area.}
 
-\item{size}{How many points to draw.}
+\item{size}{About how many points to draw. Cells where the raster is NA
+-- the sea around a continent -- do not count: when too few land on
+data, the sample is drawn again, denser.}
 }
 \value{
 A data frame with x and y, in the raster's own CRS.

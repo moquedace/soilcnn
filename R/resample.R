@@ -1446,8 +1446,10 @@ one_se <- function(by_config, metric = "val_ccc", complexity = "n_params",
   best_i <- if (maximise) which.max(mu) else which.min(mu)
   if (!is.finite(se[best_i])) {
     stop("The best config has no standard error (it was trained once). ",
-         "one_se() cannot tell a tie from a gap without repetitions.",
-         call. = FALSE)
+         "one_se() cannot tell a tie from a gap without repetitions.\n  ",
+         "Repetitions come from folds and seeds, so a single split (a holdout) ",
+         "needs n_seeds >= 2 in dsm_train(). Or choose by the mean alone: ",
+         "dsm_final(rule = \"rank1\").", call. = FALSE)
   }
 
   # The tolerance band comes from the BEST config's own standard error, which

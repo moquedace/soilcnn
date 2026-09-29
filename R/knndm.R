@@ -259,19 +259,29 @@ knndm_folds <- function(meta, k = 5L, predpoints = NULL, test_ids = NULL,
 #' one cheaply. A random sample would work too and is noisier for the same size.
 #'
 #' @param raster A SpatRaster (terra) covering the prediction area.
-#' @param size   How many points to draw.
+#' @param size   About how many points to draw. Cells where the raster is NA
+#'   -- the sea around a continent -- do not count: when too few land on
+#'   data, the sample is drawn again, denser.
 #' @return A data frame with x and y, in the raster's own CRS.
 #' @export
 prediction_sample <- function(raster, size = 5000L) {
   if (!requireNamespace("terra", quietly = TRUE)) {
     stop("prediction_sample() needs the 'terra' package.", call. = FALSE)
   }
-  s <- terra::spatSample(raster, size = size, method = "regular",
-                         na.rm = TRUE, xy = TRUE, values = FALSE)
-  s <- as.data.frame(s)
+  draw <- function(n) {
+    as.data.frame(terra::spatSample(raster, size = n, method = "regular",
+                                    na.rm = TRUE, xy = TRUE, values = FALSE))
+  }
+  s <- draw(size)
   if (nrow(s) == 0L) {
     stop("The regular sample came back empty -- every cell drawn was NA. ",
          "Pass a raster that covers the prediction area.", call. = FALSE)
   }
+  # A REGULAR SAMPLE LANDS ON NA AS OFTEN AS THE RASTER IS NA, and na.rm drops
+  # those cells: a continent's bounding box, most of it sea, gave 272 of the
+  # 1,000 points asked for (the SOC 0-30 cm trial, 2026-09-29), and kNNDM was
+  # matched to a quarter of the sample it was told it had. Drawn again,
+  # denser by the share that landed on data, it comes back at about the size.
+  if (nrow(s) < 0.9 * size) s <- draw(ceiling(size * size / nrow(s)))
   tibble::tibble(x = s$x, y = s$y)
 }

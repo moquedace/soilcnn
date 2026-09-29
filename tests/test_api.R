@@ -329,6 +329,18 @@ msg <- withCallingHandlers(
 ok["no_points_refused_by_name"] <- grepl("holds no points", msg)
 ok["no_points_refused_without_warnings"] <- warned == 0L
 
+# One fold under one seed: every configuration trained once, nothing for
+# one_se() to read. Warned before any unit trains, not refused.
+repetitions_warning <- function(n_folds, n_seeds) {
+  tryCatch({ .check_repetitions(list(n_folds = n_folds), n_seeds); "" },
+           warning = function(w) conditionMessage(w))
+}
+w_once <- repetitions_warning(1L, 1L)
+ok["one_fold_one_seed_is_warned"] <-
+  grepl("one_se", w_once, fixed = TRUE) && grepl("rank1", w_once, fixed = TRUE)
+ok["one_fold_two_seeds_is_not"] <- identical(repetitions_warning(1L, 2L), "")
+ok["ten_folds_one_seed_is_not"]  <- identical(repetitions_warning(10L, 1L), "")
+
 cat(sprintf("  auto buffer              : %.6f  (15 px x %.8f)\n",
             p_auto$params$buffer, CELL))
 cat(sprintf("  auto block size          : %g  (largest block %.1f%% of points)\n",

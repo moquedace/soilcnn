@@ -91,6 +91,18 @@ ok["refuses_meta_without_coordinates"] <- inherits(
   try(knndm_folds(dplyr::select(meta, sample_id), k = 3L,
                   predpoints = predpts), silent = TRUE), "try-error")
 
+# THE MAP SAMPLE COMES BACK AT ABOUT THE SIZE ASKED, however much of the
+# raster is NA. A regular sample drops the cells it lands on without data, and
+# a raster that was 70% sea returned 30% of the points asked for. Here the
+# top 30 rows of 100 hold data.
+land <- terra::rast(nrows = 100, ncols = 100, xmin = 0, xmax = 10, ymin = 0, ymax = 10,
+                    crs = "EPSG:4326")
+terra::values(land) <- ifelse(rep(seq_len(100), each = 100) <= 30, 1, NA)
+ps <- prediction_sample(land, size = 500L)
+on_land <- terra::extract(land, as.matrix(ps))
+ok["prediction_sample_counts_only_cells_with_data"] <-
+  nrow(ps) >= 450L && nrow(ps) <= 800L && all(!is.na(on_land[[ncol(on_land)]]))
+
 has_sf   <- requireNamespace("sf", quietly = TRUE)
 has_cast <- requireNamespace("CAST", quietly = TRUE)
 

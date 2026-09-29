@@ -605,6 +605,7 @@ dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
 
   plan <- resolve_resampling(resampling, data, test_ids = test_ids,
                              windows = windows_needed, verbose = verbose)
+  .check_repetitions(plan, n_seeds)
 
   if (identical(model$input, "patches")) {
     if (is.null(tune_grid)) {
@@ -662,6 +663,24 @@ dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
   class(res) <- c("dsm_fit", class(res))
   if (verbose) print(res)
   res
+}
+
+# ONE FOLD AND ONE SEED: NOTHING TO PUT AN ERROR BAR ON. Each configuration is
+# then trained once, its validation score has no standard error, and one_se()
+# -- dsm_final()'s default rule -- refuses to choose. The SOC 0-30 cm trial's
+# holdout design met it at the final model, after its tuning had run
+# (2026-09-29); it is said here, before any unit trains. A warning and not a
+# refusal: a single quick fit, or a choice by rank1, are legitimate.
+.check_repetitions <- function(plan, n_seeds) {
+  n_folds <- plan$n_folds %||% length(plan$folds)
+  if (n_folds * n_seeds < 2L) {
+    warning("This plan has ", n_folds, " fold and n_seeds = ", n_seeds, ": every ",
+            "configuration is trained once, so its validation score has no standard ",
+            "error, and one_se() -- dsm_final()'s default rule -- will refuse to ",
+            "choose. Use n_seeds >= 2, or choose by the mean with ",
+            "dsm_final(rule = \"rank1\").", call. = FALSE)
+  }
+  invisible(NULL)
 }
 
 # THE INVERSE TRAVELS WITH THE DATA. dsm_train() took `transform = identity`,
