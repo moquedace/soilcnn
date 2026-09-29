@@ -23,6 +23,9 @@
 #   8. resume skips finished units instead of retraining them
 #   9. a config that cannot build is recorded as failed, and does not abort
 #      the other configs
+#  10. one fold buffer changes no number: the two folds of 4/7 again, each
+#      fold's roles in tensors of their own (options(dsm.fold_buffer = FALSE)),
+#      and the fold loop's memory trace (options(dsm.train.trace_mem = TRUE))
 #
 # Run: source("D:/.../tests/test_resample_run.R")    (CPU, ~1 min)
 
@@ -425,6 +428,48 @@ ok["scaling_differs_between_folds"] <- !isTRUE(all.equal(sc1$center,
 
 cat("  2 folds x 2 configs : ", nrow(cmp2), " units | channel 1 mu: ",
     sprintf("%.3f vs %.3f", sc1$center[1], sc2$center[1]), "\n", sep = "")
+
+# -- 10. one buffer for every fold changes no number --------------------------
+#
+# The fold loop writes each fold's roles into one tensor per window, made on
+# the first fold (new_fold_buffer()): mimalloc keeps every freed block of
+# ~250 MB or more (T6), and a fold loop that made each fold's roles anew
+# would leave its largest tensors behind. The run above went through the
+# buffer; this one builds each fold's roles as tensors of their own, as
+# before 2026-09-29, and records the fold loop's memory. Same plan, grid,
+# seeds and threads: every number in the table must be the same, exactly --
+# only the runtimes differ.
+old_opt <- options(dsm.fold_buffer = FALSE, dsm.train.trace_mem = TRUE)
+res2_own <- quiet_run(
+  tune_grid = grid, store = store, points = points, type_table = type_table,
+  plan = plan2, transform = expm1, output_dir = out_root,
+  device = device, run_id = "smoke_kfold_own_tensors", n_seeds = 1L,
+  release_store = FALSE
+)
+options(old_opt)
+numbers_of <- function(cmp) {
+  cmp <- as.data.frame(cmp)[order(cmp$unit_id), , drop = FALSE]
+  keep <- vapply(cmp, is.numeric, logical(1)) & names(cmp) != "runtime_min"
+  cmp[, keep, drop = FALSE]
+}
+n_buf <- numbers_of(res2$comparison)
+n_own <- numbers_of(res2_own$comparison)
+ok["the_buffer_changes_no_number"] <-
+  identical(names(n_buf), names(n_own)) && nrow(n_buf) == 4L &&
+  isTRUE(all.equal(n_buf, n_own, tolerance = 0, check.attributes = FALSE))
+
+trace_file <- file.path(res2_own$run_dir, "logs", "train_mem_trace.rds")
+tr <- if (file.exists(trace_file)) readRDS(trace_file) else NULL
+ok["the_fold_loop_traces_its_memory_fold_by_fold"] <-
+  !is.null(tr) &&
+  identical(tr$phase, c("start", rep(c("fold_cache", "fold_trained", "fold_released"), 2L))) &&
+  identical(tr$fold, c(NA_integer_, rep(1:2, each = 3L))) &&
+  all(is.finite(tr$r_heap_gb))
+ok["no_trace_unless_asked"] <-
+  !file.exists(file.path(res2$run_dir, "logs", "train_mem_trace.rds"))
+
+cat("  fold buffer         : ", ncol(n_buf), " numeric column(s) identical with and without it | ",
+    if (is.null(tr)) 0L else nrow(tr), " memory mark(s)\n", sep = "")
 
 # -- 9. a broken config is recorded, not fatal --------------------------------
 #

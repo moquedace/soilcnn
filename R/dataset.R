@@ -117,12 +117,22 @@ save_patch_window <- function(arr, patch_dir, window_size) {
 #
 # options(dsm.slab_mb = ) sets the slab, 16 MB by default: T6 found blocks of
 # ~20 MB reused, and blocks of 64-100 MB only sometimes.
-.rows_to_float <- function(src, rows = NULL, slab_mb = getOption("dsm.slab_mb", 16)) {
+#
+# `out`, when given, is the float tensor to write into -- a slice of a fold
+# buffer (build_fold_cache()) -- and must have the shape the rows make.
+.rows_to_float <- function(src, rows = NULL, slab_mb = getOption("dsm.slab_mb", 16),
+                           out = NULL) {
   is_tensor <- inherits(src, "torch_tensor")
   d <- if (is_tensor) as.integer(src$shape) else dim(src)
   if (is.null(rows)) rows <- seq_len(d[1])
-  n   <- length(rows)
-  out <- torch::torch_empty(c(n, d[2], d[3], d[4]), dtype = torch::torch_float())
+  n    <- length(rows)
+  want <- c(n, d[2], d[3], d[4])
+  if (is.null(out)) {
+    out <- torch::torch_empty(want, dtype = torch::torch_float())
+  } else if (!identical(as.integer(out$shape), as.integer(want))) {
+    stop("The tensor to write into is ", paste(as.integer(out$shape), collapse = " x "),
+         "; these rows make ", paste(want, collapse = " x "), ".", call. = FALSE)
+  }
   if (n == 0L) return(out)
   per_point <- prod(as.numeric(d[-1])) * (if (is_tensor) 4 else 8)
   slab <- max(1L, as.integer(floor(slab_mb * 1e6 / per_point)))
@@ -476,12 +486,16 @@ align_points_to_meta <- function(points, meta) {
 #'   has not loaded is read from its file.
 #' @param scaling      Optional precomputed scaling; when NULL it is fitted
 #'   from the fold's training rows, which is the point of the whole design.
+#' @param buffer       NULL, or a fold buffer from new_fold_buffer(): each
+#'   window's roles are then written into one tensor the buffer holds for it,
+#'   made on the first fold and reused by every fold after it. The roles are
+#'   slices of it, so a fold's cache is overwritten by the next fold's.
 #' @return list(cache, scaling) where `cache[[role]][[key]]` is a tensor and
 #'   `cache[[role]]$y` the target column.
 #' @noRd
 build_fold_cache <- function(store, points, type_table, index,
                              window_sizes = NULL, scaling = NULL,
-                             verbose = TRUE) {
+                             verbose = TRUE, buffer = NULL) {
 
   if (is.null(window_sizes)) window_sizes <- store$window_sizes
 
@@ -515,6 +529,11 @@ build_fold_cache <- function(store, points, type_table, index,
   roles <- names(index)
   cache <- stats::setNames(vector("list", length(roles)), roles)
   for (r in roles) cache[[r]] <- list()
+  if (!is.null(buffer) && sum(lengths(index)) > nrow(store$meta)) {
+    stop("This fold's roles hold ", sum(lengths(index)), " rows and the store ",
+         nrow(store$meta), ": they overlap, and cannot share one fold buffer.",
+         call. = FALSE)
+  }
 
   for (w in window_sizes) {
     key <- patch_window_key(w)
@@ -539,8 +558,38 @@ build_fold_cache <- function(store, points, type_table, index,
     # a view of it (.rows_to_float()). This replaced a clone of the whole
     # window, scaled, then sliced: the same numbers, and a window's worth of
     # memory left behind (T7).
+    #
+    # WITH A FOLD BUFFER, "a tensor of its own" is a slice of one tensor of
+    # the store's length, made once per window: the roles one after another,
+    # train from row 1. A fold loop that makes each fold's roles anew would
+    # leave its largest tensors behind, fold after fold, because mimalloc
+    # keeps every freed block of ~250 MB or more (T6) -- and a training role
+    # is that large from the dev store's 15x15 window up (T8 measures the
+    # loop). The roles are disjoint (checked above), so they fit; a slice of
+    # a contiguous tensor along its first dimension is itself contiguous, and
+    # the values written are the same values.
+    if (!is.null(buffer)) {
+      want <- c(nrow(store$meta), store$n_channels, w, w)
+      if (is.null(buffer[[key]])) {
+        buffer[[key]] <- torch::torch_empty(want, dtype = torch::torch_float())
+      } else if (!identical(as.integer(buffer[[key]]$shape), as.integer(want))) {
+        stop("This fold buffer's ", key, " was made for another store (",
+             paste(as.integer(buffer[[key]]$shape), collapse = " x "), ", this one ",
+             paste(want, collapse = " x "), "). Give each store a buffer of its own.",
+             call. = FALSE)
+      }
+    }
+    at <- 0L
     for (r in roles) {
-      cache[[r]][[key]] <- scale_patches(.rows_to_float(x, index[[r]]), scaling,
+      rows <- index[[r]]
+      out  <- NULL
+      if (!is.null(buffer) && length(rows) > 0L) {
+        s   <- at + 1L
+        e   <- at + length(rows)
+        out <- buffer[[key]][s:e, , , , drop = FALSE]    # a slice: a view, s to e
+        at  <- e
+      }
+      cache[[r]][[key]] <- scale_patches(.rows_to_float(x, rows, out = out), scaling,
                                          inplace = TRUE)
     }
     rm(x); gc(verbose = FALSE)
@@ -564,6 +613,16 @@ build_fold_cache <- function(store, points, type_table, index,
 
   list(cache = cache, scaling = scaling, index = index)
 }
+
+# A fold buffer: an environment, so that the tensors build_fold_cache() makes
+# in it on the first fold are there for the next. One per store; a fold loop
+# makes one before its first fold and drops it after its last. The fold
+# loops use one unless options(dsm.fold_buffer = FALSE), which builds each
+# fold's roles as tensors of their own, as before 2026-09-29 -- the same
+# numbers (tests/test_resample_run.R, T8), for comparison.
+new_fold_buffer <- function() new.env(parent = emptyenv())
+
+.use_fold_buffer <- function() isTRUE(getOption("dsm.fold_buffer", TRUE))
 
 #' Metadata rows for each role, in the same order as the cached tensors.
 #'

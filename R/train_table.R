@@ -162,6 +162,8 @@ run_table_resample <- function(model, tune_grid = NULL, store, points,
 
   windows_needed <- if (is.null(windows)) store$window_sizes else windows
   grid_checked   <- FALSE
+  # One buffer for every fold's cache, as the CNN's loop has (run_cnn_resample()).
+  buffer <- if (.use_fold_buffer()) new_fold_buffer() else NULL
 
   for (j in seq_along(plan$folds)) {
     idx <- plan$folds[[j]]
@@ -172,13 +174,16 @@ run_table_resample <- function(model, tune_grid = NULL, store, points,
 
     # The SAME cache the CNN would get: same training rows, same scaling fitted
     # on them. That identity is what makes the comparison a comparison.
-    fold <- build_fold_cache(store, points, type_table, idx, windows_needed)
+    fold <- build_fold_cache(store, points, type_table, idx, windows_needed,
+                             buffer = buffer)
     tab  <- fold_table_view(fold$cache, store$predictors,
                             windows = windows_needed, features = features)
     pv   <- fold_points_valid(store, idx)
 
-    # The tensors are not needed once the table exists, and they are the large
-    # object: releasing them here is what lets a baseline run beside a CNN run.
+    # The tensors are not needed once the table exists. Without a buffer they
+    # were the large object released here -- released to mimalloc, which
+    # keeps a block that size (T6), so each fold would add its cache; with
+    # one, the next fold reuses the same tensors.
     rm(fold); invisible(gc(verbose = FALSE))
 
     message("Table view: ", ncol(tab[[1]]$x), " features (",

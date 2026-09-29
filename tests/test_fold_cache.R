@@ -12,7 +12,8 @@
 # (the one diagnostic that can tell a store built from the wrong rasters), and
 # of two torch helpers -- clone_state_dict() and set_optimizer_lr() -- that
 # were used on every training path and asserted nowhere. And since T7, of the
-# cache being the same tensors without the copies it used to leave behind.
+# cache being the same tensors without the copies it used to leave behind --
+# and since 2026-09-29, through one buffer for every fold of a loop.
 #
 # Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tests/test_fold_cache.R")
 
@@ -239,6 +240,72 @@ ok["the_cache_from_the_files_is_the_cache_from_the_loaded_store"] <-
 ok["the_store_is_still_raw_after_both"] <-
   isTRUE(all.equal(as.array(store$windows$w03), x_arr, tolerance = 1e-6,
                    check.attributes = FALSE))
+
+# ── 7. one buffer for every fold ─────────────────────────────────────────────
+#
+# A fold loop that gives each fold's roles tensors of their own would leave
+# its largest ones behind, fold after fold: mimalloc keeps every freed block
+# of ~250 MB or more (T6). With a fold buffer, each window is one tensor of
+# the store's length, made on the first fold, and a fold's roles are
+# consecutive slices of it. The numbers must not move: two folds in turn
+# through ONE buffer, each compared EXACTLY with its cache built without one
+# -- from the loaded store (a tensor) and from the store's files (an R
+# array), the two branches of .rows_to_float(), with the slabs still a few
+# points each.
+fold_a <- reordered
+fold_b <- list(train = 21:40, validation = 1:12, test = 13:20)
+same_cache <- function(p, q) {
+  all(vapply(names(q$cache), function(r)
+    torch::torch_equal(p$cache[[r]]$w03, q$cache[[r]]$w03) &&
+      torch::torch_equal(p$cache[[r]]$y, q$cache[[r]]$y), logical(1))) &&
+    isTRUE(all.equal(p$scaling, q$scaling))
+}
+plain <- function(idx) suppressMessages(build_fold_cache(store, points, type_table, idx))
+buf <- new_fold_buffer()
+a_buf <- suppressMessages(build_fold_cache(store, points, type_table, fold_a, buffer = buf))
+ok["through_a_buffer_a_fold_is_the_same_tensors"] <- same_cache(a_buf, plain(fold_a))
+made_first <- buf$w03
+b_buf <- suppressMessages(build_fold_cache(store, points, type_table, fold_b, buffer = buf))
+ok["the_next_fold_through_the_same_buffer_is_the_same_tensors_too"] <-
+  same_cache(b_buf, plain(fold_b))
+ok["the_buffer_is_one_tensor_a_window_of_the_stores_length_made_once"] <-
+  identical(ls(buf), "w03") &&
+  identical(as.integer(buf$w03$shape), c(n_pts, n_ch, win, win)) &&
+  identical(made_first, buf$w03)
+buf_files <- new_fold_buffer()
+invisible(suppressMessages(build_fold_cache(store_table, points, type_table, fold_b,
+                                            window_sizes = win, buffer = buf_files)))
+ok["from_the_files_through_a_buffer_too"] <-
+  same_cache(suppressMessages(build_fold_cache(store_table, points, type_table, fold_a,
+                                               window_sizes = win, buffer = buf_files)),
+             plain(fold_a))
+
+# The roles ARE the buffer: a role written to shows in it, where its slice
+# is and nowhere else. Which is also why a fold's cache is dead once the next
+# fold is built, and the loops drop it first.
+n_tr <- length(fold_b$train)
+s_va <- n_tr + 1L
+e_va <- n_tr + length(fold_b$validation)
+b_buf$cache$validation$w03$fill_(-1)
+ok["a_folds_roles_are_consecutive_slices_of_the_buffer"] <-
+  as.logical(torch::torch_all(buf$w03[s_va:e_va, , , ] == -1)$item()) &&
+  !as.logical(torch::torch_any(buf$w03[1:n_tr, , , ] == -1)$item()) &&
+  b_buf$cache$train$w03$is_contiguous()
+
+r <- try(suppressMessages(build_fold_cache(store, points, type_table,
+                                           list(train = 1:30, validation = 20:40),
+                                           buffer = new_fold_buffer())), silent = TRUE)
+ok["roles_that_overlap_past_the_store_are_refused"] <-
+  inherits(r, "try-error") && grepl("fold buffer", conditionMessage(attr(r, "condition")))
+other <- new_fold_buffer()
+other$w03 <- torch::torch_empty(c(n_pts + 1L, n_ch, win, win))
+r <- try(suppressMessages(build_fold_cache(store, points, type_table, fold_a, buffer = other)),
+         silent = TRUE)
+ok["a_buffer_made_for_another_store_is_refused"] <-
+  inherits(r, "try-error") && grepl("another store", conditionMessage(attr(r, "condition")))
+r <- try(.rows_to_float(x_arr, 1:5, out = torch::torch_empty(c(4L, n_ch, win, win))),
+         silent = TRUE)
+ok["a_tensor_to_write_into_of_the_wrong_shape_is_refused"] <- inherits(r, "try-error")
 options(old_opt)
 
 unlink(store_dir, recursive = TRUE, force = TRUE)
@@ -248,5 +315,6 @@ cat(sprintf("  scaling                  : centre %.3f from 24 training rows (all
 cat("  store_complete = FALSE   : refused at load\n")
 cat("  patch centres            : one moved value -> one mismatch, in its channel\n")
 cat("  cache without copies     : the old path's tensors, exactly, from the store and from its files\n")
+cat("  one buffer, two folds    : the same tensors as without it; the roles are slices of it\n")
 
 .report(ok, "test_fold_cache")

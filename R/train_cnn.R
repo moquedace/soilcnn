@@ -1042,6 +1042,41 @@ run_cnn_resample <- function(tune_grid, store, points, type_table, plan,
                     file.path(run_dir, "fold_buffer_dropped.csv"))
   }
 
+  # ONE BUFFER FOR EVERY FOLD. Each fold's roles used to be tensors of their
+  # own, released before the next fold's were built -- released to mimalloc,
+  # which keeps every freed block of ~250 MB or more (T6). The dev store's
+  # 15x15 training role is ~0.3 GB and the full data set's ~11x that, so each
+  # fold would leave its largest tensors behind; T8 measures it. The roles
+  # are now slices of one tensor per window, made on the first fold
+  # (new_fold_buffer()); options(dsm.fold_buffer = FALSE) goes back to
+  # tensors of their own, for comparison (T8).
+  buffer <- if (.use_fold_buffer()) new_fold_buffer() else NULL
+
+  # THE FOLD LOOP'S MEMORY, when asked (options(dsm.train.trace_mem = TRUE);
+  # T8 does): the process's level before the first fold and, per fold, after
+  # its cache is built, after its units trained, and after it is released --
+  # each after a collection, so a level is what is held -- written to
+  # logs/train_mem_trace.rds at every mark. The dsm_final() worker's trace is
+  # the same measurement, per unit (.final_worker()).
+  trace_mem <- isTRUE(getOption("dsm.train.trace_mem", FALSE))
+  trace <- list()
+  t0 <- Sys.time()
+  mark <- function(phase, fold = NA_integer_) {
+    if (!trace_mem) return(invisible(NULL))
+    g <- gc(verbose = FALSE)
+    trace[[length(trace) + 1L]] <<- data.frame(
+      fold = as.integer(fold), phase = phase,
+      seconds = as.numeric(difftime(Sys.time(), t0, units = "secs")),
+      rss_gb = .predict_rss_gb(), private_gb = .predict_private_gb(),
+      peak_gb = .final_peak_gb(), r_heap_gb = sum(g[, 2]) / 1024,
+      stringsAsFactors = FALSE)
+    create_output_dirs(file.path(run_dir, "logs"))
+    safe_save_rds(do.call(rbind, trace), file.path(run_dir, "logs", "train_mem_trace.rds"),
+                  compress = FALSE)
+    invisible(NULL)
+  }
+  mark("start")
+
   comparison <- tibble::tibble()
   for (j in seq_along(plan$folds)) {
     idx <- plan$folds[[j]]
@@ -1053,7 +1088,9 @@ run_cnn_resample <- function(tune_grid, store, points, type_table, plan,
     # Scaling is fitted on THIS fold's training rows. That is the whole reason
     # the patches are stored raw: a fold whose scaling came from another fold's
     # training set has already seen data it should not have.
-    fold <- build_fold_cache(store, points, type_table, idx, windows_needed)
+    fold <- build_fold_cache(store, points, type_table, idx, windows_needed,
+                             buffer = buffer)
+    mark("fold_cache", j)
     safe_write_csv2(fold$scaling,
                     file.path(run_dir, sprintf("scaling_fold%02d.csv", j)))
 
@@ -1079,11 +1116,15 @@ run_cnn_resample <- function(tune_grid, store, points, type_table, plan,
       ...
     )
     comparison <- res$comparison
+    mark("fold_trained", j)
 
-    # Free this fold's tensors before the next one is built: two folds of
-    # scaled patches in memory at once is the one thing that does not fit.
+    # This fold's cache goes before the next one is built: with a buffer the
+    # next fold overwrites it, and without one, two folds of scaled patches in
+    # memory at once is the one thing that does not fit.
     rm(fold); invisible(gc(verbose = FALSE))
+    mark("fold_released", j)
   }
+  rm(buffer); invisible(gc(verbose = FALSE))
 
   by_config <- summarise_resamples(comparison)
   list(comparison = comparison, by_config = by_config,

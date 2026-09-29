@@ -173,6 +173,8 @@ score_test_grid <- function(run_dir, data, transform = NULL, device,
 
   model_dir <- file.path(run_dir, "models")
   rows <- list()
+  # One buffer for every fold's cache, as the training loop has (run_cnn_resample()).
+  buffer <- if (.use_fold_buffer()) new_fold_buffer() else NULL
 
   for (j in seq_along(plan$folds)) {
     idx <- plan$folds[[j]]
@@ -185,7 +187,7 @@ score_test_grid <- function(run_dir, data, transform = NULL, device,
     # would be a second copy of the same fact, free to drift -- the defect that
     # once had stage 05 predicting with constants the network never saw.
     fold <- build_fold_cache(store, points, type_table, idx,
-                             store$window_sizes, verbose = FALSE)
+                             store$window_sizes, verbose = FALSE, buffer = buffer)
     pv   <- fold_points_valid(store, idx)
 
     for (i in seq_len(nrow(tune_grid))) {
