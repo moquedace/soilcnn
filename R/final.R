@@ -692,17 +692,83 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
 #   what training and the final evaluation    4.7 GB, held from the first
 #   keep in mimalloc's pool                   unit on and reused after it
 #
-# and, while each window is read, its R array (doubles) beside the cache built
-# so far. The copies the cache used to leave behind -- 2.4 GB there, about 4x
-# the cache -- are gone (build_fold_cache()), and with them T2's 7x rule.
-# An estimate, and said to be one: the pool is the deployed configuration's
-# (a heavier network keeps more), and every worker's real peak is measured
-# and reported beside it.
+# and, while a window is read, its R array (doubles) beside the cache built so
+# far. That is the worker's own peak when the array outweighs the pool -- the
+# full data set's 15x15 window, ~11x the dev store's 1.21 GB, is ~13 GB
+# against 4.7 -- and every worker passes through it once, at its start.
+# The copies the cache used to leave behind -- 2.4 GB there, about 4x the
+# cache -- are gone (build_fold_cache()), and with them T2's 7x rule. An
+# estimate, and said to be one: the pool is the deployed configuration's (a
+# heavier network keeps more), and every worker's real peak is measured and
+# reported beside it.
+#
+#   steady   a worker from its cache on, training
+#   peak     a worker at its own peak: training, or reading its largest window
 .final_worker_gb <- function(store, windows) {
   per_window <- nrow(store$meta) * store$n_channels * as.numeric(windows)^2 * 8 / 1e9
-  cache <- sum(per_window) / 2
-  max(1.1 + cache + max(per_window),      # reading the largest window
-      1.1 + cache + 4.7)                  # training
+  cache  <- sum(per_window) / 2
+  steady <- 1.1 + cache + 4.7
+  c(steady = steady, peak = max(steady, 1.1 + cache + max(per_window)))
+}
+
+# HOW MANY WORKERS THE RAM HOLDS. The workers read the store one at a time
+# (.final_one_reader()), so at any moment at most one is at its peak and the
+# rest train, or wait with nothing read: all of them at `steady` and one at
+# `peak`. Until 2026-09-29 every worker was counted at its peak, because every
+# worker read at once. On the full data set (windows 3 and 15), by this
+# estimate a worker trains at ~13 GB and peaks at ~21 while it reads: a 40 GB
+# budget held one worker counted that way, and holds two counted this way.
+.final_workers_that_fit <- function(est, budget) {
+  max(1L, 1L + as.integer(floor((budget - est[["peak"]]) / est[["steady"]])))
+}
+
+# ONE WORKER READS THE STORE AT A TIME. Reading a window holds its whole R
+# array (doubles) beside the cache being cut from it: 1.21 GB for the dev
+# store's 15x15 window, ~13 GB for the full data set's. Workers started
+# together read together: three would hold three, ~40 GB for a moment on a
+# machine of 68, and so the budget counted every worker at that peak. Nor are
+# reads side by side faster: the store's files are read whole and
+# uncompressed, and on the HDD they sit on here -- the rasters' -- one reader
+# alone read ~150 MB/s and fifteen together ~99 MB/s in all (2026-09-27). A
+# lock directory puts the reads in turn; the training after them, where the
+# hours go, still runs side by side, and a unit's numbers never depended on
+# which worker trained it or when (T2).
+#
+# The lock is a directory, as a unit's claim is: dir.create() makes it or finds
+# it made, atomically. A worker that stops with an error releases it on the
+# way out; one that dies outright cannot, so the process id written inside
+# says whose it is, and the lock of a process that no longer exists is taken
+# over -- or one crashed worker would leave every other waiting, and the fit
+# would hang with nothing said. The id is written a moment after the directory
+# is made; a lock that stays without one for a minute lost its worker in that
+# moment. `expr` is evaluated only once the lock is held.
+.final_one_reader <- function(claims_dir, expr) {
+  lock     <- file.path(claims_dir, ".reading")
+  pid_file <- file.path(lock, "pid")
+  said <- FALSE
+  repeat {
+    if (dir.create(lock, showWarnings = FALSE)) break
+    holder <- suppressWarnings(as.integer(
+      tryCatch(readLines(pid_file, warn = FALSE), error = function(e) character(0))[1]))
+    gone <- if (is.na(holder)) {
+      isTRUE(difftime(Sys.time(), file.mtime(lock), units = "secs") > 60)
+    } else {
+      !ps::pid_exists(holder)
+    }
+    if (gone) {
+      unlink(lock, recursive = TRUE)
+      next
+    }
+    if (!said) {
+      message("  waiting for another worker to finish reading the store",
+              if (is.na(holder)) "" else paste0(" (process ", holder, ")"))
+      said <- TRUE
+    }
+    Sys.sleep(1)
+  }
+  on.exit(unlink(lock, recursive = TRUE), add = TRUE)
+  writeLines(as.character(Sys.getpid()), pid_file)
+  expr
 }
 
 .final_train_units <- function(todo, selected, data, index, scaling, windows,
@@ -714,7 +780,7 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
   }
   loader <- .pkg_loader()          # the framework this session runs, for each worker
 
-  per_worker_gb <- .final_worker_gb(data$store, windows)
+  est <- .final_worker_gb(data$store, windows)
   n_workers <- max(1L, min(n_cores %/% threads_per_unit, nrow(todo)))
   budget <- max_ram_gb
   if (is.null(budget) && requireNamespace("ps", quietly = TRUE)) {
@@ -722,20 +788,23 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
     if (is.finite(avail)) budget <- 0.7 * avail
   }
   if (!is.null(budget)) {
-    fits <- max(1L, as.integer(floor(budget / per_worker_gb)))
+    fits <- .final_workers_that_fit(est, budget)
     if (fits < n_workers) {
       say("  RAM caps the workers at ", fits, " of ", n_workers, " (", sprintf("%.1f", budget),
-          " GB budget, ~", sprintf("%.1f", per_worker_gb), " GB each). The numbers do not ",
+          " GB budget, ~", sprintf("%.1f", est[["steady"]]), " GB each, one at a time up to ",
+          sprintf("%.1f", est[["peak"]]), " while it reads). The numbers do not ",
           "change -- only the time.")
       n_workers <- fits
     }
-    if (per_worker_gb > budget) {
-      say("  WARNING: one worker is estimated at ", sprintf("%.1f", per_worker_gb),
-          " GB against a budget of ", sprintf("%.1f", budget), " GB. It is started anyway.")
+    if (est[["peak"]] > budget) {
+      say("  WARNING: one worker is estimated at ", sprintf("%.1f", est[["peak"]]),
+          " GB at its peak, against a budget of ", sprintf("%.1f", budget),
+          " GB. It is started anyway.")
     }
   }
-  say(sprintf("\nTraining %d seed unit(s): %d worker(s) side by side x %d thread(s), ~%.1f GB each (estimate)",
-              nrow(todo), n_workers, threads_per_unit, per_worker_gb))
+  say(sprintf(paste0("\nTraining %d seed unit(s): %d worker(s) side by side x %d thread(s), ",
+                     "~%.1f GB each, up to %.1f while one reads the store -- they read one at a time (estimate)"),
+              nrow(todo), n_workers, threads_per_unit, est[["steady"]], est[["peak"]]))
 
   claims_dir <- file.path(run_dir, ".claims")
   logs_dir   <- file.path(run_dir, "logs")
@@ -794,10 +863,10 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
   peaks <- vapply(res[!errs], function(r) as.numeric(r$peak_gb %||% NA_real_), numeric(1))
   peak  <- if (any(is.finite(peaks))) max(peaks[is.finite(peaks)]) else NA_real_
   say(sprintf("  workers done in %.1f min | peak RAM per worker %.1f GB (estimated %.1f)",
-              as.numeric(difftime(Sys.time(), t0, units = "mins")), peak, per_worker_gb))
+              as.numeric(difftime(Sys.time(), t0, units = "mins")), peak, est[["peak"]]))
   unlink(claims_dir, recursive = TRUE)
   list(n_workers = n_workers, threads_per_unit = threads_per_unit, peak_gb = peak,
-       per_worker_gb_estimate = per_worker_gb)
+       per_worker_gb_estimate = est[["peak"]])
 }
 
 # What each worker process runs. At the top level on purpose, as prepare.R's
@@ -864,8 +933,9 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
                    windows = integer(0), cell_size = job$cell_size,
                    target_col = job$target_col, verbose = FALSE)
   mark("store_loaded")
-  fold <- build_fold_cache(data$store, data$points, data$type_table, job$index,
-                           job$windows, scaling = job$scaling, verbose = FALSE)
+  fold <- .final_one_reader(job$claims_dir, build_fold_cache(
+    data$store, data$points, data$type_table, job$index, job$windows,
+    scaling = job$scaling, verbose = FALSE))
   mark("fold_cache")
   pv    <- fold_points_valid(data$store, job$index)
   n_ch  <- data$store$n_channels

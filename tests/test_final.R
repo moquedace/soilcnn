@@ -18,8 +18,13 @@
 #      call freezes no choice
 #   7. a final model dsm_final() did not start gets its declaration, and is
 #      never fitted into
+#   8. the interval's residuals are found by a configuration's
+#      hyperparameters, not by its label
 #   9. a kNNDM tuning run refits: the final fit's validation cut by kNNDM,
 #      against the prediction points the tuning plan kept
+#  10. the workers read the store one at a time: the lock gives back what it
+#      ran, lets go when that fails, and is taken over from a worker that died;
+#      the RAM budget counts every worker training and one at its peak
 #
 # The fixture: 96 points in 8 sites two degrees apart, 3 channels, window 3 --
 # enough blocks that a spatial tuning plan and its refit split both have
@@ -356,6 +361,42 @@ if (requireNamespace("CAST", quietly = TRUE) && requireNamespace("sf", quietly =
 } else {
   cat("  CAST or sf missing       : the kNNDM refit is not exercised\n")
 }
+
+# ── 10. one worker reads the store at a time ─────────────────────────────────
+#
+# Reading a window holds its whole R array beside the cache being cut from it,
+# so the workers read in turn (.final_one_reader()); the two-worker fit above
+# went through it, and its seeds matched the one-worker fit's. Here, the lock
+# itself: it gives back what it ran, leaves nothing behind, lets go when what
+# it ran fails, and takes over a lock whose worker is gone -- or one crashed
+# worker would leave every other waiting, and the fit would hang.
+lock_dir <- file.path(base, "claims_lock")
+lock     <- file.path(lock_dir, ".reading")
+dir.create(lock_dir)
+ok["the_reader_lock_gives_back_what_it_ran_and_leaves_nothing"] <-
+  identical(.final_one_reader(lock_dir, 1 + 1), 2) && !dir.exists(lock)
+e_read <- tryCatch(.final_one_reader(lock_dir, stop("disk gone")), error = function(e) e)
+ok["a_read_that_fails_lets_the_lock_go"] <-
+  inherits(e_read, "error") && !dir.exists(lock)
+dir.create(lock)
+writeLines("1073741825", file.path(lock, "pid"))   # no such process
+ok["a_lock_left_by_a_dead_worker_is_taken_over"] <-
+  identical(.final_one_reader(lock_dir, "read"), "read") && !dir.exists(lock)
+dir.create(lock)                                   # made, and the worker died before its id
+Sys.setFileTime(lock, Sys.time() - 120)
+t_lock <- system.time(taken <- .final_one_reader(lock_dir, "read"))[["elapsed"]]
+ok["a_lock_left_without_an_id_is_taken_over_after_a_minute"] <-
+  identical(taken, "read") && !dir.exists(lock) && t_lock < 30
+
+# The budget: every worker training, ONE at its peak -- the one reading.
+est <- .final_worker_gb(data$store, win)
+ok["the_estimate_has_a_steady_level_and_a_peak"] <-
+  identical(names(est), c("steady", "peak")) && all(is.finite(est)) &&
+  est[["peak"]] >= est[["steady"]]
+ok["one_worker_at_its_peak_the_rest_training"] <-
+  .final_workers_that_fit(c(steady = 10, peak = 20), 45) == 3L &&
+  .final_workers_that_fit(c(steady = 10, peak = 20), 20) == 1L &&
+  .final_workers_that_fit(c(steady = 10, peak = 20), 5) == 1L
 
 unlink(base, recursive = TRUE)
 
