@@ -600,4 +600,4 @@ citation("soilcnn")
 
 ## License
 
-MIT © [moquedace](https://github.com/moquedace)
+MIT © 2026 Cássio Marques Moquedace and Clara Glória Oliveira Baldi. See [`LICENSE.md`](LICENSE.md).
