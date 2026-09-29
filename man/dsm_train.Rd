@@ -19,6 +19,9 @@ dsm_train(
   base_seed = 42L,
   device = NULL,
   n_cores = NULL,
+  in_session = !is.null(device),
+  threads_per_unit = 5L,
+  max_ram_gb = NULL,
   test_ids = NULL,
   resume = TRUE,
   evaluate_test = FALSE,
@@ -68,12 +71,31 @@ dsm_final() refits with the same.}
 seed base_seed + s - 1, the same for every configuration, so that two
 configurations differ by their hyperparameters and not by their luck.}
 
-\item{device}{A torch device. NULL builds one with setup_torch_device().}
+\item{device}{A torch device, to train the CNN on it in this session
+(see \code{in_session}). NULL builds one with setup_torch_device() when the
+units train in this session.}
 
-\item{n_cores}{Cores for training: torch's threads for the CNN and the
-MLP, ranger's for the forest. NULL is the physical cores minus one (see
-resolve_cores()) -- except that a \code{device} passed in keeps the threads it
-was set up with unless n_cores is given too.}
+\item{n_cores}{Cores for training. Side by side, the threads of all the
+workers together: n_cores / threads_per_unit workers, rounded down, and
+fewer if the RAM holds fewer. In this session, torch's threads for the
+CNN; the MLP's threads and ranger's for the forest too. NULL is the
+physical cores minus one (see resolve_cores()) -- except that a \code{device}
+passed in keeps the threads it was set up with unless n_cores is given too.}
+
+\item{in_session}{FALSE -- the default, unless a \code{device} is given -- trains
+the CNN's units side by side, each in an R process of its own with
+\code{threads_per_unit} threads. T2 measured three units of 5 threads 1.52x
+faster than one of 15, each giving exactly the numbers it gave alone.
+TRUE trains them one at a time in this session, on \code{device}, with
+\code{n_cores} threads; a CUDA device trains that way. The table models always
+train in this session.}
+
+\item{threads_per_unit}{Threads each unit trains with side by side. It is
+part of a unit's result (T1), so the run records it and a resume with
+another count is refused. 5 was measured best here (T1, T2).}
+
+\item{max_ram_gb}{RAM the side-by-side workers may use together. NULL for
+70\% of what is available when they start.}
 
 \item{test_ids}{Sample ids forced into the test set.}
 

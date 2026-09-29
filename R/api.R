@@ -496,11 +496,27 @@ resolve_resampling <- function(spec, data, test_ids = NULL, windows = NULL,
 #'   Refused if the data itself falls outside it. The run keeps it, and
 #'   dsm_final() refits with the same.
 #' @param features   For tabular models: "centre", "window_mean", or both.
-#' @param device     A torch device. NULL builds one with setup_torch_device().
-#' @param n_cores    Cores for training: torch's threads for the CNN and the
-#'   MLP, ranger's for the forest. NULL is the physical cores minus one (see
-#'   resolve_cores()) -- except that a `device` passed in keeps the threads it
-#'   was set up with unless n_cores is given too.
+#' @param device     A torch device, to train the CNN on it in this session
+#'   (see `in_session`). NULL builds one with setup_torch_device() when the
+#'   units train in this session.
+#' @param n_cores    Cores for training. Side by side, the threads of all the
+#'   workers together: n_cores / threads_per_unit workers, rounded down, and
+#'   fewer if the RAM holds fewer. In this session, torch's threads for the
+#'   CNN; the MLP's threads and ranger's for the forest too. NULL is the
+#'   physical cores minus one (see resolve_cores()) -- except that a `device`
+#'   passed in keeps the threads it was set up with unless n_cores is given too.
+#' @param in_session FALSE -- the default, unless a `device` is given -- trains
+#'   the CNN's units side by side, each in an R process of its own with
+#'   `threads_per_unit` threads. T2 measured three units of 5 threads 1.52x
+#'   faster than one of 15, each giving exactly the numbers it gave alone.
+#'   TRUE trains them one at a time in this session, on `device`, with
+#'   `n_cores` threads; a CUDA device trains that way. The table models always
+#'   train in this session.
+#' @param threads_per_unit Threads each unit trains with side by side. It is
+#'   part of a unit's result (T1), so the run records it and a resume with
+#'   another count is refused. 5 was measured best here (T1, T2).
+#' @param max_ram_gb RAM the side-by-side workers may use together. NULL for
+#'   70% of what is available when they start.
 #' @param test_ids   Sample ids forced into the test set.
 #' @param output_dir Where runs go; each run is a directory under it.
 #' @param run_id     The run's directory name. Reusing one resumes that run
@@ -526,6 +542,8 @@ dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
                       output_dir = "./outputs/tuning",
                       run_id = format(Sys.time(), "%Y%m%d_%H%M%S"),
                       base_seed = 42L, device = NULL, n_cores = NULL,
+                      in_session = !is.null(device), threads_per_unit = 5L,
+                      max_ram_gb = NULL,
                       test_ids = NULL, resume = TRUE, evaluate_test = FALSE,
                       verbose = TRUE, ...) {
 
@@ -555,6 +573,40 @@ dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
   transform <- .resolve_train_transform(transform, data, verbose = verbose)
   clamp <- .check_train_clamp(clamp, data)
   if (!is.null(n_cores)) n_cores <- suppressMessages(resolve_cores(n_cores, what = "training"))
+
+  # SIDE BY SIDE OR IN THIS SESSION, decided at the door too. The CNN's units
+  # train side by side unless a device was given or in_session asks otherwise;
+  # the table models train here either way.
+  if (!is.logical(in_session) || length(in_session) != 1L || is.na(in_session)) {
+    stop("in_session must be TRUE or FALSE.", call. = FALSE)
+  }
+  side_by_side <- identical(model$input, "patches") && !in_session
+  tpu <- NULL
+  if (side_by_side) {
+    if (!is.null(device)) {
+      stop("A device was given with in_session = FALSE. A device lives in this ",
+           "session, and the units side by side train on the CPU, each in a ",
+           "process of its own. Pass in_session = TRUE to train on this device, ",
+           "or leave device out.", call. = FALSE)
+    }
+    tpu <- suppressWarnings(as.integer(threads_per_unit))
+    if (length(threads_per_unit) != 1L || is.na(tpu) || tpu < 1L || tpu != threads_per_unit) {
+      stop("threads_per_unit must be a whole number >= 1.", call. = FALSE)
+    }
+    if (!is.null(max_ram_gb) && (!is.numeric(max_ram_gb) || length(max_ram_gb) != 1L ||
+                                 !is.finite(max_ram_gb) || max_ram_gb <= 0)) {
+      stop("max_ram_gb must be a positive number of GB, or NULL.", call. = FALSE)
+    }
+    n_cores <- n_cores %||% resolve_cores(NULL, what = "training")
+    if (tpu > n_cores) {
+      if (verbose) {
+        message("threads_per_unit = ", tpu, " is more than the ", n_cores, " core(s) ",
+                "this run may use; each unit trains with ", n_cores, " instead -- and ",
+                "its numbers then differ from a ", tpu, "-thread unit of the same seed.")
+      }
+      tpu <- n_cores
+    }
+  }
 
   if (identical(model$input, "patches")) {
     dots <- names(list(...))
@@ -630,19 +682,32 @@ dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
            paste(need, collapse = ", "), ")).", call. = FALSE)
     }
     # The threads belong to the session, not to the device: a device passed
-    # in keeps whatever its caller set, unless n_cores says otherwise.
-    if (is.null(device)) {
-      device <- setup_torch_device(n_threads = n_cores)
-    } else if (!is.null(n_cores)) {
-      set_torch_threads(n_cores)
+    # in keeps whatever its caller set, unless n_cores says otherwise. Side by
+    # side there is no device here: each worker trains on threads of its own.
+    if (side_by_side) {
+      threads_mode <- "workers"
+      threads_used <- tpu
+    } else {
+      if (is.null(device)) {
+        device <- setup_torch_device(n_threads = n_cores)
+      } else if (!is.null(n_cores)) {
+        set_torch_threads(n_cores)
+      }
+      threads_mode <- if (identical(device$type, "cuda")) "cuda" else "session"
+      threads_used <- torch::torch_get_num_threads()
     }
     .train_clamp_record(file.path(output_dir, run_id), clamp, resume)
+    .train_threads_record(file.path(output_dir, run_id), threads_mode, threads_used, resume)
     res <- run_cnn_resample(
       tune_grid = tune_grid, store = data$store, points = data$points,
       type_table = data$type_table, plan = plan, transform = transform,
       output_dir = output_dir, device = device, run_id = run_id,
       base_seed = base_seed, n_seeds = n_seeds, resume = resume,
-      evaluate_test = evaluate_test, clamp = clamp, ...)
+      evaluate_test = evaluate_test, in_session = !side_by_side,
+      threads_per_unit = tpu %||% 5L, n_cores = n_cores, max_ram_gb = max_ram_gb,
+      clamp = clamp, ...)
+    res$in_session <- !side_by_side
+    res$threads <- threads_used
   } else {
     # A torch model on the table path (the MLP) gets its threads the same way;
     # the forest reads n_cores itself, through the runner's `...`.
@@ -771,6 +836,55 @@ dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
   invisible(f)
 }
 
+# HOW THE UNITS TRAIN IS PART OF THE RUN, as the clamp is. A unit's numbers
+# depend on its seed and on the threads it trained with, and on nothing else
+# (T1, T2). Resumed with another count, a run holds units computed two ways
+# and its table ranks them against each other. So the way the units train --
+# in this session with n threads, side by side with n threads each, or on a
+# CUDA device -- is written before the first unit, and a resume is held to it.
+#
+# A run from before 2026-09-29 recorded none, and it trained in the session,
+# the only way there was then. Resumed in the session it goes on, and records
+# the count it goes on with, which is all that can be known now. Side by side
+# it is refused: the rest of its units would be computed another way.
+.train_threads_record <- function(run_dir, mode, threads, resume) {
+  f <- file.path(run_dir, "threads.rds")
+  now <- list(mode = mode, threads = as.integer(threads))
+  said <- function(r) {
+    switch(r$mode,
+           workers = sprintf("side by side with %d thread(s) each", r$threads),
+           cuda    = "in the session, on a CUDA device",
+           sprintf("in the session with %d thread(s)", r$threads))
+  }
+  if (isTRUE(resume) && file.exists(f)) {
+    old <- readRDS(f)
+    same <- identical(old$mode, now$mode) &&
+      (identical(now$mode, "cuda") || identical(as.integer(old$threads), now$threads))
+    if (!same) {
+      stop("This run's units were trained ", said(old), ", and it is being resumed ",
+           said(now), ". A unit's numbers depend on the threads it trained with ",
+           "(T1), so the run would hold units computed two ways. Resume it as it ",
+           "started (",
+           switch(old$mode,
+                  workers = sprintf("threads_per_unit = %d", old$threads),
+                  cuda    = "in_session = TRUE, on the CUDA device",
+                  sprintf("in_session = TRUE, n_cores = %d", old$threads)),
+           "), or start another run_id.", call. = FALSE)
+    }
+    return(invisible(old))
+  }
+  if (isTRUE(resume) && identical(mode, "workers") &&
+      length(list.files(file.path(run_dir, "models"), pattern = "_best[.]pt$")) > 0L) {
+    stop("This run holds units trained before dsm_train() recorded how its units ",
+         "train -- in the session, the only way there was then. Side by side, the ",
+         "rest would be computed another way. Resume it with in_session = TRUE, or ",
+         "start another run_id.", call. = FALSE)
+  }
+  create_output_dirs(run_dir)
+  safe_save_rds(now, f, compress = FALSE)
+  invisible(now)
+}
+
 # A default grid drawn over what the store and the plan can serve. The
 # windows and the smallest fold go to the generator when it declares them (see
 # default_grid in R/model_registry.R); a generator that does not is called as
@@ -825,6 +939,10 @@ print.dsm_fit <- function(x, ...) {
         "\nSeed noise floor: %.4f -- a gap between configs smaller than this ",
         nf$median_sd), "is not evidence.\n", sep = "")
     }
+  }
+  if (isTRUE(x$n_workers > 0L)) {
+    cat(sprintf("\nTrained side by side: %d worker(s) x %d thread(s) | peak RAM per worker %.1f GB\n",
+                x$n_workers, x$threads_per_unit, x$peak_gb))
   }
   cat("\nResults: ", x$run_dir, "\n", sep = "")
   invisible(x)

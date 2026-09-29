@@ -533,6 +533,36 @@ write_comparison <- function(comparison, csv_path, rds_path) {
   invisible(comparison)
 }
 
+# THE GRID IS WRITTEN WITH THE RUN, AND A RESUME IS HELD TO IT. If a
+# tune_grid.rds already exists for this run_id, it MUST match the grid passed
+# in now (same config_ids in the same order) before we trust any checkpoint
+# found under models/. Reusing a run_id with a DIFFERENT grid would silently
+# pair the wrong checkpoint with the wrong config_id. Both runners write it:
+# the fold loop in this session, and the units side by side
+# (R/train_workers.R).
+.write_tune_grid <- function(run_dir, tune_grid, resume) {
+  grid_rds_path <- file.path(run_dir, "tune_grid.rds")
+  if (resume && file.exists(grid_rds_path)) {
+    prev_grid <- readRDS(grid_rds_path)
+    if (!identical(prev_grid$config_id, tune_grid$config_id)) {
+      stop("resume = TRUE, but tune_grid.rds in ", run_dir, " lists config ids ",
+           "that differ from the grid passed now.\n  Use a new run_id, or pass ",
+           "the grid this run was started with.", call. = FALSE)
+    }
+  }
+
+  # Save the grid so the run can be reproduced
+  safe_save_rds(tune_grid, grid_rds_path, compress = FALSE)
+  safe_write_csv2(
+    dplyr::mutate(tune_grid,
+      window_sizes  = purrr::map_chr(window_sizes, paste, collapse = "_"),
+      conv_channels = purrr::map_chr(conv_channels, paste, collapse = "_")
+    ),
+    file.path(run_dir, "tune_grid.csv")
+  )
+  invisible(grid_rds_path)
+}
+
 run_cnn_tuning <- function(
   tune_grid,
   n_channels,
@@ -557,31 +587,7 @@ run_cnn_tuning <- function(
                                    "metrics", "gates", "comparison"))
   create_output_dirs(dirs)
 
-  grid_rds_path <- file.path(run_dir, "tune_grid.rds")
-
-  # ── Resume safety check ─────────────────────────────────────────────────────
-  # If a tune_grid.rds already exists for this run_id, it MUST match the grid
-  # passed in now (same config_ids in the same order) before we trust any
-  # checkpoint found under models/. Reusing a run_id with a DIFFERENT grid
-  # would silently pair the wrong checkpoint with the wrong config_id.
-  if (resume && file.exists(grid_rds_path)) {
-    prev_grid <- readRDS(grid_rds_path)
-    if (!identical(prev_grid$config_id, tune_grid$config_id)) {
-      stop("resume = TRUE, but tune_grid.rds in ", run_dir, " lists config ids ",
-           "that differ from the grid passed now.\n  Use a new run_id, or pass ",
-           "the grid this run was started with.", call. = FALSE)
-    }
-  }
-
-  # Save the grid so the run can be reproduced
-  safe_save_rds(tune_grid, grid_rds_path, compress = FALSE)
-  safe_write_csv2(
-    dplyr::mutate(tune_grid,
-      window_sizes  = purrr::map_chr(window_sizes, paste, collapse = "_"),
-      conv_channels = purrr::map_chr(conv_channels, paste, collapse = "_")
-    ),
-    file.path(run_dir, "tune_grid.csv")
-  )
+  .write_tune_grid(run_dir, tune_grid, resume)
 
   # The cache is built by the caller and reused across every config here. It
   # used to be built inside this function from raw patches, which forced the
@@ -671,6 +677,7 @@ run_cnn_tuning <- function(
       mine, n_units, length(done_ids)))
   }
 
+  training <- list(...)
   for (u in seq_len(n_units)) {
     i      <- units$i[u]
     seed_i <- units$seed_i[u]
@@ -698,43 +705,13 @@ run_cnn_tuning <- function(
 
     # Seed depends on the REPETITION, never on the config: see base_seed.
     this_seed <- base_seed + seed_i - 1L
-    set.seed(this_seed)
-    torch::torch_manual_seed(this_seed)
-
-    message("\n-- ", u, "/", n_units, ": ", unit_id,
-            "  (config ", i, "/", n_cfg, ", fold ", fold,
-            ", seed ", this_seed, ") --")
-    message("  window_sizes : ", paste(cfg$window_sizes[[1]], collapse = "x"))
-    message("  conv_channels: ", paste(cfg$conv_channels[[1]], collapse = ", "))
-    message("  embedding_dim: ", cfg$embedding_dim,
-            " | gate: ", cfg$gate_type,
-            " | residual: ", cfg$use_residual,
-            " | se: ", cfg$use_se_block)
-    message("  base_lr: ", cfg$base_lr,
-            " | batch: ", cfg$batch_size,
-            " | loss: ", cfg$loss_fn)
-
-    # Build DataLoaders for this config's window sizes from the shared cache
-    loaders <- .make_loaders_from_cache(cache, cfg)
-
-    err_msg <- NA_character_
-    result <- tryCatch(
-      train_one_cnn(
-        cfg          = cfg,
-        n_channels   = n_channels,
-        loaders      = loaders,
-        points_valid = points_valid,
-        transform    = transform,
-        device       = device,
-        model_name   = unit_id,
-        ...
-      ),
-      error = function(e) {
-        message("  ERROR in config ", cfg$config_id, ": ", conditionMessage(e))
-        err_msg <<- conditionMessage(e)
-        NULL
-      }
-    )
+    row <- .train_unit(
+      cfg = cfg, unit_id = unit_id, fold = fold, this_seed = this_seed,
+      header = sprintf("%d/%d: %s  (config %d/%d, fold %d, seed %d)", u, n_units,
+                       unit_id, i, n_cfg, fold, this_seed),
+      cache = cache, points_valid = points_valid, n_channels = n_channels,
+      transform = transform, device = device, run_dir = run_dir,
+      evaluate_test = evaluate_test, training = training)
 
     # A config that never reaches the comparison table is indistinguishable
     # from one that was never run -- and `resume` filters on status ==
@@ -746,112 +723,175 @@ run_cnn_tuning <- function(
       # instead of replacing it.
       comparison <- dplyr::filter(comparison, unit_id != .env$unit_id)
     }
-
-    if (is.null(result)) {
-      comparison <- dplyr::bind_rows(comparison, dplyr::bind_cols(
-        tibble::tibble(
-          unit_id       = unit_id,
-          config_id     = cfg$config_id,
-          fold          = fold,
-          seed          = this_seed,
-          best_epoch    = NA_integer_,
-          runtime_min   = NA_real_,
-          best_val_loss = NA_real_,
-          window_sizes  = paste(cfg$window_sizes[[1]], collapse = "x"),
-          conv_channels = paste(cfg$conv_channels[[1]], collapse = "_"),
-          status        = "failed",
-          error_message = err_msg
-        ),
-        dplyr::select(cfg, -config_id, -window_sizes, -conv_channels)
-      ))
-      write_comparison(comparison, comparison_path, comparison_rds)
-      rm(result); gc()
-      next
-    }
-
-    # Save outputs, named by UNIT: two seeds of the same config are two
-    # models, two histories and two prediction tables, never one overwriting
-    # the other.
-    cid <- unit_id
-    safe_torch_save(result$best_state, file.path(run_dir, "models",
-                    paste0(cid, "_best.pt")))
-    safe_write_csv2(result$history,
-                    file.path(run_dir, "history", paste0(cid, "_history.csv")))
-    # NO TEST ROW LEAVES THIS RUNNER WHILE evaluate_test IS FALSE.
-    #
-    # Three artefacts carry dataset_role and all three used to be written whole:
-    # predictions/ was filtered on 2026-09-16, metrics/_perf.csv and
-    # metrics/_perf_quantile.csv were not -- so the per-unit test CCC was on
-    # disk in plain text for every unit of the run whose selection was later
-    # frozen. See .drop_test_rows() in R/utils.R for the full account.
-    #
-    # Nothing is lost: score_test_grid() recomputes the test from the
-    # checkpoints, after the selection is frozen, which is the whole point.
-    safe_write_csv2(.drop_test_rows(result$pred_all, evaluate_test),
-                    file.path(run_dir, "predictions", paste0(cid, "_pred_all.csv")))
-    safe_write_csv2(.drop_test_rows(result$perf_all, evaluate_test),
-                    file.path(run_dir, "metrics", paste0(cid, "_perf.csv")))
-    safe_write_csv2(.drop_test_rows(result$perf_quantile, evaluate_test),
-                    file.path(run_dir, "metrics", paste0(cid, "_perf_quantile.csv")))
-    if (!is.null(result$gate)) {
-      safe_write_csv2(result$gate$summary,
-                      file.path(run_dir, "gates", paste0(cid, "_gate_summary.csv")))
-      safe_write_csv2(result$gate$by_profile,
-                      file.path(run_dir, "gates", paste0(cid, "_gate_profiles.csv")))
-    }
-
-    # Append to comparison table
-    val_perf  <- dplyr::filter(result$perf_all, dataset_role == "validation")
-    # ── The test set is NOT scored during tuning (evaluate_test) ──────────────
-    #
-    # A frozen test set is frozen only while nothing reads it. Scoring it on
-    # every unit puts test_ccc in the comparison table beside val_ccc, and from
-    # there it takes one glance to prefer the config that "also does well on
-    # test" -- which is selection on the test set, done by a human instead of
-    # an argmax, and it inflates the final number by exactly as much.
-    #
-    # The columns still EXIST, holding NA, so the table keeps one shape whether
-    # the test was scored or not and every reader downstream is unchanged.
-    # Stage 04 scores the test once, on the chosen config, which is the only
-    # moment the number means what it is reported to mean.
-    test_perf <- dplyr::filter(result$perf_all, dataset_role == "test")
-    if (!isTRUE(evaluate_test)) test_perf <- test_perf[0, , drop = FALSE]
-    if (nrow(test_perf) == 0L) {
-      # No test set in this plan: the columns still exist, holding NA, so the
-      # table has one shape whatever the plan was.
-      test_perf <- val_perf
-      test_perf[] <- lapply(test_perf, function(z) z[NA_integer_])
-    }
-    val_metrics <- val_perf %>%
-      dplyr::select(n, ccc, r2, mae, nse, rmse, rpd, mqi, bias, bias_pct) %>%
-      dplyr::rename_with(~ paste0("val_", .x))
-    test_metrics <- test_perf %>%
-      dplyr::select(n, ccc, r2, mae, nse, rmse, rpd, mqi, bias, bias_pct) %>%
-      dplyr::rename_with(~ paste0("test_", .x))
-    row <- dplyr::bind_cols(
-      tibble::tibble(
-        unit_id        = unit_id,
-        config_id      = cfg$config_id,
-        fold           = fold,
-        seed           = this_seed,
-        best_epoch     = result$best_epoch,
-        runtime_min    = round(result$runtime_min, 2),
-        best_val_loss  = round(result$best_val_loss, 6),
-        window_sizes   = paste(cfg$window_sizes[[1]], collapse = "x"),
-        conv_channels  = paste(cfg$conv_channels[[1]], collapse = "_"),
-        status         = "success",
-        error_message  = NA_character_
-      ),
-      dplyr::select(cfg, -config_id, -window_sizes, -conv_channels),
-      val_metrics,
-      test_metrics
-    )
     comparison <- dplyr::bind_rows(comparison, row)
     write_comparison(comparison, comparison_path, comparison_rds)
-
-    rm(result); gc()
   }
 
+  comparison <- .rank_comparison(comparison, run_dir, sprintf("fold %d", fold),
+                                 comparison_path)
+  invisible(list(comparison = comparison, run_dir = run_dir))
+}
+
+# ── One unit: trained, its files written, its row returned ────────────────────
+#
+# THE ONE PLACE A UNIT IS TRAINED. The fold loop above calls it in this session,
+# and each worker of the units side by side calls it in a process of its own
+# (R/train_workers.R): one implementation, so a unit trained either way writes
+# the same files and the same row. It was the body of the fold loop until
+# 2026-09-29, and is that body unchanged.
+#
+#   cfg        one row of the grid
+#   unit_id    <config>_f<fold>_s<repetition>
+#   this_seed  the repetition's seed, base_seed + s - 1, set here, before the
+#              loaders: they shuffle with torch's generator
+#   header     the unit's line in the log
+#   cache, points_valid  the fold's tensors and their metadata, row for row
+#   training   the arguments for train_one_cnn()
+#
+# Returns the unit's row of the comparison table: status "success", or
+# "failed" with its error_message -- a failure is recorded, never fatal.
+.train_unit <- function(cfg, unit_id, fold, this_seed, header, cache, points_valid,
+                        n_channels, transform, device, run_dir, evaluate_test,
+                        training) {
+  set.seed(this_seed)
+  torch::torch_manual_seed(this_seed)
+
+  message("\n-- ", header, " --")
+  message("  window_sizes : ", paste(cfg$window_sizes[[1]], collapse = "x"))
+  message("  conv_channels: ", paste(cfg$conv_channels[[1]], collapse = ", "))
+  message("  embedding_dim: ", cfg$embedding_dim,
+          " | gate: ", cfg$gate_type,
+          " | residual: ", cfg$use_residual,
+          " | se: ", cfg$use_se_block)
+  message("  base_lr: ", cfg$base_lr,
+          " | batch: ", cfg$batch_size,
+          " | loss: ", cfg$loss_fn)
+
+  # Build DataLoaders for this config's window sizes from the shared cache
+  loaders <- .make_loaders_from_cache(cache, cfg)
+
+  result <- tryCatch(
+    do.call(train_one_cnn, c(list(
+      cfg          = cfg,
+      n_channels   = n_channels,
+      loaders      = loaders,
+      points_valid = points_valid,
+      transform    = transform,
+      device       = device,
+      model_name   = unit_id), training)),
+    error = function(e) {
+      message("  ERROR in config ", cfg$config_id, ": ", conditionMessage(e))
+      e
+    }
+  )
+
+  if (inherits(result, "error")) {
+    row <- dplyr::bind_cols(
+      tibble::tibble(
+        unit_id       = unit_id,
+        config_id     = cfg$config_id,
+        fold          = fold,
+        seed          = this_seed,
+        best_epoch    = NA_integer_,
+        runtime_min   = NA_real_,
+        best_val_loss = NA_real_,
+        window_sizes  = paste(cfg$window_sizes[[1]], collapse = "x"),
+        conv_channels = paste(cfg$conv_channels[[1]], collapse = "_"),
+        status        = "failed",
+        error_message = conditionMessage(result)
+      ),
+      dplyr::select(cfg, -config_id, -window_sizes, -conv_channels)
+    )
+    rm(result, loaders); invisible(gc(verbose = FALSE))
+    return(row)
+  }
+
+  # Save outputs, named by UNIT: two seeds of the same config are two
+  # models, two histories and two prediction tables, never one overwriting
+  # the other.
+  cid <- unit_id
+  safe_torch_save(result$best_state, file.path(run_dir, "models",
+                  paste0(cid, "_best.pt")))
+  safe_write_csv2(result$history,
+                  file.path(run_dir, "history", paste0(cid, "_history.csv")))
+  # NO TEST ROW LEAVES THIS RUNNER WHILE evaluate_test IS FALSE.
+  #
+  # Three artefacts carry dataset_role and all three used to be written whole:
+  # predictions/ was filtered on 2026-09-16, metrics/_perf.csv and
+  # metrics/_perf_quantile.csv were not -- so the per-unit test CCC was on
+  # disk in plain text for every unit of the run whose selection was later
+  # frozen. See .drop_test_rows() in R/utils.R for the full account.
+  #
+  # Nothing is lost: score_test_grid() recomputes the test from the
+  # checkpoints, after the selection is frozen, which is the whole point.
+  safe_write_csv2(.drop_test_rows(result$pred_all, evaluate_test),
+                  file.path(run_dir, "predictions", paste0(cid, "_pred_all.csv")))
+  safe_write_csv2(.drop_test_rows(result$perf_all, evaluate_test),
+                  file.path(run_dir, "metrics", paste0(cid, "_perf.csv")))
+  safe_write_csv2(.drop_test_rows(result$perf_quantile, evaluate_test),
+                  file.path(run_dir, "metrics", paste0(cid, "_perf_quantile.csv")))
+  if (!is.null(result$gate)) {
+    safe_write_csv2(result$gate$summary,
+                    file.path(run_dir, "gates", paste0(cid, "_gate_summary.csv")))
+    safe_write_csv2(result$gate$by_profile,
+                    file.path(run_dir, "gates", paste0(cid, "_gate_profiles.csv")))
+  }
+
+  # Append to comparison table
+  val_perf  <- dplyr::filter(result$perf_all, dataset_role == "validation")
+  # ── The test set is NOT scored during tuning (evaluate_test) ──────────────
+  #
+  # A frozen test set is frozen only while nothing reads it. Scoring it on
+  # every unit puts test_ccc in the comparison table beside val_ccc, and from
+  # there it takes one glance to prefer the config that "also does well on
+  # test" -- which is selection on the test set, done by a human instead of
+  # an argmax, and it inflates the final number by exactly as much.
+  #
+  # The columns still EXIST, holding NA, so the table keeps one shape whether
+  # the test was scored or not and every reader downstream is unchanged.
+  # Stage 04 scores the test once, on the chosen config, which is the only
+  # moment the number means what it is reported to mean.
+  test_perf <- dplyr::filter(result$perf_all, dataset_role == "test")
+  if (!isTRUE(evaluate_test)) test_perf <- test_perf[0, , drop = FALSE]
+  if (nrow(test_perf) == 0L) {
+    # No test set in this plan: the columns still exist, holding NA, so the
+    # table has one shape whatever the plan was.
+    test_perf <- val_perf
+    test_perf[] <- lapply(test_perf, function(z) z[NA_integer_])
+  }
+  val_metrics <- val_perf %>%
+    dplyr::select(n, ccc, r2, mae, nse, rmse, rpd, mqi, bias, bias_pct) %>%
+    dplyr::rename_with(~ paste0("val_", .x))
+  test_metrics <- test_perf %>%
+    dplyr::select(n, ccc, r2, mae, nse, rmse, rpd, mqi, bias, bias_pct) %>%
+    dplyr::rename_with(~ paste0("test_", .x))
+  row <- dplyr::bind_cols(
+    tibble::tibble(
+      unit_id        = unit_id,
+      config_id      = cfg$config_id,
+      fold           = fold,
+      seed           = this_seed,
+      best_epoch     = result$best_epoch,
+      runtime_min    = round(result$runtime_min, 2),
+      best_val_loss  = round(result$best_val_loss, 6),
+      window_sizes   = paste(cfg$window_sizes[[1]], collapse = "x"),
+      conv_channels  = paste(cfg$conv_channels[[1]], collapse = "_"),
+      status         = "success",
+      error_message  = NA_character_
+    ),
+    dplyr::select(cfg, -config_id, -window_sizes, -conv_channels),
+    val_metrics,
+    test_metrics
+  )
+  rm(result, loaders); invisible(gc(verbose = FALSE))
+  row
+}
+
+# ── A table ranked, written and reported ──────────────────────────────────────
+#
+# The end of every fold in this session, and of the run side by side: `scope`
+# says which, in the one message that names it.
+.rank_comparison <- function(comparison, run_dir, scope, comparison_path) {
   # Rank by VALIDATION metrics only — test set is read-only diagnostic
   #
   # Two tables, because they answer different questions:
@@ -867,7 +907,7 @@ run_cnn_tuning <- function(
   # the real cause sitting unread in error_message.
   if (nrow(comparison) > 0L && n_ok == 0L) {
     first_err <- comparison$error_message[!is.na(comparison$error_message)][1]
-    stop("Every unit of fold ", fold, " failed. The first error was:\n  ",
+    stop("Every unit of ", scope, " failed. The first error was:\n  ",
          first_err, "\n  See status / error_message in ", comparison_path,
          call. = FALSE)
   }
@@ -925,7 +965,7 @@ run_cnn_tuning <- function(
     message("\n-- No config completed successfully. --")
   }
 
-  invisible(list(comparison = comparison, run_dir = run_dir))
+  comparison
 }
 
 # ── Resampling: the same grid, once per fold ──────────────────────────────────
@@ -958,8 +998,15 @@ run_cnn_tuning <- function(
 #'   sits in the tuning table next to the validation score. Stage 04 scores it
 #'   once, on the config that was chosen without it. Set TRUE only to study the
 #'   optimism itself -- never to choose anything.
+#' @param in_session   TRUE (the default here) trains the units one at a time
+#'   in this session, fold by fold; FALSE trains them side by side, each worker
+#'   an R process of its own (R/train_workers.R). dsm_train() decides which.
+#' @param threads_per_unit Side by side: the threads of each unit.
+#' @param n_cores      Side by side: the cores of the whole run.
+#' @param max_ram_gb   Side by side: the RAM the workers may use together.
 #' @param ...          Passed through to run_cnn_tuning() and train_one_cnn().
-#' @return list(comparison, by_config, run_dir, plan)
+#' @return list(comparison, by_config, run_dir, plan), and side by side
+#'   n_workers, threads_per_unit and peak_gb too.
 #' @noRd
 run_cnn_resample <- function(tune_grid, store, points, type_table, plan,
                              transform  = identity,
@@ -971,6 +1018,10 @@ run_cnn_resample <- function(tune_grid, store, points, type_table, plan,
                              resume     = TRUE,
                              evaluate_test = FALSE,
                              release_store = TRUE,
+                             in_session = TRUE,
+                             threads_per_unit = 5L,
+                             n_cores = NULL,
+                             max_ram_gb = NULL,
                              ...) {
   stopifnot(inherits(plan, "fold_plan"))
 
@@ -1040,6 +1091,22 @@ run_cnn_resample <- function(tune_grid, store, points, type_table, plan,
   if (!is.null(plan$buffer_dropped)) {
     safe_write_csv2(plan$buffer_dropped,
                     file.path(run_dir, "fold_buffer_dropped.csv"))
+  }
+
+  # SIDE BY SIDE the units train in workers of their own, each building its own
+  # fold caches (R/train_workers.R). What follows is the fold loop in this
+  # session, one unit at a time.
+  if (!isTRUE(in_session)) {
+    res <- .train_side_by_side(
+      tune_grid = tune_grid, store = store, points = points, type_table = type_table,
+      plan = plan, transform = transform, run_dir = run_dir, base_seed = base_seed,
+      n_seeds = n_seeds, resume = resume, evaluate_test = evaluate_test,
+      training = list(...), windows = windows_needed, n_cores = n_cores,
+      threads_per_unit = threads_per_unit, max_ram_gb = max_ram_gb)
+    return(list(comparison = res$comparison,
+                by_config = summarise_resamples(res$comparison),
+                run_dir = run_dir, plan = plan, n_workers = res$n_workers,
+                threads_per_unit = threads_per_unit, peak_gb = res$peak_gb))
   }
 
   # ONE BUFFER FOR EVERY FOLD. Each fold's roles used to be tensors of their

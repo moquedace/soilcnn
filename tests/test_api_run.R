@@ -216,8 +216,9 @@ ok["plan_on_disk_is_the_plan_given"] <- identical(
 # nothing.
 # =============================================================================
 
-# Two threads first, so that finding one afterwards means n_cores set it --
-# the runs above already left the session at one.
+# No device here, so the units train side by side (R/train_workers.R), and
+# n_cores = 1 caps each unit's threads at one: the run records that, and the
+# session's own threads -- two, set first -- are left as they were.
 invisible(suppressMessages(set_torch_threads(2L)))
 fit_def <- suppressMessages(dsm_train(
   data, model = "cnn", resampling = plan, tune_length = 2L,
@@ -234,7 +235,11 @@ ok["the_default_grid_asked_only_for_the_stores_window"] <-
 n_train_min <- min(vapply(plan$folds, function(f) length(f$train), integer(1)))
 ok["the_default_grid_batches_fit_the_smallest_fold"] <-
   all(floor(n_train_min / cmp_def$batch_size) >= 4)
-ok["n_cores_set_torchs_threads"] <- torch::torch_get_num_threads() == 1L
+ok["n_cores_capped_the_units_threads"] <-
+  identical(readRDS(file.path(out_root, "api_cnn_default", "threads.rds")),
+            list(mode = "workers", threads = 1L)) &&
+  identical(as.integer(fit_def$threads_per_unit), 1L)
+ok["side_by_side_leaves_the_sessions_threads"] <- torch::torch_get_num_threads() == 2L
 ok["dsm_train_keeps_the_clamp_it_was_given"] <- identical(fit_def$clamp, c(-Inf, Inf)) &&
   identical(readRDS(file.path(out_root, "api_cnn_default", "clamp.rds")), c(-Inf, Inf))
 
