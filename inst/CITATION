@@ -1,0 +1,12 @@
+# How to cite soilcnn: the package itself. When the article that describes it
+# is published, its entry goes first and this one after it.
+bibentry(
+  bibtype = "Manual",
+  header  = "To cite soilcnn in publications use:",
+  title   = "{soilcnn}: Convolutional Neural Networks for Digital Soil Mapping",
+  author  = c(person(c("Cássio", "Marques"), "Moquedace"),
+              person(c("Clara", "Glória", "Oliveira"), "Baldi")),
+  year    = "2026",
+  note    = paste("R package version", meta$Version),
+  url     = "https://github.com/moquedace/soilcnn"
+)

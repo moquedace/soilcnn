@@ -28,6 +28,9 @@
 #   5. there: the API is exported, the internals are not, print dispatches
 #   6. there: the built-in models are registered (.onLoad ran)
 #   7. there: the loader says installed, and a worker opens that same copy
+#   8. there: citation("soilcnn") is the package's own CITATION, with both
+#      authors -- read from the installed copy, which is the only place
+#      citation() reads (a session with the source tree loaded cannot)
 #
 # Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tests/test_package_install.R")
 #      (~2 min: a build, an install, four R processes)
@@ -98,7 +101,8 @@ ok["worker_refuses_changed_code"] <- grepl("not the code its session loaded", re
 pkg   <- unname(read.dcf(file.path(root, "DESCRIPTION"), fields = "Package")[1, 1])
 stage <- file.path(work, "stage", pkg)
 dir.create(stage, recursive = TRUE)
-parts <- c("DESCRIPTION", "NAMESPACE", "LICENSE", ".Rbuildignore", "R", "man", "vignettes")
+parts <- c("DESCRIPTION", "NAMESPACE", "LICENSE", ".Rbuildignore", "R", "man", "vignettes",
+           "inst")
 parts <- parts[file.exists(file.path(root, parts))]
 copied <- vapply(parts, function(p) file.copy(file.path(root, p), stage, recursive = TRUE),
                  logical(1))
@@ -111,6 +115,7 @@ ok["tarball_was_built"] <- file.exists(tgz)
 ok["tarball_leaves_out_the_user_data"] <-
   !any(c("data", "outputs", "examples", "tests", "docs") %in% top)
 ok["tarball_holds_the_package"] <- all(c("DESCRIPTION", "NAMESPACE", "R", "man") %in% top)
+ok["tarball_holds_the_citation"] <- any(grepl("^[^/]+/inst/CITATION$", listed))
 
 # ── 4. install into the temporary library ────────────────────────────────────
 # R CMD INSTALL's own words when it fails: install.packages() would only warn
@@ -152,6 +157,8 @@ got <- callr::r(function(lib) {
                                      envir = globalenv())),
     loader = loader[c("package", "dev", "path", "code_hash")],
     worker = worker,
+    citation_authors = format(utils::citation("soilcnn", lib.loc = lib)$author,
+                              include = c("given", "family")),
     lib_path = normalizePath(file.path(lib, "soilcnn"), winslash = "/"))
 }, args = list(lib), libpath = c(lib, .libPaths()))
 
@@ -164,9 +171,13 @@ ok["installed_loader_points_at_the_copy"] <- identical(got$loader$path, got$lib_
 ok["installed_worker_opens_the_same_copy"] <-
   identical(got$worker$hash, got$loader$code_hash) &&
   identical(normalizePath(got$worker$path, winslash = "/"), got$lib_path)
+ok["installed_citation_names_both_authors"] <-
+  identical(got$citation_authors,
+            c("C\u00e1ssio Marques Moquedace", "Clara Gl\u00f3ria Oliveira Baldi"))
 
 cat("  tarball                  : ", basename(tgz), " (", length(listed), " files)\n", sep = "")
 cat("  installed models         : ", paste(got$models, collapse = ", "), "\n", sep = "")
+cat("  citation authors         : ", paste(got$citation_authors, collapse = "; "), "\n", sep = "")
 
 unlink(work, recursive = TRUE)
 .report(ok, "test_package_install")

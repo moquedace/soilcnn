@@ -587,6 +587,17 @@ which holds the package alone.
 
 ---
 
+## Citation
+
+```r
+citation("soilcnn")
+```
+
+> Moquedace CM, Baldi CGO (2026). *soilcnn: Convolutional Neural Networks for
+> Digital Soil Mapping*. R package, <https://github.com/moquedace/soilcnn>.
+
+---
+
 ## License
 
 MIT © [moquedace](https://github.com/moquedace)

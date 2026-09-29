@@ -3,7 +3,7 @@
 #   source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tools/check_package.R")
 #
 # WHAT IT DOES. Copies DESCRIPTION, NAMESPACE, LICENSE, .Rbuildignore, R/,
-# man/ and vignettes/ into a staging folder -- R CMD build lists every file
+# man/, vignettes/ and inst/ into a staging folder -- R CMD build lists every file
 # under a directory before it applies .Rbuildignore, and outputs/ made that
 # minutes here -- builds the tarball with its vignette, and runs
 # `R CMD check --no-manual` on it. Every NOTE, WARNING and ERROR is printed
@@ -53,7 +53,8 @@ unlink(work, recursive = TRUE)
 stage <- file.path(work, "stage", pkg)
 dir.create(stage, recursive = TRUE)
 
-parts <- c("DESCRIPTION", "NAMESPACE", "LICENSE", ".Rbuildignore", "R", "man", "vignettes")
+parts <- c("DESCRIPTION", "NAMESPACE", "LICENSE", ".Rbuildignore", "R", "man", "vignettes",
+           "inst")
 parts <- parts[file.exists(file.path(root, parts))]
 copied <- vapply(parts, function(p) file.copy(file.path(root, p), stage, recursive = TRUE),
                  logical(1))

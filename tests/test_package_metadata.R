@@ -207,7 +207,7 @@ kept_out <- function(path) {
 }
 user_parts <- c("data", "outputs", "examples", "tests", "docs", "tools", "utils",
                 "README.md", "LICENSE.md")
-package_parts <- c("DESCRIPTION", "NAMESPACE", "LICENSE", "R", "man", "vignettes")
+package_parts <- c("DESCRIPTION", "NAMESPACE", "LICENSE", "R", "man", "vignettes", "inst")
 ok["buildignore_keeps_the_user_parts_out"] <- all(vapply(user_parts, kept_out, logical(1)))
 ok["buildignore_keeps_the_package_in"] <- !any(vapply(package_parts, kept_out, logical(1)))
 

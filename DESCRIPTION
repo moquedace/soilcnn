@@ -1,8 +1,10 @@
 Package: soilcnn
 Title: Convolutional Neural Networks for Digital Soil Mapping
 Version: 0.0.0.9000
-Authors@R:
-    person("Cassio", "Moquedace", , "cassiomoquedace@gmail.com", role = c("aut", "cre"))
+Authors@R: c(
+    person(c("Cássio", "Marques"), "Moquedace", , "cassiomoquedace@gmail.com",
+           role = c("aut", "cre")),
+    person(c("Clara", "Glória", "Oliveira"), "Baldi", role = "aut"))
 Description: A framework, built on 'torch', for mapping a soil property from
     point observations and a stack of aligned rasters with a convolutional
     network that reads each point's neighbourhood. It extracts the patches,
