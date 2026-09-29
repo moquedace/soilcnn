@@ -28,7 +28,9 @@
 #      training DI: for each training point, the distance to the nearest
 #      training point that is NOT in its fold. That is the key idea -- it asks
 #      how dissimilar a point can be and still have been predicted well during
-#      cross-validation, rather than picking a number.
+#      cross-validation, rather than picking a number. A point no fold held
+#      out -- the training side of a holdout -- was never predicted, so it has
+#      no such DI: it is a neighbour, not a measurement.
 #
 # WHICH FEATURE SPACE, FOR A CNN.
 #
@@ -131,6 +133,7 @@ di_reference <- function(x_train, weights = NULL, max_pairs = 2e6, seed = 42L) {
 #' @param exclude Optional integer vector, one per row of x, giving a training
 #'   FOLD to exclude from that row's search. Used for the threshold.
 #' @param folds_train Fold label of each training row; required with `exclude`.
+#'   NA marks a row never held out: no row's search excludes it.
 #' @param chunk   Rows of x handled at a time. Distance is computed exactly,
 #'   which is n_train * p per row; the chunk bounds the temporary matrix.
 #' @noRd
@@ -160,8 +163,9 @@ di_reference <- function(x_train, weights = NULL, max_pairs = 2e6, seed = 42L) {
       if (!is.null(exclude)) {
         # Mask out the training rows in the same fold, so a point is never its
         # own nearest neighbour and never borrows one it trained beside.
+        # which(): a row never held out has fold NA, and is masked for no one.
         for (r in seq_len(nrow(blk))) {
-          d2[r, folds_train == exclude[s + r - 1L]] <- Inf
+          d2[r, which(folds_train == exclude[s + r - 1L])] <- Inf
         }
       }
       # Numerical floor: the expansion can return a tiny negative for a point
@@ -204,12 +208,17 @@ dissimilarity_index <- function(ref, x, chunk = 2000L) {
 #' outlier-removed maximum of it is the largest dissimilarity for which the
 #' reported error has been demonstrated.
 #'
+#' A row never held out -- the training side of a single split -- has fold
+#' `NA`: it is a neighbour to every fold, and has no cross-validated DI of its
+#' own, since no model predicted it.
+#'
 #' @param ref   From di_reference().
 #' @param folds Integer fold label per training row, in the same order as the
-#'   matrix the reference was built from.
+#'   matrix the reference was built from; `NA` for a row never held out.
 #' @param k_iqr Outlier rule: threshold = Q75 + k_iqr * IQR. 1.5 is Tukey's
 #'   fence and the value Meyer & Pebesma use.
-#' @return The threshold, with the cross-validated DI attached as "cv_di".
+#' @return The threshold, with the cross-validated DI attached as "cv_di"
+#'   (`NA` for the rows never held out).
 #' @export
 aoa_threshold <- function(ref, folds, k_iqr = 1.5) {
   stopifnot(inherits(ref, "di_reference"))
@@ -218,15 +227,23 @@ aoa_threshold <- function(ref, folds, k_iqr = 1.5) {
     stop("folds has ", length(folds), " entries for ", ref$n,
          " training rows.", call. = FALSE)
   }
-  if (length(unique(folds)) < 2L) {
+  held <- which(!is.na(folds))
+  if (length(held) == 0L) {
+    stop("No training row was held out (every fold label is NA): there is no ",
+         "cross-validated distance to derive the threshold from.", call. = FALSE)
+  }
+  # A held-out row's neighbour must lie outside its fold: in another fold, or
+  # among the rows never held out. One fold and nothing beside it has none.
+  if (length(unique(folds[held])) < 2L && length(held) == ref$n) {
     stop("The threshold is derived from distances ACROSS folds; with one ",
-         "fold there are none. Pass the fold labels of a k-fold plan.",
-         call. = FALSE)
+         "fold there are none. Pass the fold labels of a k-fold plan, or NA ",
+         "for the rows a single split never held out.", call. = FALSE)
   }
 
-  d  <- .di_nn_dist(ref, ref$x / rep(sqrt(ref$weights), each = ref$n),
-                    exclude = folds, folds_train = folds)
-  cv <- d / ref$avg_dist
+  x  <- ref$x / rep(sqrt(ref$weights), each = ref$n)
+  cv <- rep(NA_real_, ref$n)
+  cv[held] <- .di_nn_dist(ref, x[held, , drop = FALSE], exclude = folds[held],
+                          folds_train = folds) / ref$avg_dist
 
   q  <- stats::quantile(cv, probs = c(0.25, 0.75), na.rm = TRUE)
   th <- as.numeric(q[2] + k_iqr * (q[2] - q[1]))
@@ -305,11 +322,12 @@ print.di_reference <- function(x, ...) {
 #'
 #' The centre pixel of every point that trained or validated in the tuning plan,
 #' QC'd and scaled with the MODEL's scaling (stage 07's construction). Each
-#' point's fold is the one it was held out in -- or, for a point that never
-#' validated, the first it trained in -- so its cross-validated DI is the
+#' point's fold is the one it was held out in, so its cross-validated DI is the
 #' distance to the nearest point OUTSIDE its fold: the dissimilarity the model
 #' that predicted it during cross-validation actually faced. That is the DI a
-#' calibration residual comes with.
+#' calibration residual comes with. A point that only ever trained -- the
+#' training side of a holdout -- has fold `NA` and no cross-validated DI: it is
+#' in the reference, a neighbour to every fold, and out of the threshold.
 #'
 #' @param points     Point table aligned to the store (align_points_to_meta()).
 #' @param predictors Channel names, in the model's order.
@@ -317,7 +335,7 @@ print.di_reference <- function(x, ...) {
 #' @param scaling    The fitted model's predictor_scaling, in the same order.
 #' @param plan       The tuning run's fold plan.
 #' @return An `aoa_reference`: the DI reference, the AOA threshold, and each
-#'   used point's fold and cross-validated DI.
+#'   used point's fold and cross-validated DI (`NA` for a point never held out).
 #' @export
 aoa_reference <- function(points, predictors, qc_table, scaling, plan) {
   stopifnot(inherits(plan, "fold_plan"))
@@ -334,18 +352,23 @@ aoa_reference <- function(points, predictors, qc_table, scaling, plan) {
   }
   train_mat <- scale_patches_matrix(train_mat, scaling)
 
-  # The validation fold first: it is the fold a point was HELD OUT in, which is
-  # exactly the "not in its own fold" the threshold is defined against. Written
-  # with explicit indices -- `fold_of[idx][cond] <- j` assigns to a copy.
-  fold_of <- integer(nrow(points))
+  # The fold a point was HELD OUT in: exactly the "not in its own fold" the
+  # threshold is defined against.
+  #
+  # A POINT THAT ONLY EVER TRAINED HAS NO FOLD (NA). No model predicted it
+  # during cross-validation, so it has no dissimilarity one coped with; it
+  # trained the models of the folds that held it, so it neighbours their
+  # points -- taken here as every fold's, the approximation the buffer already
+  # makes (a point a fold's buffer dropped still neighbours that fold). The
+  # first version gave it the first fold it trained in, which hid it from the
+  # validation points of that very fold. On a holdout that is fold 1, the
+  # validation rows' own, for every point: nothing was left across folds to
+  # measure, and dsm_predict() stopped on the SOC 0-30 cm trial's holdout
+  # design (2026-09-29). A k-fold plan partitions its pool, every point
+  # validates once, and nothing there changes.
+  fold_of <- rep(NA_integer_, nrow(points))
   for (j in seq_along(plan$folds)) fold_of[plan$folds[[j]]$validation] <- j
-  for (j in seq_along(plan$folds)) {
-    idx  <- plan$folds[[j]]$train
-    todo <- idx[fold_of[idx] == 0L]
-    if (length(todo)) fold_of[todo] <- j
-  }
   used <- sort(unique(unlist(lapply(plan$folds, function(f) c(f$train, f$validation)))))
-  used <- used[fold_of[used] > 0L]
   used <- used[is.finite(rowSums(train_mat[used, , drop = FALSE]))]
   if (length(used) < 2L) {
     stop("Fewer than 2 usable training rows after QC: nothing to measure a ",

@@ -19,14 +19,15 @@ aoa_reference(points, predictors, qc_table, scaling, plan)
 }
 \value{
 An \code{aoa_reference}: the DI reference, the AOA threshold, and each
-used point's fold and cross-validated DI.
+used point's fold and cross-validated DI (\code{NA} for a point never held out).
 }
 \description{
 The centre pixel of every point that trained or validated in the tuning plan,
 QC'd and scaled with the MODEL's scaling (stage 07's construction). Each
-point's fold is the one it was held out in -- or, for a point that never
-validated, the first it trained in -- so its cross-validated DI is the
+point's fold is the one it was held out in, so its cross-validated DI is the
 distance to the nearest point OUTSIDE its fold: the dissimilarity the model
 that predicted it during cross-validation actually faced. That is the DI a
-calibration residual comes with.
+calibration residual comes with. A point that only ever trained -- the
+training side of a holdout -- has fold \code{NA} and no cross-validated DI: it is
+in the reference, a neighbour to every fold, and out of the threshold.
 }

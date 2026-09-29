@@ -15,7 +15,8 @@
 #      constant leaves every DI unchanged
 #   4. a point one average-pairwise-distance away has DI near 1
 #   5. weights change distances in the direction they say they do
-#   6. the threshold comes from ACROSS folds, never within
+#   6. the threshold comes from ACROSS folds, never within -- and on a single
+#      split, from the rows it held out to the rows that only trained
 #   7. far points fall outside the AOA and near points inside
 #   8. degenerate input is refused, not answered
 #
@@ -158,6 +159,21 @@ ok["threshold_needs_more_than_one_fold"] <- inherits(
 ok["threshold_checks_the_fold_length"] <- inherits(
   tryCatch(aoa_threshold(ref_c, c(1L, 2L)), error = function(e) e), "error")
 
+# A SINGLE SPLIT: the rows it never held out have fold NA. They neighbour the
+# held-out rows and have no cross-validated DI of their own. Here the first
+# cluster is held out and the second only trained, so every held-out row's
+# nearest neighbour outside its fold is across the gap.
+fold_h <- ifelse(fold2 == 1L, 1L, NA_integer_)
+th_h   <- aoa_threshold(ref_c, fold_h)
+cv_h   <- attr(th_h, "cv_di")
+ok["a_single_split_has_a_threshold"] <- is.finite(as.numeric(th_h)) && as.numeric(th_h) > 0
+ok["rows_never_held_out_have_no_cv_di"] <- all(is.na(cv_h[fold2 == 2L]))
+ok["held_out_rows_measure_to_the_rows_that_trained"] <-
+  all(cv_h[fold2 == 1L] > 0.5 * 10 / ref_c$avg_dist)
+ok["nothing_held_out_is_refused"] <- inherits(
+  tryCatch(aoa_threshold(ref_c, rep(NA_integer_, nrow(clu))), error = function(e) e),
+  "error")
+
 # =============================================================================
 # 7. Inside and outside
 # =============================================================================
@@ -222,6 +238,27 @@ ok["the_cv_di_is_the_one_the_threshold_uses"] <-
   identical(aref$cv$cv_di, as.numeric(attr(aref$threshold, "cv_di")))
 ok["a_permuted_scaling_is_refused"] <- inherits(
   try(aoa_reference(pts_r, preds_r, qc_r, sc_r[4:1, ], plan_r), silent = TRUE), "try-error")
+ok["a_k_fold_plan_gives_every_point_a_fold"] <- !anyNA(aref$cv$fold)
+
+# A holdout: its training rows are in the reference and out of the threshold,
+# and each validation row's cross-validated DI is its distance to the nearest
+# training row. The SOC 0-30 cm trial's holdout design stopped here
+# (2026-09-29), when every point was labelled with the one fold.
+plan_h <- holdout(pts_r, validation_frac = 0.25, test_frac = 0.2, seed = 1L)
+aref_h <- aoa_reference(pts_r, preds_r, qc_r, sc_r, plan_h)
+f_h    <- plan_h$folds[[1]]
+val_h  <- match(pts_r$sample_id[f_h$validation], aref_h$cv$sample_id)
+trn_h  <- match(pts_r$sample_id[f_h$train], aref_h$cv$sample_id)
+X_h    <- aref_h$ref$x                          # unweighted: every weight is 1
+nn_h   <- vapply(val_h, function(i) {
+  sqrt(min(colSums((t(X_h[trn_h, , drop = FALSE]) - X_h[i, ])^2)))
+}, numeric(1))
+ok["a_holdout_keeps_its_training_rows_in_the_reference"] <-
+  aref_h$ref$n == length(f_h$train) + length(f_h$validation) && !anyNA(c(val_h, trn_h))
+ok["a_holdout_training_row_has_no_cv_di"] <-
+  all(is.na(aref_h$cv$fold[trn_h])) && all(is.na(aref_h$cv$cv_di[trn_h]))
+ok["a_holdout_validation_row_measures_to_the_training_rows"] <-
+  isTRUE(all.equal(aref_h$cv$cv_di[val_h], nn_h / aref_h$ref$avg_dist, tolerance = 1e-8))
 
 cat(sprintf("  avg pairwise distance    : %.3f (theory sqrt(2p) = %.3f)\n",
             ref$avg_dist, sqrt(2 * P)))

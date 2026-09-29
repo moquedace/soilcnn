@@ -10,13 +10,14 @@ aoa_threshold(ref, folds, k_iqr = 1.5)
 \item{ref}{From di_reference().}
 
 \item{folds}{Integer fold label per training row, in the same order as the
-matrix the reference was built from.}
+matrix the reference was built from; \code{NA} for a row never held out.}
 
 \item{k_iqr}{Outlier rule: threshold = Q75 + k_iqr * IQR. 1.5 is Tukey's
 fence and the value Meyer & Pebesma use.}
 }
 \value{
-The threshold, with the cross-validated DI attached as "cv_di".
+The threshold, with the cross-validated DI attached as "cv_di"
+(\code{NA} for the rows never held out).
 }
 \description{
 Derived from the CROSS-VALIDATED training data: for each training row, the
@@ -24,4 +25,9 @@ distance to the nearest training row in a DIFFERENT fold. That set is the
 dissimilarity the model actually coped with during cross-validation, so the
 outlier-removed maximum of it is the largest dissimilarity for which the
 reported error has been demonstrated.
+}
+\details{
+A row never held out -- the training side of a single split -- has fold
+\code{NA}: it is a neighbour to every fold, and has no cross-validated DI of its
+own, since no model predicted it.
 }
