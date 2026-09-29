@@ -3,7 +3,7 @@
 **Status 2026-09-28:** tier A and every tier B test have run, and C1 and C2 are
 done; C3 is open (there is still no region column). The results are in the
 tables below and in `status_and_roadmap.md`. The tests that came after this
-plan (P1-P5 for the package functions, T1-T7 for threads and memory) are in
+plan (P1-P5 for the package functions, T1-T8 for threads and memory) are in
 `status_and_roadmap.md` and `project_log.md`.
 
 ## What "the pipeline is closed" actually proved

@@ -6278,3 +6278,198 @@ Sugeri alinhá-los ao pacote.
   tópicos: `conformal-prediction`, `deep-learning`, `digital-soil-mapping`,
   `pedometrics`, `r-package`, `soil-organic-carbon`,
   `spatial-cross-validation` e `torch`.
+
+
+## 2026-09-28 — kNNDM e regiões no `dsm_final()`; um worker lê o store por vez; o laço de dobras sem vazar (T8)
+
+O usuário escolheu três itens da lista: "vamos fazer o item 1, 3 e 4. O
+pacote tem que funcionar para kNNDM se isso for selecionado".
+
+- **item 3:** o `dsm_final()` refaz uma rodada de tuning kNNDM (e por região);
+- **item 4:** os workers do `dsm_final()` leem o store um de cada vez;
+- **item 1:** medir e corrigir a memória do laço de dobras do `dsm_train()`.
+
+### Item 3: o refit de uma rodada kNNDM ou por região (d9bdc61)
+
+Até aqui o `refit_split()` sabia cortar blocos, linhas ao acaso e holdout.
+Num plano por região ele parava, pedindo o vetor de grupos. Num plano kNNDM o
+`dsm_final()` parava com "Unknown plan method". Quem escolhesse kNNDM no
+tuning não chegava ao modelo final.
+
+- **A validação do refit é cortada pelo critério do próprio plano.** No kNNDM,
+  isso é rodar o kNNDM de novo sobre as linhas fora do teste, contra os mesmos
+  pontos de predição, no mesmo sistema de coordenadas e com as mesmas opções
+  do CAST. Na região, são regiões inteiras, tiradas do `assignment` do plano.
+- **O plano passa a guardar o que o refit precisa** (`plan$knndm`: os pontos, o
+  CRS, a projeção, as opções). Fica ao lado do plano e não em `params`, que o
+  `print.fold_plan()` imprime: uma tabela de pontos não é um parâmetro.
+- **Um plano antigo, sem os pontos:** o refit pede `predpoints =` e diz por
+  quê. A rodada kNNDM do C1 é desse tipo, e o 04 entrega os pontos do B1,
+  contra os quais ela foi cortada. Pontos diferentes dos que o plano guarda
+  são recusados.
+- **Qual das k dobras valida.** Blocos e linhas ao acaso saem balanceados e
+  continuam usando a primeira. O kNNDM deixa uma dobra ter até metade dos
+  pontos (o `maxp` do CAST), e uma região tem o tamanho que tem. Nesses dois
+  casos valida a dobra de tamanho mais próximo de `validation_frac`, e o número
+  dela fica registrado (`refit_fold`).
+- Testes: `test_knndm.R` +9, `test_resample.R` +6, `test_final.R` +2 (a seção
+  9, kNNDM de ponta a ponta).
+
+### Item 4: um worker lê o store por vez (4e46683, 0856c98)
+
+Ler uma janela segura o array inteiro do R, em doubles, ao lado do cache que
+sai dele: 1,21 GB para a janela 15×15 do store de dev e ~13 GB no conjunto
+completo (~11×). Os workers começam juntos e leem juntos, então o orçamento de
+RAM precisava contar todos no pico. E ler lado a lado não é mais rápido: o
+store é lido inteiro e sem compressão do HDD dos rasters, onde um leitor
+sozinho fez ~150 MB/s e quinze juntos ~99 MB/s no total (27/09).
+
+- **Um lock** (um diretório em `.claims/`) põe as leituras em fila. O treino,
+  onde vão as horas, continua lado a lado, e o número de uma unidade nunca
+  dependeu de qual worker a treinou nem de quando (T2).
+- **Um worker que morre não trava os outros.** O lock guarda o id do
+  processo, e o lock de um processo que não existe mais é tomado. Um lock sem
+  id por um minuto também é tomado: o worker morreu entre criar o diretório e
+  escrever o id. Um worker que para com erro libera o lock na saída, porque o
+  `on.exit` é registrado antes de o id ser escrito.
+- **O orçamento** conta todos os workers treinando e um só no pico, o que lê.
+  Pela estimativa, no conjunto completo um worker treina com ~13 GB e chega a
+  ~21 GB enquanto lê. Um orçamento de 40 GB comportava 1 worker contado do
+  jeito antigo e comporta 2 agora. É estimativa: nenhum `dsm_final()` rodou
+  ainda no conjunto completo.
+- Testes: `test_final.R` seção 10, +6.
+
+### Item 1: o laço de dobras do `dsm_train()` (fb39dbd, bd9f4ab)
+
+**A pergunta.** O laço monta o cache de uma dobra, treina, solta o cache e
+monta o da próxima. O mimalloc não devolve nem reaproveita um bloco liberado de
+~250 MB ou mais (T6), e o papel de treino da janela 15×15 do dev tem 0,32 GB.
+Então cada dobra poderia deixar seus tensores maiores para trás. O T7 mediu o
+modelo final, que monta um cache só; o laço ninguém tinha medido.
+
+**A correção.**
+
+- **Um tensor por janela, do tamanho do store**, criado na primeira dobra
+  (`new_fold_buffer()`). Os papéis de cada dobra (treino, validação e teste)
+  são fatias consecutivas dele, escritas pelo `.rows_to_float(out = )` com os
+  mesmos valores.
+- Os três laços usam o buffer: `run_cnn_resample()`, `run_table_resample()` e
+  `score_test_grid()`.
+- `options(dsm.fold_buffer = FALSE)` volta ao jeito antigo, para comparar.
+- `options(dsm.train.trace_mem = TRUE)` grava a memória do laço, dobra por
+  dobra, em `logs/train_mem_trace.rds`.
+- São recusados papéis que somam mais linhas que o store, um buffer feito para
+  outro store e um destino com a forma errada.
+
+**O T8** roda o laço de verdade duas vezes, cada braço num processo R novo:
+
+- o plano de 3 dobras e a configuração implantada (cfg_003, janela 15, 181
+  canais);
+- uma seed por dobra, 3 épocas, 5 threads;
+- um braço com um tensor por papel, o outro com o buffer.
+
+| memória privada depois de cada dobra (GB) | dobra 1 | dobra 2 | dobra 3 |
+|---|---|---|---|
+| sem buffer (0856c98) | 7,32 | 7,46 | 8,20 |
+| com buffer (0856c98) | 7,51 | 7,54 | 7,54 |
+| sem buffer (bd9f4ab) | 7,38 | 7,39 | 8,18 |
+| com buffer (bd9f4ab) | 7,56 | 7,55 | 7,53 |
+
+- **Sem buffer, o laço vaza.** As dobras depois da primeira deixaram 0,13 e
+  0,74 GB para trás na primeira rodada, e 0,02 e 0,78 na segunda: ~0,4 GB por
+  dobra, mais que o papel de treino de 0,32 GB. Por proporção, seriam ~5 GB
+  por dobra no conjunto completo.
+- **Com buffer, fica plano:** 0,03 e 0,00 na primeira rodada, −0,02 e −0,01
+  na segunda.
+- **Os números não mudam.** A tabela de tuning saiu idêntica até o último
+  dígito nas duas rodadas (0,00e+00 em 38 colunas numéricas). O pico de
+  working set caiu de 7,1 para 6,6 GB, em apenas 3 dobras.
+
+**A primeira rodada do T8 falhou em t8_04 e t8_05, e o erro era da checagem.**
+
+- Elas mediam o `cache_added`, quanto a montagem do cache de uma dobra
+  acrescenta.
+- Sem buffer, os 0,59 GB de papéis novos da dobra 2 saíram quase todos de
+  memória que o processo já tinha (a montagem acrescentou 0,14 GB), e o
+  crescimento apareceu no **treino** da dobra 3 (+0,69 GB). Qual memória
+  serviu qual tensor é assunto do mimalloc, e o T8 não mede isso. O que o
+  processo segura depois de cada dobra, ele mede.
+- As checagens passaram a medir o que cada dobra deixa para a próxima:
+  - t8_04: sem buffer, em média, pelo menos metade do maior papel;
+  - t8_05: com buffer, menos de um quarto do que se deixa sem ele.
+- A t8_05 é julgada contra o defeito, e não contra um limite absoluto. O nível
+  deriva sozinho, sem vazamento nenhum (T7: ~0,09 GB por unidade), e isso é da
+  ordem do décimo do papel que a primeira versão exigia.
+- **Mudei o critério depois de ver os dados.** O motivo é o mecanismo, e quem
+  decidiu foi a segunda rodada, com dados novos: t8_04 0,399 ≥ 0,160; t8_05
+  −0,016 < 0,100. Nas duas rodadas o crescimento sem buffer caiu
+  principalmente na dobra 3; onde ele cai varia, e o que conta é a soma.
+
+**Em aberto, sem correção.** Na dobra 1, a montagem do cache acrescentou
+1,44–1,47 GB, para 0,58 GB de papéis ou um buffer de 0,61 GB, nos dois braços
+e nas duas rodadas.
+
+- A explicação provável, ainda não medida: as fatias temporárias de 16 MB do
+  ramo de tensor do `.rows_to_float()`. O R não vê o tamanho delas e só as
+  coleta no fim de cada janela. No ramo de array, o dos workers do
+  `dsm_final()`, a sobra medida foi menor, 0,29 GB (T7: 0,90 GB acrescentados
+  para 0,61 de cache), provavelmente porque ali as alocações do próprio R
+  disparam a coleta no meio do caminho.
+- É memória temporária. No conjunto completo seria cerca de uma janela
+  (~6,7 GB) durante a montagem.
+- Não mexi: memória não é a prioridade aqui, e coletar a cada fatia custa CPU.
+  Para testar, basta um `gc()` periódico nesse ramo, medido pelo T8.
+
+### O que a rodada de verificação achou (f5ea3be, 6b56900, bd9f4ab)
+
+A primeira rodada deu 29/31 e uma NOTE no check. As três causas eram minhas,
+em código que eu não podia rodar:
+
+- **`ps::pid_exists()` não existe:** é o nome do psutil, do Python. O R CMD
+  check pegou ("Objeto ausente ou não exportado"). Em execução, um worker
+  esperando o lock de outro teria parado com erro. Agora o lock pergunta se o
+  id está em `ps::ps_pids()`.
+- **O `torch` 0.17.0 não exporta `torch_all()`**, e o `test_fold_cache.R`
+  parou ali. O teste agora compara valores: o buffer nasce vazio, e as linhas
+  dele guardam exatamente os papéis da dobra B, em ordem, o que só escritas
+  pelas fatias podem ter posto lá.
+- **kNNDM em duas dobras falha dentro do CAST:** o `maxp` (0,5 por padrão)
+  precisa ficar estritamente acima de 1/k. A seção 9 do `test_final.R` usava
+  k = 2 e passou a usar k = 3. O `knndm_folds()` agora recusa o caso antes do
+  CAST, dizendo o k, o `maxp` e onde passá-lo; o padrão é lido do CAST, não
+  copiado. `test_knndm.R` +2: a recusa pelo nome, e duas dobras cortadas com
+  `maxp = 0.6`.
+- **As datas:** eu tinha escrito 2026-09-29 em 12 lugares, incluindo uma
+  mensagem de erro e o `dsm_final.Rd`, para trabalho commitado em 28/09.
+  Todas foram corrigidas.
+- **A lição, registrada:** o `ps` e o `torch` do R não são o psutil e o
+  PyTorch. Antes de chamar uma função que o código ainda não usa, confiro o
+  `NAMESPACE` instalado, que é texto puro. Foi assim que as duas se
+  resolveram.
+
+### Duas contagens erradas em mensagens de commit antigas
+
+- A f9f2f84 diz `tests/test_fold_cache.R (+6)`; foram 7, como a entrada do T7,
+  acima, já conta.
+- A d9bdc61 diz `test_knndm.R (+8)`; foram 9 (de 26 para 35).
+
+### A verificação (código bd9f4ab)
+
+- **`tests/run_all.R`: 31/31 em 10,3 min.** Entre eles:
+  - `test_fold_cache` 37/37, com as 8 asserções do buffer;
+  - `test_final` 49/49, com o refit kNNDM de ponta a ponta (plano de 3 dobras,
+    W = 52.270 m; o refit ficou com 53 de treino, 19 de validação e 24 de
+    teste) e com o lock, inclusive tomado de um processo morto;
+  - `test_knndm` 37/37;
+  - `test_resample_run` 58/58: duas dobras com e sem buffer, os mesmos 38
+    números, e as 7 marcas do rastreio.
+- **R CMD check: `Status: OK`.**
+- **T8: PASS 5/5.**
+
+### O que fica
+
+- Rodar o 04 sobre a rodada kNNDM do C1 exercitaria o refit kNNDM em escala
+  real. A suíte o prova num fixture de 96 pontos.
+- As unidades do tuning lado a lado, como o `dsm_final()` já faz (T2: 1,52×).
+  Com o laço de dobras plano, a memória de cada processo ficou previsível.
+- As fatias temporárias do ramo de tensor (acima).
