@@ -2,7 +2,7 @@
 #
 # WHAT THIS REPLACES.
 #
-# Until 2026-09-26 this was two example scripts, examples/soc_stock_0_5cm/01
+# Until 2026-09-26 this was two scripts of the SOC project, its stages 01
 # and 02, written for one dataset: the SOC stock GPKG, its column names, its
 # 181 rasters, its temperature sentinel. Everything a second user needed to
 # change sat in the middle of 1,300 lines of script. dsm_prepare() is those two

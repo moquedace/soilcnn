@@ -2,17 +2,17 @@
 #
 # WHAT THIS REPLACES.
 #
-# examples/soc_stock_0_5cm/04_final_model.R did this for one dataset, in 850
-# lines of script: choose the configuration a tuning run supports, refit it on
+# The SOC project's stage 04 did this for one dataset, in 850 lines of
+# script: choose the configuration a tuning run supports, refit it on
 # everything but the test set under ten seeds, and turn the ten into what the
 # map needs -- the ensemble median, a calibrated interval, a smearing factor
 # for the mean surface. dsm_final() is that stage with the dataset taken out,
-# and it writes the same files in the same places, so stage 05 reads a
+# and it writes the same files in the same places, so dsm_predict() reads a
 # dsm_final() run exactly as it reads a stage-04 one.
 #
 # HOW THE SEEDS ARE TRAINED, AND WHY THAT WAY.
 #
-# Two measurements decided it (docs/project_log.md, 2026-09-27):
+# Two measurements decided it (2026-09-27):
 #
 #   T1  one unit uses this CPU poorly: tripling its threads from 5 to 15 made
 #       the heavy configuration only 1.5x faster, and 30 threads (the
@@ -495,7 +495,7 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
     split = c(train = n_role("train"), validation = n_role("validation"),
               test = n_role("test")),
     target = summ$target %||% basename(dirname(run_dir)),
-    fitted_by = summ$fitted_by %||% "stage 04 (examples/.../04_final_model.R)",
+    fitted_by = summ$fitted_by %||% "stage 04, before dsm_final() existed",
     minutes = NA_real_),
     class = "dsm_final")
   safe_write_csv2(x$hyper, file.path(run_dir, "selected_hyperparameters.csv"))

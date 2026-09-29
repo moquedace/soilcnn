@@ -34,8 +34,8 @@
 # what is being compared is distance across the whole domain, and an equal-area
 # projection keeps the comparison honest at the scale the folds are cut at.
 # It was measured on the real coordinates rather than assumed
-# (_measure_knndm.R, a one-off removed on 2026-09-28; its numbers are in
-# docs/project_log.md).
+# (_measure_knndm.R, a one-off on the SOC project's points, since removed and
+# kept in git's history).
 #
 # WHY THERE IS NO BUFFER ARGUMENT, AND WHEN THAT IS WRONG.
 #

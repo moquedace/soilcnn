@@ -115,9 +115,9 @@ calc_metrics <- function(obs, pred) {
   # offset in the right circumstances; and CCC penalises bias but mixes it with
   # scatter, so a low CCC never says which one it is.
   #
-  # The consequence was measured on this project's own final model, by a script
-  # (06_graphical_evaluation.R, then called 06_avaliacao_grafica.R) that had not
-  # run in months and computed the bias itself:
+  # The consequence was measured on the SOC project's own final model, by its
+  # graphical evaluation, a script that had not run in months and computed the
+  # bias itself:
   #
   #   observed on test   mean 39.45   median 31.18
   #   predicted          mean 29.84   median 25.60

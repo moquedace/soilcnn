@@ -2,10 +2,11 @@
 #
 # WHY THIS EXISTS.
 #
-# Every capability check in examples/ (_b1, _b2, _b4, _b6, _c1) grew its own
-# copy of the same three things: a function that records one check as PASS or
-# FAIL with the number it measured, a list of the check ids the script PROMISES
-# to run, and a verdict that requires every promised id to be present AND true.
+# Every capability check of the SOC project (_b1, _b2, _b4, _b6, _c1) grew
+# its own copy of the same three things: a function that records one check as
+# PASS or FAIL with the number it measured, a list of the check ids the script
+# PROMISES to run, and a verdict that requires every promised id to be present
+# AND true.
 # Four copies, already different: one wraps the check in tryCatch, three do not;
 # one guards against a check that returns a vector, three would die on it.
 #

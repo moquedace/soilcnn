@@ -89,9 +89,8 @@ dsm_load <- function(patch_dir, points = NULL, type_table = NULL, windows = NULL
   read_if_path <- function(z, what) {
     if (is.character(z) && length(z) == 1L) {
       if (!file.exists(z)) {
-        stop(what, " not found: ", z, "\n  It is written by stage 01 ",
-             "(examples/soc_stock_0_5cm/01_prepare_dataset.R); run that first, ",
-             "or pass a data frame.", call. = FALSE)
+        stop(what, " not found: ", z, "\n  dsm_prepare() writes it with the ",
+             "store; run that first, or pass a data frame.", call. = FALSE)
       }
       safe_read_csv2(z)
     } else z

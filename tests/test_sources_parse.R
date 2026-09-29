@@ -20,7 +20,7 @@
 # file that cannot be read.
 #
 # Verified:
-#   1. every .R file under R/, examples/ and tests/ parses
+#   1. every .R file under R/, tests/ and tools/ parses
 #   2. the report names the file AND the line, so the fix is immediate
 #
 # Run: source("D:/.../tests/test_sources_parse.R")     (no packages needed)
@@ -51,12 +51,11 @@ root <- (function() {
 
 source(file.path(root, "tests", "helper.R"))
 
-# Every directory that holds code someone will source. examples/ is included
-# on purpose: a pipeline script that cannot parse wastes the same day as a
-# framework file that cannot, and it is the scripts that get edited most. The
-# reusable checks live one level down, in checks/.
-dirs <- c("R", "examples", file.path("examples", "soc_stock_0_5cm"),
-          file.path("examples", "soc_stock_0_5cm", "checks"), "tests")
+# Every directory of the repository that holds R code someone will source:
+# the package, its tests and the check runner. Until 2026-09-28 the SOC
+# project's scripts lived here too, under examples/, and were parsed with
+# them; since then the repository is the package alone.
+dirs <- c("R", "tests", "tools")
 
 files <- unlist(lapply(dirs, function(d) {
   p <- file.path(root, d)

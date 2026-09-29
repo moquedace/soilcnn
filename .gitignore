@@ -28,3 +28,13 @@ Thumbs.db
 
 # Python bytecode of tools/
 __pycache__/
+
+# The SOC project the package was developed on, and the author's own editing
+# helpers: kept beside the package on disk, not in its repository (2026-09-28)
+examples/
+utils/
+docs/project_log.md
+docs/status_and_roadmap.md
+docs/test_plan.md
+docs/archive/
+tools/*.py

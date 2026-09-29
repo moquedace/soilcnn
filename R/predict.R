@@ -8,8 +8,7 @@
 # the deployed SOC model (one 15 x 15 branch, 181 channels, 10 seeds) the
 # dev run measured 164 valid pixels per second; a global map at 250 m has
 # ~2.3 billion valid pixels. That is four months, and the disk was not the
-# limit -- 23 s of reading against 2,184 s of network (docs/project_log.md,
-# 2026-09-27).
+# limit -- 23 s of reading against 2,184 s of network (2026-09-27).
 #
 # FULLY CONVOLUTIONAL, AND EXACT WHERE IT CAN BE.
 #
@@ -213,7 +212,7 @@ fcn_predict_strip <- function(model, x_strip, centres, engine = c("fcn", "patch"
 # dsm_predict(): the map
 # ══════════════════════════════════════════════════════════════════════════════
 #
-# WHAT THIS REPLACED. Stage 05 of the SOC example -- 05_predict_spatial.R and
+# WHAT THIS REPLACED. Stage 05 of the SOC project -- 05_predict_spatial.R and
 # the scripts that ran it in parallel, merged its tiles and estimated its ETA,
 # all removed on 2026-09-28 and kept in git's history -- predicted one
 # dataset's map. dsm_predict() is that stage with the dataset taken out, and

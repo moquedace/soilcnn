@@ -324,8 +324,7 @@ spatial splits.
 > **Historical note:** the config ids in this section (cfg_004, cfg_012, and a later
 > cfg_014 with val CCC 0.657 under a 20 km prototype) belonged to tuning runs that no
 > longer exist; ids are reassigned on every run and none of them is the deployed model.
-> The discussion is kept for the qualitative conclusion (gate vs. concat). The current
-> run, its selected config and its numbers are in `archive/reference_performance.md`.
+> The discussion is kept for the qualitative conclusion (gate vs. concat).
 
 ---
 
@@ -494,8 +493,8 @@ Mean, SD, MAD, min, and max are also written as separate layers for users who ne
 
 **The median is not the mean of the soil.** A model trained on log1p and
 back-transformed estimates the conditional *median* of the stock, which sits
-below its conditional *mean*. On this project's test set the gap was -24.4%
-(`06_graphical_evaluation.R` found it). So `dsm_predict()` writes the smeared
+below its conditional *mean*. On the SOC project's test set the gap was -24.4%
+(its graphical evaluation found it). So `dsm_predict()` writes the smeared
 mean beside the median, using Duan's estimator calibrated on the tuning run's
 cross-validated residuals (`R/smearing.R`). The median is the right map of a
 typical value; the smeared mean is the one that may be summed over an area.
@@ -654,4 +653,4 @@ and each is written where the code that implements it lives:
 | the smeared mean beside the median | `R/smearing.R` (and section 11 above) |
 | the dissimilarity index and the area of applicability | `R/aoa.R` |
 | the map: the network run fully convolutionally where that is exact | `R/predict.R`; `architecture.md` |
-| the package: one way to load, and workers that load what their session loaded | `project_log.md`, 2026-09-28 |
+| the package: one way to load, and workers that load what their session loaded | `R/utils.R` (`.pkg_loader()`), `R/zzz.R`; README, "Loading it" |

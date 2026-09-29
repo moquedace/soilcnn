@@ -52,10 +52,9 @@ Soil profiles (GPKG)               Rasters (a folder of aligned TIFs)
                     world at 250 m.
 ```
 
-The worked example runs each step as one script — `01_prepare_dataset.R`,
-`03_run_tuning.R` (and `03b_run_baselines.R`), `04_final_model.R`,
-`05_dsm_predict_global.R` — on soil organic carbon stock; see the
-[applied example](#applied-example).
+The package was developed on a global model of soil organic carbon stock;
+the numbers quoted below come from it (see
+[where it was developed](#where-it-was-developed)).
 
 ---
 
@@ -69,15 +68,14 @@ torch::install_torch()          # once: the C++ backend the torch package needs
 
 `build_vignettes = TRUE` also builds the tour (`vignette("soilcnn")`); it needs
 knitr, rmarkdown and pandoc. To work on the source tree instead, clone the
-repository and load it with `pkgload::load_all("<clone>")` — which is what every
-script in `examples/` does.
+repository and load it with `pkgload::load_all("<clone>")`.
 
 ---
 
 ## Quickstart
 
 The whole chain, one call per step. The vignette ([`vignettes/soilcnn.Rmd`](vignettes/soilcnn.Rmd))
-walks it with the reasons, and [`examples/quickstart.R`](examples/quickstart.R) runs it on the SOC data.
+walks it with the reasons.
 
 ```r
 library(soilcnn)                # or pkgload::load_all(".") on the source tree
@@ -229,7 +227,7 @@ Each soil profile is represented by **two spatial patches** extracted from a sta
 | Small  | 3 × 3 cells | Local topography, land cover, proximity effects |
 | Large  | 9 × 9 or 15 × 15 cells | Landscape position, parent material, local climate |
 
-A window's physical extent is `window_size × raster resolution`, so pixel sizes are chosen per resolution. At the example's 250 m they span ~0.75 km (3 × 3) to ~3.75 km (15 × 15).
+A window's physical extent is `window_size × raster resolution`, so pixel sizes are chosen per resolution. At 250 m they span ~0.75 km (3 × 3) to ~3.75 km (15 × 15).
 
 Patches are stored **raw** and scaled when a fold's tensors are built — z-score for continuous predictors, /100 for proportions, identity for dummies — from the training rows **of that fold**. This equalises gradient flow across channels of very different magnitude (elevation in thousands against vegetation indices in 0–1), and it is what lets one patch store serve any number of folds: the alternative is one re-extraction per fold.
 
@@ -340,7 +338,7 @@ the tuning run's **cross-validated** residuals — every point predicted once, a
 validation, somewhere — and checks coverage on the **test** rows, which neither
 trained nor calibrated anything: a coverage measured on the points that
 calibrated it comes out right by arithmetic, not by evidence. The refit's own
-validation split is only the fallback, and in the worked example it was the
+validation split is only the fallback, and in the SOC model it was the
 wrong set: one fold from one region, it gave a 90% interval that covered 83.6%
 of the test set, against 87.8% from the cross-validated residuals.
 
@@ -389,7 +387,7 @@ bias for an unknown one.
 
 `print.smearing_cal()` also reports S by quintile of the prediction, because
 Duan's derivation assumes the residual is independent of the prediction and that
-is checkable — in the worked example it runs 1.80 at the low end to 1.15 at the
+is checkable — in the SOC model it runs 1.80 at the low end to 1.15 at the
 high end, which the print warns about rather than silently averaging away.
 
 ---
@@ -462,7 +460,7 @@ A seed's numbers depend on its seed **and on its thread count**, and on nothing 
 
 Spatial prediction aggregates all seed models per pixel. The **median** is the recommended headline map: it is invariant to the monotone `expm1` back-transform (`median(expm1(z)) = expm1(median(z))`), robust to divergent seeds, and consistent with what SmoothL1 learns (a conditional median).
 
-SD and MAD are written too — but **they are not a prediction interval**, and the framework says so rather than letting a reader assume otherwise. They measure how much the answer moves when the initialisation moves: a property of the optimiser, not of the soil. In this project's numbers the seed spread is 0.038 CCC while the MAE is ~17 t/ha on a median stock of 29.3. A map drawn from that spread would promise an order of magnitude more certainty than it has, and a map that understates is worse than no map, because somebody acts on it.
+SD and MAD are written too — but **they are not a prediction interval**, and the framework says so rather than letting a reader assume otherwise. They measure how much the answer moves when the initialisation moves: a property of the optimiser, not of the soil. In the SOC model's numbers the seed spread is 0.038 CCC while the MAE is ~17 t/ha on a median stock of 29.3. A map drawn from that spread would promise an order of magnitude more certainty than it has, and a map that understates is worse than no map, because somebody acts on it.
 
 What the interval bands come from instead is [calibrated uncertainty](#calibrated-uncertainty-and-a-check-that-it-is-calibrated).
 
@@ -504,11 +502,10 @@ Beside `R/`:
 
 | Where | What |
 |------|---------|
-| [`DESCRIPTION`](DESCRIPTION) · [`NAMESPACE`](NAMESPACE) | The package, `soilcnn`: what it imports, and the 64 functions it exports — the `dsm_*()` front end, the resampling specs and fold constructors, the model registry, and the tools applied to results (AOA, conformal intervals, smearing, metrics, noise floor, occlusion). The runners underneath `dsm_train()`, the patch store's plumbing and the scripts' helpers are internal (`soilcnn:::`); the scripts load the source tree, where every function is visible. NAMESPACE is what roxygen2 writes from the `@export` tags, and `tests/test_package_metadata.R` checks that it still is |
+| [`DESCRIPTION`](DESCRIPTION) · [`NAMESPACE`](NAMESPACE) | The package, `soilcnn`: what it imports, and the 64 functions it exports — the `dsm_*()` front end, the resampling specs and fold constructors, the model registry, and the tools applied to results (AOA, conformal intervals, smearing, metrics, noise floor, occlusion). The runners underneath `dsm_train()`, the patch store's plumbing and the helpers are internal (`soilcnn:::`); `pkgload::load_all()` on the source tree makes every function visible. NAMESPACE is what roxygen2 writes from the `@export` tags, and `tests/test_package_metadata.R` checks that it still is |
 | [`tests/run_all.R`](tests/run_all.R) | 31 files: 25 fast, then 6 slow ones that train, map, prepare a store, and build and install the package. The package is loaded once for the suite. Every accumulator is named and `.report()` refuses an empty, unnamed, NA-bearing or non-logical one. `test_sources_parse.R` runs first and is the authority on syntax. |
-| [`tools/`](tools/) | `check_package.R` runs `R CMD check` on a staged copy of the package's own files. Four Python checks need no R: `r_lint.py` (a top-level `else`, the native pipe — the mistakes that have cost a round trip here; has a `--selftest`), `r_calls.py` (every project function a script calls exists, `do.call` targets included; named arguments match formals), `r_skeleton.py` (an edit touched only comments and strings), `r_balance.py` (brackets balanced, with strings and comments understood). Run them after any edit made without an R session. |
-| [`utils/install_load_pkg.R`](utils/install_load_pkg.R) | Installs what is missing, then **stops** if a package will not load |
-| [`docs/`](docs/) | `architecture.md`, `design_decisions.md`, `tuning_guide.md`, `test_plan.md`, `status_and_roadmap.md`, and `project_log.md` — every change with its reason, in Portuguese. `docs/archive/` holds the records that are no longer current |
+| [`tools/check_package.R`](tools/check_package.R) | Runs `R CMD check` on a staged copy of the package's own files |
+| [`docs/`](docs/) | [`architecture.md`](docs/architecture.md) (the network), [`design_decisions.md`](docs/design_decisions.md) (the reason for each choice), [`tuning_guide.md`](docs/tuning_guide.md) (the search space) |
 
 ---
 
@@ -536,22 +533,8 @@ faster exact nearest neighbour for the AOA), `randomForest` or `ranger` (the
 RF baseline; ranger is far faster), `caret` (its model library), `pkgload` (the
 source tree, loaded as it stands).
 
-The worked example (`examples/`) adds:
-
-```r
-install.packages(c(
-  "sf", "ggplot2", "stringr", "tidyr",      # 01 and 06
-  "randomForest", "ranger", "caret",        # the baselines (03b); ranger optional
-  "processx"                                # checks/_b6, which kills a run to resume it
-))
-```
-
-and the test suite `DescTools`, which `tests/test_metrics_reporting.R` holds
-`ccc()` against.
-
-Every example script begins with `install_load_pkg(...)`, which installs what
-is missing and then **stops** if a package will not load — it used to say
-"completed" either way.
+The test suite also needs `DescTools`, which `tests/test_metrics_reporting.R`
+holds `ccc()` against.
 
 Everything here has run on a CPU. `dsm_train()` takes a torch device and can
 use a CUDA GPU; `dsm_final()` and `dsm_predict()` train and map in worker
@@ -561,15 +544,14 @@ processes on the CPU, several side by side, each with a fixed number of threads
 ### Loading it
 
 ```r
-pkgload::load_all("<project root>")         # the source tree, as it stands -- what the scripts do
+pkgload::load_all("<clone>")                # the source tree, as it stands
 library(soilcnn)                            # an installed copy
 ```
 
-To install a copy from a clone, build the tarball first: `R CMD INSTALL` of the
-directory itself copies `data/` into the library, subdirectories and all.
+To install a copy from a clone, build the tarball first:
 
 ```r
-tgz <- pkgbuild::build("<project root>", dest_path = tempdir())
+tgz <- pkgbuild::build("<clone>", dest_path = tempdir())
 install.packages(tgz, repos = NULL, type = "source")
 vignette("soilcnn")                         # the tour, built into the copy
 ```
@@ -577,13 +559,10 @@ vignette("soilcnn")                         # the tour, built into the copy
 Building the vignette needs knitr, rmarkdown and pandoc (RStudio ships
 pandoc). Without them, `vignettes = FALSE` builds the package without it.
 
-In a project that has run for a while, the build spends minutes before it
-starts: `R CMD build` lists every file under the directory, `outputs/` and
-`data/` included, before `.Rbuildignore` sets them aside (4m40s here). A copy
-of the package's own files builds in seconds and gives the same tarball: copy
-`DESCRIPTION`, `NAMESPACE`, `LICENSE`, `.Rbuildignore`, `R/`, `man/` and
-`vignettes/` into a folder named after the package, and build from that folder.
-`tests/test_package_install.R` and `tools/check_package.R` do exactly this.
+`tests/test_package_install.R` builds, installs and loads a copy in a fresh
+process; `tools/check_package.R` runs `R CMD check` on one. Both build from a
+staged copy of the package's own files, so whatever else sits in a working
+directory is never read.
 
 `dsm_final()` and `dsm_predict()` start worker processes, and each loads the
 framework the way its session did — the source tree, or that same installed
@@ -598,66 +577,13 @@ refuses to attach while one is there, and says how to remove them:
 
 ---
 
-## Applied example
+## Where it was developed
 
-The [`examples/soc_stock_0_5cm/`](examples/soc_stock_0_5cm/) directory contains a complete end-to-end run predicting **soil organic carbon stock (0–5 cm, ton/ha)** from 181 global raster predictors and WOSIS profiles: 4,154 rows extracted, 3,766 surviving QC, 3,728 reaching the patch store.
-
-| Script | What it does |
-|--------|-------------|
-| [`01_prepare_dataset.R`](examples/soc_stock_0_5cm/01_prepare_dataset.R) | The SOC settings, and one call to `dsm_prepare()`: GPKG + rasters → QC · predictor types · a patch store at 3×3, 9×9, 15×15, stored RAW, with its recipe. Decides no roles, and owns no scaling |
-| [`03_run_tuning.R`](examples/soc_stock_0_5cm/03_run_tuning.R) | Choose a fold plan (block folds, or kNNDM) · generate the grid · `dsm_train()` over every (config, fold, seed) · report mean ± sd against the seed noise floor |
-| [`03b_run_baselines.R`](examples/soc_stock_0_5cm/03b_run_baselines.R) | rf on the centre pixel, rf on the centre plus window means, and an mlp — under the SAME folds and seeds as 03 |
-| [`04_final_model.R`](examples/soc_stock_0_5cm/04_final_model.R) | The SOC settings, and one call to `dsm_final()`: the config the tuning run supports (one_se), refitted under ten seeds side by side on everything but the test set, by the tuning plan's own criterion · the scaling next to the weights · the ensemble, the conformal interval, the mean-surface factor · the declaration of every hyperparameter · resumable, and only with the settings a run started with |
-| [`04b_final_report.R`](examples/soc_stock_0_5cm/04b_final_report.R) | The same declaration for the deployed model, which was fitted before `dsm_final()` existed (`dsm_report_final()`) |
-| [`05_dsm_predict_global.R`](examples/soc_stock_0_5cm/05_dsm_predict_global.R) | The global 250 m map in one `dsm_predict()` call: every band for both calibration sources (block, kNNDM), 249 units of 256 rows, resumable, the probe first; ~33 h at 2 workers × 7 threads |
-| [`06_graphical_evaluation.R`](examples/soc_stock_0_5cm/06_graphical_evaluation.R) | Graphical evaluation of the final model · it was this script, computing the bias itself, that first exposed the −24.4% back-transform defect |
-| [`99_check_pipeline.R`](examples/soc_stock_0_5cm/99_check_pipeline.R) | Numeric consistency across every artefact the pipeline wrote, against a saved snapshot |
-| [`99b_check_pipeline_visual.R`](examples/soc_stock_0_5cm/99b_check_pipeline_visual.R) | The same, but showing the actual thing on screen: where the profiles are, whether tuning improved anything, what the patches look like |
-| [`_b1_knndm_folds.R`](examples/soc_stock_0_5cm/_b1_knndm_folds.R) | The prediction sample kNNDM folds are cut against — 03's kNNDM design reads it — and the measurement that block folds validate a job 52× easier than the map's |
-| [`_u2_knndm_residuals.R`](examples/soc_stock_0_5cm/_u2_knndm_residuals.R) | The deployed configuration under kNNDM folds: the residuals the global map's kNNDM bands are calibrated on |
-| [`checks/`](examples/soc_stock_0_5cm/checks/) | Checks worth running again after a change to what they check: `_p1` `dsm_prepare()` · `_p3` `dsm_final()`'s assembly · `_p4` `dsm_predict()` against stage 05's map · `_p5` a region at 250 m · `_b2` two configs in 04 · `_b6` resume after a killed process · `_t7` a training worker's memory · `_c1` one grid under two validation designs |
-
-### Running it
-
-Nothing needs editing first. Every script finds the project for itself — it
-asks `Rscript --file`, then the `source()` frame, then the working directory,
-and climbs to the directory holding `R/cnn_architecture.R` — and loads the
-package from there with `pkgload::load_all()`, so a clone anywhere runs as it
-is, with no network access needed to start. The one thing a new user
-must set is `predictor_raster_dir` in `01_prepare_dataset.R`, which is
-where *their* rasters are.
-
-Every script is run with `source("<full path>")` from an R console, in this
-order, with `tests/run_all.R` before anything expensive:
-
-```
-01 → 99 → 03 → 03b → 99 → 04 → 05_dsm_predict_global → 06 → 99 / 99b
-```
-
-`_b1` comes before a kNNDM tuning (03 with `soc_tuning_design = "knndm"`), and
-`_u2` before the global map's kNNDM bands.
-
-Each script clears the workspace, so a parameter cannot be passed as a
-variable; it is passed as an **environment variable**, read through
-`env_chr()` / `env_int()` / `env_csv()`, which refuse a value that does not
-parse instead of turning it into `NA`:
-
-| Variable | Read by | Meaning |
-|---|---|---|
-| `soc_torch_threads` | 03, 03b | torch's threads; unset, the physical cores minus one |
-| `soc_tuning_design` | 03 | `spatial` (block folds, default) or `knndm` — needs `_b1`'s `predpoints.csv` |
-| `soc_tune_length`, `soc_tuning_n_seeds`, `soc_tuning_run_id` | 03 | grid size, seeds per unit, run directory name |
-| `soc_final_tuning_run_id`, `soc_final_config_ids`, `soc_final_seeds` | 04 | which tuning run to refit from, which config(s), which seeds |
-| `soc_final_run_id` | 04 | a final run to resume, held to the settings it started with |
-| `soc_global_run_id`, `soc_global_n_cores`, `soc_global_threads`, `soc_global_min_free_gb` | 05 | the map's run directory, its cores and threads per worker, the free disk it refuses to start below |
-| `soc_predict_raster_dir` | `_b1`, `checks/_p4` | another raster directory to predict over (the 20 km wiring grid) |
-| `soc_b6_phase`, `soc_b6_interrupt` | `checks/_b6` | `prepare` or `verify`; how the run is interrupted |
-| `soc_p5_extent`, `soc_p5_n_cores`, `soc_p5_threads` | `checks/_p5` | the region to map, and its cores and threads |
-| `soc_t7_epochs` | `checks/_t7` | epochs per seed |
-
-`Sys.setenv(soc_tune_length = "8")` before the `source()`; `Sys.unsetenv()`
-after, or the next run inherits it. Every override announces itself with
-"(from the environment)" when it is read.
+On a global model of soil organic carbon stock, 0–5 cm (t/ha): WoSIS profiles
+and 181 raster predictors at 250 m, with 4,154 rows extracted, 3,766 surviving
+QC and 3,728 reaching the patch store. The numbers quoted above come from it.
+That project's scripts, data and records are kept apart from this repository,
+which holds the package alone.
 
 ---
 
