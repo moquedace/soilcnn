@@ -261,7 +261,7 @@ if (identical(tuning_run_id, "latest")) {
 tuning_dir <- file.path(output_tuning_dir, tuning_run_id)
 
 # A kNNDM TUNING RUN cuts the refit's validation against its prediction points
-# (refit_split()), and its plan keeps them from 2026-09-29 on. C1's kNNDM run
+# (refit_split()), and its plan keeps them from 2026-09-28 on. C1's kNNDM run
 # is older: it was cut against B1's points, which are handed over here.
 tuning_plan <- readRDS(file.path(tuning_dir, "fold_plan.rds"))
 refit_predpoints <- NULL

@@ -1118,7 +1118,7 @@ unlink(plan_dir, recursive = TRUE)
 # dsm_final() stops the final fit on a validation set cut the way the tuning
 # folds were. The test set is the plan's, verbatim; the rest is split once.
 # Blocks and random rows take the first of k = 1/validation_frac folds, as
-# they always did. Regions -- which could not be refitted before 2026-09-29 --
+# they always did. Regions -- which could not be refitted before 2026-09-28 --
 # take whole regions: the fold closest to the share asked for.
 refit_is_sound <- function(rf, plan) {
   f    <- rf$folds[[1]]

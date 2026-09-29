@@ -1030,7 +1030,7 @@ refit_split <- function(plan, meta, validation_frac = 0.15, predpoints = NULL) {
   pp <- predpoints %||% kn$predpoints
   if (is.null(pp) && is.null(args$modeldomain)) {
     stop("This kNNDM plan does not carry its prediction points: it was made ",
-         "before knndm_folds() kept them with the plan (2026-09-29). The refit's ",
+         "before knndm_folds() kept them with the plan (2026-09-28). The refit's ",
          "validation is cut against them, as the tuning folds were -- pass the ",
          "same points as predpoints = <a data frame with x and y>.", call. = FALSE)
   }

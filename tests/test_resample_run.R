@@ -436,7 +436,7 @@ cat("  2 folds x 2 configs : ", nrow(cmp2), " units | channel 1 mu: ",
 # ~250 MB or more (T6), and a fold loop that made each fold's roles anew
 # would leave its largest tensors behind. The run above went through the
 # buffer; this one builds each fold's roles as tensors of their own, as
-# before 2026-09-29, and records the fold loop's memory. Same plan, grid,
+# before 2026-09-28, and records the fold loop's memory. Same plan, grid,
 # seeds and threads: every number in the table must be the same, exactly --
 # only the runtimes differ.
 old_opt <- options(dsm.fold_buffer = FALSE, dsm.train.trace_mem = TRUE)

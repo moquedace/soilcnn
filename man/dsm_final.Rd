@@ -48,7 +48,7 @@ carved by the tuning plan's own criterion (refit_split()): blocks, random
 rows, whole regions, or kNNDM against the same prediction points.}
 
 \item{predpoints}{For a kNNDM tuning run made before its plan kept its
-prediction points (2026-09-29): those points, a data frame with x and y.
+prediction points (2026-09-28): those points, a data frame with x and y.
 NULL takes the plan's.}
 
 \item{training}{Overrides of the refit schedule (.final_training_defaults)
