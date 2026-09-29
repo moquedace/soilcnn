@@ -13,7 +13,7 @@
 # of two torch helpers -- clone_state_dict() and set_optimizer_lr() -- that
 # were used on every training path and asserted nowhere. And since T7, of the
 # cache being the same tensors without the copies it used to leave behind --
-# and since 2026-09-29, through one buffer for every fold of a loop.
+# and since 2026-09-28, through one buffer for every fold of a loop.
 #
 # Run: source("D:/usuario_armazenamento/cassio/R/deep_learning_caret/tests/test_fold_cache.R")
 
@@ -280,17 +280,20 @@ ok["from_the_files_through_a_buffer_too"] <-
                                                window_sizes = win, buffer = buf_files)),
              plain(fold_a))
 
-# The roles ARE the buffer: a role written to shows in it, where its slice
-# is and nowhere else. Which is also why a fold's cache is dead once the next
-# fold is built, and the loops drop it first.
-n_tr <- length(fold_b$train)
-s_va <- n_tr + 1L
-e_va <- n_tr + length(fold_b$validation)
-b_buf$cache$validation$w03$fill_(-1)
+# The roles ARE the buffer. It was made empty (torch_empty()), and its rows
+# hold, in order, exactly fold B's train, validation and test roles -- which
+# only writes through slices of it can have put there: had a role been a copy,
+# the rows would still hold whatever the allocator left. Which is also why a
+# fold's cache is dead once the next fold is built, and the loops drop it
+# first. (Values only: torch 0.17.0 exports no torch_all().)
+role_end   <- cumsum(lengths(fold_b))
+role_start <- role_end - lengths(fold_b) + 1L
 ok["a_folds_roles_are_consecutive_slices_of_the_buffer"] <-
-  as.logical(torch::torch_all(buf$w03[s_va:e_va, , , ] == -1)$item()) &&
-  !as.logical(torch::torch_any(buf$w03[1:n_tr, , , ] == -1)$item()) &&
-  b_buf$cache$train$w03$is_contiguous()
+  all(vapply(names(fold_b), function(r) {
+    s <- unname(role_start[r])
+    e <- unname(role_end[r])
+    torch::torch_equal(buf$w03[s:e, , , ], b_buf$cache[[r]]$w03)
+  }, logical(1)))
 
 r <- try(suppressMessages(build_fold_cache(store, points, type_table,
                                            list(train = 1:30, validation = 20:40),

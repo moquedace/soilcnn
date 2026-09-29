@@ -107,7 +107,7 @@
 #'   carved by the tuning plan's own criterion (refit_split()): blocks, random
 #'   rows, whole regions, or kNNDM against the same prediction points.
 #' @param predpoints For a kNNDM tuning run made before its plan kept its
-#'   prediction points (2026-09-29): those points, a data frame with x and y.
+#'   prediction points (2026-09-28): those points, a data frame with x and y.
 #'   NULL takes the plan's.
 #' @param training   Overrides of the refit schedule (.final_training_defaults)
 #'   -- any argument of train_one_cnn().
@@ -714,7 +714,7 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
 # HOW MANY WORKERS THE RAM HOLDS. The workers read the store one at a time
 # (.final_one_reader()), so at any moment at most one is at its peak and the
 # rest train, or wait with nothing read: all of them at `steady` and one at
-# `peak`. Until 2026-09-29 every worker was counted at its peak, because every
+# `peak`. Until 2026-09-28 every worker was counted at its peak, because every
 # worker read at once. On the full data set (windows 3 and 15), by this
 # estimate a worker trains at ~13 GB and peaks at ~21 while it reads: a 40 GB
 # budget held one worker counted that way, and holds two counted this way.
@@ -750,10 +750,12 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
     if (dir.create(lock, showWarnings = FALSE)) break
     holder <- suppressWarnings(as.integer(
       tryCatch(readLines(pid_file, warn = FALSE), error = function(e) character(0))[1]))
+    # ps has no pid_exists() -- that is psutil's -- and the first version
+    # called it, which R CMD check caught (2026-09-28): the ids there are.
     gone <- if (is.na(holder)) {
       isTRUE(difftime(Sys.time(), file.mtime(lock), units = "secs") > no_id_s)
     } else {
-      !ps::pid_exists(holder)
+      !(holder %in% ps::ps_pids())
     }
     if (gone) {
       unlink(lock, recursive = TRUE)

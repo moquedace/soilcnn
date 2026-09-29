@@ -338,13 +338,15 @@ ok["a_config_with_other_hyperparameters_gets_none"] <-
 #
 # The final fit's validation is cut by the tuning plan's own criterion, and for
 # kNNDM that is kNNDM again, against the prediction points the plan kept. Until
-# 2026-09-29 dsm_final() stopped on a kNNDM run ("Unknown plan method").
-# Guarded as tests/test_knndm.R guards it: CAST and sf are optional.
+# 2026-09-28 dsm_final() stopped on a kNNDM run ("Unknown plan method").
+# Guarded as tests/test_knndm.R guards it: CAST and sf are optional. Three
+# folds, not two: CAST's maxp (0.5 by default) must be above 1/k, and the
+# first version of this section, with k = 2, stopped inside CAST.
 if (requireNamespace("CAST", quietly = TRUE) && requireNamespace("sf", quietly = TRUE)) {
   pp <- tibble::tibble(x = stats::runif(300, -1, 8), y = stats::runif(300, -1, 4))
   fit_k <- suppressMessages(dsm_train(
     data, model = "cnn",
-    resampling = knndm_cv(k = 2L, predpoints = pp, hold_out_test = TRUE, seed = 5L),
+    resampling = knndm_cv(k = 3L, predpoints = pp, hold_out_test = TRUE, seed = 5L),
     tune_grid = grid[1, , drop = FALSE], n_seeds = 1L, output_dir = out_root,
     run_id = "tuning_knndm", device = setup_torch_device(n_threads = 1L, use_cuda = FALSE),
     n_epochs = 3L, patience = 3L, print_every = 100L, augment = FALSE, verbose = FALSE))

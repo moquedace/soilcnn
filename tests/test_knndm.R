@@ -170,6 +170,18 @@ if (has_cast && has_sf) {
     share > 0.10 && share < 0.45
   }
 
+  # TWO FOLDS NEED A maxp ABOVE ONE HALF. CAST's default is 0.5 and its bound
+  # is strict, so kNNDM in two folds stopped inside CAST with a message that
+  # named neither k nor where maxp goes. It is refused before CAST, by name --
+  # and with a maxp in range, two folds are cut.
+  e_k2 <- tryCatch(knndm_folds(meta, k = 2L, predpoints = predpts),
+                   error = function(e) conditionMessage(e))
+  ok["two_folds_under_the_default_maxp_are_refused_by_name"] <-
+    grepl("maxp", e_k2, fixed = TRUE) && grepl("k >= 3", e_k2, fixed = TRUE)
+  plan_k2 <- knndm_folds(meta, k = 2L, predpoints = predpts, maxp = 0.6, seed = 7L)
+  ok["two_folds_are_cut_with_a_maxp_above_a_half"] <-
+    plan_k2$n_folds == 2L && is.data.frame(check_fold_plan(plan_k2, meta = meta))
+
   # The front end must route to this constructor and not to a neighbour. The
   # switch() in resolve_resampling() selects by name, and a spec whose kind is
   # not a string once selected by POSITION instead -- a spatial request that

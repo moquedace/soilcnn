@@ -128,6 +128,22 @@ knndm_folds <- function(meta, k = 5L, predpoints = NULL, test_ids = NULL,
 
   .need_knndm()
 
+  # CAST's maxp -- the largest share of the points one fold may take -- must
+  # lie strictly between 1/k and 1, and its default is 0.5: so k = 2 with the
+  # default stops inside CAST ("maxp must be strictly between 1/k and 1"),
+  # with neither the fold count nor where maxp is passed in the message --
+  # which is how tests/test_final.R's first kNNDM section stopped (2026-09-28).
+  # Said here, with both. The default is read from CAST, not copied; the test
+  # split's k + 1 folds are within the same bound whenever k's are.
+  maxp <- dots$maxp %||% formals(CAST::knndm)$maxp
+  if (is.numeric(maxp) && length(maxp) == 1L && !(maxp > 1 / k && maxp < 1)) {
+    stop("kNNDM in ", k, " folds needs CAST's maxp -- the largest share of the points ",
+         "one fold may take -- strictly between 1/k = ", signif(1 / k, 3), " and 1, and it is ",
+         maxp, if (is.null(dots$maxp)) " (CAST's default)" else "", ".\n  ",
+         if (maxp < 1) paste0("Use k >= ", floor(1 / maxp) + 1L, ", or pass ") else "Pass ",
+         "a maxp in that range: knndm_cv(k = ", k, ", maxp = ...).", call. = FALSE)
+  }
+
   n  <- nrow(meta)
   xy <- project_xy(meta$x, meta$y, crs = crs, to = project_to)
   out_crs <- if (is.null(project_to)) crs else project_to
@@ -228,7 +244,7 @@ knndm_folds <- function(meta, k = 5L, predpoints = NULL, test_ids = NULL,
   # (refit_split()), and kNNDM's criterion IS the prediction points, in the
   # frame their distances were measured in. Kept beside the plan rather than
   # in params, which print.fold_plan() prints: a table of points is not a
-  # parameter. A plan made before this (2026-09-29) has none, and a refit of
+  # parameter. A plan made before this (2026-09-28) has none, and a refit of
   # it must be given the points.
   plan$knndm <- list(predpoints = predpoints, crs = crs, project_to = project_to,
                      args = dots)
