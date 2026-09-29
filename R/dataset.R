@@ -564,10 +564,10 @@ build_fold_cache <- function(store, points, type_table, index,
     # train from row 1. A fold loop that makes each fold's roles anew would
     # leave its largest tensors behind, fold after fold, because mimalloc
     # keeps every freed block of ~250 MB or more (T6) -- and a training role
-    # is that large from the dev store's 15x15 window up (T8 measures the
-    # loop). The roles are disjoint (checked above), so they fit; a slice of
-    # a contiguous tensor along its first dimension is itself contiguous, and
-    # the values written are the same values.
+    # is that large from the dev store's 15x15 window up (T8 measured the
+    # loop: run_cnn_resample()). The roles are disjoint (checked above), so
+    # they fit; a slice of a contiguous tensor along its first dimension is
+    # itself contiguous, and the values written are the same values.
     if (!is.null(buffer)) {
       want <- c(nrow(store$meta), store$n_channels, w, w)
       if (is.null(buffer[[key]])) {
@@ -618,7 +618,7 @@ build_fold_cache <- function(store, points, type_table, index,
 # in it on the first fold are there for the next. One per store; a fold loop
 # makes one before its first fold and drops it after its last. The fold
 # loops use one unless options(dsm.fold_buffer = FALSE), which builds each
-# fold's roles as tensors of their own, as before 2026-09-29 -- the same
+# fold's roles as tensors of their own, as before 2026-09-28 -- the same
 # numbers (tests/test_resample_run.R, T8), for comparison.
 new_fold_buffer <- function() new.env(parent = emptyenv())
 

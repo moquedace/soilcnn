@@ -1044,12 +1044,14 @@ run_cnn_resample <- function(tune_grid, store, points, type_table, plan,
 
   # ONE BUFFER FOR EVERY FOLD. Each fold's roles used to be tensors of their
   # own, released before the next fold's were built -- released to mimalloc,
-  # which keeps every freed block of ~250 MB or more (T6). The dev store's
-  # 15x15 training role is ~0.3 GB and the full data set's ~11x that, so each
-  # fold would leave its largest tensors behind; T8 measures it. The roles
-  # are now slices of one tensor per window, made on the first fold
-  # (new_fold_buffer()); options(dsm.fold_buffer = FALSE) goes back to
-  # tensors of their own, for comparison (T8).
+  # which keeps every freed block of ~250 MB or more (T6). T8 (2026-09-28), the
+  # deployed configuration on the dev store's three folds: without the buffer
+  # the folds after the first left 0.13 and 0.74 GB behind them, about their
+  # 0.32 GB training role a fold; with it, 0.03 and 0.00 -- and the tuning
+  # table the same to the last digit. The full data set's roles are ~11x
+  # larger. The roles are now slices of one tensor per window, made on the
+  # first fold (new_fold_buffer()); options(dsm.fold_buffer = FALSE) goes back
+  # to tensors of their own, for comparison.
   buffer <- if (.use_fold_buffer()) new_fold_buffer() else NULL
 
   # THE FOLD LOOP'S MEMORY, when asked (options(dsm.train.trace_mem = TRUE);
