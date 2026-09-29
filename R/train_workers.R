@@ -62,7 +62,11 @@
 # val_ccc by 0.067 in 12 epochs. That is why the run records the count
 # (.train_threads_record(), R/api.R) and refuses a resume with another.
 
+# No unit, no path: paste0(character(0), ".rds") is ".rds", one name, and a
+# resume with nothing left to train once counted it as a unit that did not
+# finish (test_train_side_by_side, 2026-09-29).
 .train_unit_record_path <- function(run_dir, unit_id) {
+  if (length(unit_id) == 0L) return(character(0))
   file.path(run_dir, "units", paste0(unit_id, ".rds"))
 }
 

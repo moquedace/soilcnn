@@ -39,8 +39,11 @@ utils::globalVariables(c(
   "n", "r2", "mae", "nse", "rmse", "rpd", "mqi", "bias", "bias_pct",
   "val_ccc", "val_mae", "ccc_mean", "delta_ccc", "pct_of_ccc",
   # the units of a run, and the configurations they fit
+  # (n_seeds: by_config's column, in .rank_comparison()'s select(); the fold
+  # loop it came out of had an argument of that name, which the check took
+  # for its binding -- 2026-09-29)
   "config_id", "window_sizes", "conv_channels", "status", "n_units", "n_folds",
-  "n_failed", "best_epoch", "runtime_min",
+  "n_seeds", "n_failed", "best_epoch", "runtime_min",
   # the predictor table dsm_prepare() writes, and its quality report
   "predictor", "type", "is_dummy", "is_percentage", "n_unique", "min_value",
   "max_value", "n_na_at_points", "pct_na", "risk", "n_invalidated", "n_sole_cause",
