@@ -38,3 +38,6 @@ docs/status_and_roadmap.md
 docs/test_plan.md
 docs/archive/
 tools/*.py
+
+# Pilot reports (docx) kept locally only
+docs/pilot_reports/

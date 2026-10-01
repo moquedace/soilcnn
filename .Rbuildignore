@@ -17,3 +17,4 @@
 ^doc$
 ^Meta$
 ^vignettes/\.gitignore$
+^docs/pilot_reports$
