@@ -495,7 +495,9 @@ make_manual_tune_grid <- function(...) {
          paste(setdiff(sites, have), collapse = ", "), "). Give all five, or only `dropout` ",
          "and let it be expanded.", call. = FALSE)
   }
-  unknown <- setdiff(have, canon)
+  # n_params is the package's own column (run_cnn_resample() adds it), not
+  # a stranger: a grid passed on from another run carries it (2026-09-29).
+  unknown <- setdiff(have, c(canon, "n_params"))
   # Two names are one misspelt when they are at most two edits apart and those
   # are under a third of the name: base_rl is base_lr, embed_pol embed_pool,
   # and dropout_rate is not dropout. Whole names, not agrep()'s substrings.

@@ -282,6 +282,9 @@ prediction_sample <- function(raster, size = 5000L) {
   # 1,000 points asked for (the SOC 0-30 cm trial, 2026-09-29), and kNNDM was
   # matched to a quarter of the sample it was told it had. Drawn again,
   # denser by the share that landed on data, it comes back at about the size.
+  # In double: size * size overflows an integer size from 46,341 up, and
+  # spatSample() got NA (06_compare.R asked for 50000L, 2026-10-02).
+  size <- as.numeric(size)
   if (nrow(s) < 0.9 * size) s <- draw(ceiling(size * size / nrow(s)))
   tibble::tibble(x = s$x, y = s$y)
 }

@@ -245,6 +245,9 @@ ok["a_misspelt_optional_column_is_refused"] <-
 g_extra <- g_ok; g_extra$val_ccc_mean <- c(0.5, 0.6)
 ok["a_column_that_is_no_parameter_is_carried_along"] <-
   identical(.check_cnn_grid(g_extra, verbose = FALSE)$val_ccc_mean, c(0.5, 0.6))
+g_np <- g_ok; g_np$n_params <- c(100, 200)
+ok["n_params_from_another_run_is_not_called_a_stranger"] <-
+  !any(grepl("not read", utils::capture.output(.check_cnn_grid(g_np), type = "message")))
 g_knob <- g_ok[, setdiff(names(g_ok), names(.expand_dropout(0)))]
 g_knob$dropout <- c(0.2, 0)
 g_knob_out <- .check_cnn_grid(g_knob, verbose = FALSE)

@@ -103,6 +103,10 @@ on_land <- terra::extract(land, as.matrix(ps))
 ok["prediction_sample_counts_only_cells_with_data"] <-
   nrow(ps) >= 450L && nrow(ps) <= 800L && all(!is.na(on_land[[ncol(on_land)]]))
 
+# A size whose square overflows an integer (50000L) still draws.
+ok["prediction_sample_takes_a_large_integer_size"] <-
+  nrow(prediction_sample(land, size = 50000L)) > 0L
+
 has_sf   <- requireNamespace("sf", quietly = TRUE)
 has_cast <- requireNamespace("CAST", quietly = TRUE)
 
