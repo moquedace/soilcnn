@@ -9,7 +9,8 @@ vignette: >
 
 ```{r, include = FALSE}
 # Nothing here is evaluated when the vignette is built: every step reads data
-# the package does not ship, and the tuning step trains for hours.
+# the package does not ship, and the tuning step trains for hours. The figures
+# are files in figures/, drawn once from real data by tools/vignette_figures.R.
 knitr::opts_chunk$set(eval = FALSE, collapse = TRUE, comment = "#>")
 ```
 
@@ -26,6 +27,14 @@ honest:
 - the area where the map may be believed.
 
 This vignette walks the whole chain. Each step is one call.
+
+```{r, eval = TRUE, echo = FALSE, out.width = "100%"}
+knitr::include_graphics("figures/workflow.png")
+```
+
+The figures come from a real application: soil organic carbon stocks at
+0-30 cm over Latin America and the Caribbean, from about 26,000 profiles and
+174 predictors at 250 m.
 
 ```{r}
 library(soilcnn)
@@ -53,6 +62,13 @@ store <- dsm_prepare(
 
 `windows` is required. A window's ground extent is its width times the
 resolution, so no default would be right at every resolution.
+
+This is what the network reads around one profile, here over two of the 174
+channels: the 3 x 3, 9 x 9 and 15 x 15 cells centred on it.
+
+```{r, eval = TRUE, echo = FALSE, out.width = "100%"}
+knitr::include_graphics("figures/patches.png")
+```
 
 ## 2. Load
 
@@ -91,6 +107,20 @@ knndm_cv(k = 5, predpoints = prediction_sample(terra::rast("predictors/elev.tif"
 its nearest training point is distributed like the distance from a map pixel to
 its nearest training point. It needs a sample of where the map will be drawn,
 and it needs the CAST and sf packages.
+
+The five designs on the same 3,000 profiles, with one test set for all, carved
+by the spatial design in whole blocks. Each colour is the fold a profile is
+validated in:
+
+```{r, eval = TRUE, echo = FALSE, out.width = "100%"}
+knitr::include_graphics("figures/designs.png")
+```
+
+The random folds scatter each fold over the whole continent, so a validation
+profile almost always has a training profile next to it: the score they give
+is the most optimistic. Blocks, ecoregions and kNNDM hold whole areas out
+together, and that is what makes their score an estimate for the places the
+map reaches without data.
 
 A plan is worth looking at before a night is spent on it:
 
