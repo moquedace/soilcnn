@@ -204,6 +204,20 @@ resolve_cores <- function(n_cores = NULL, what = "this step") {
   n
 }
 
+# The path of `to` seen from the directory `from`, e.g. "../../tuning/spatial":
+# what a record keeps beside an absolute path, so that a project moved whole
+# still finds its parts. NA when the two share no root (another drive).
+.relative_path <- function(to, from) {
+  a <- strsplit(normalizePath(to,   winslash = "/", mustWork = FALSE), "/", fixed = TRUE)[[1]]
+  b <- strsplit(normalizePath(from, winslash = "/", mustWork = FALSE), "/", fixed = TRUE)[[1]]
+  if (!length(a) || !length(b) || !identical(tolower(a[1]), tolower(b[1]))) return(NA_character_)
+  n <- 0L
+  while (n < min(length(a), length(b)) && identical(a[n + 1L], b[n + 1L])) n <- n + 1L
+  up <- rep("..", length(b) - n)
+  rel <- c(up, a[seq_len(length(a) - n) + n])
+  if (!length(rel)) "." else paste(rel, collapse = "/")
+}
+
 # ── What a worker loads ───────────────────────────────────────────────────────
 #
 # dsm_final() and dsm_predict() work in fresh R processes, and each loads the

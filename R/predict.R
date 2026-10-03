@@ -404,8 +404,10 @@ dsm_predict <- function(final, data, rasters = NULL, qc_table = NULL, extent = N
     saved <- NULL
   }
   if (!is.null(saved)) {
-    diff_fields <- names(settings)[!vapply(names(settings), function(k)
-      identical(settings[[k]], saved[[k]]), logical(1))]
+    now_id   <- .predict_settings_portable(settings)
+    saved_id <- .predict_settings_portable(saved)
+    diff_fields <- names(now_id)[!vapply(names(now_id), function(k)
+      identical(now_id[[k]], saved_id[[k]]), logical(1))]
     if (length(diff_fields) > 0L) {
       stop("This map was started with different settings (", paste(diff_fields, collapse = ", "),
            "): its finished units would be mixed with units of another map.\n  Use another ",
@@ -612,6 +614,13 @@ print.dsm_prediction <- function(x, ...) {
   }
   summ <- readRDS(summ_path)
   if (is.null(tuning_dir) && !is.null(summ$tuning_dir)) tuning_dir <- summ$tuning_dir
+  # MOVED WITH ITS FINAL RUN. The summary names the tuning run by absolute path
+  # and, since 2026-10-02, also relative to the final run: a project moved
+  # whole keeps the two in place, and the relative one finds it.
+  if (!is.null(tuning_dir) && !dir.exists(tuning_dir) && !is.null(summ$tuning_dir_rel)) {
+    moved <- normalizePath(file.path(run_dir, summ$tuning_dir_rel), winslash = "/", mustWork = FALSE)
+    if (dir.exists(moved)) tuning_dir <- moved
+  }
   cid <- if (is.null(config)) selected_config_id(summ, basename(run_dir)) else as.character(config)
   if (length(cid) != 1L || !cid %in% summ$selected_cfgs$config_id) {
     stop("config '", paste(cid, collapse = ", "), "' is not a configuration this final run ",
@@ -761,7 +770,9 @@ print.dsm_prediction <- function(x, ...) {
   files <- normalizePath(as.character(rt$raster_file), winslash = "/", mustWork = FALSE)
   if (any(!file.exists(files))) {
     stop("Raster file(s) not found: ", paste(utils::head(files[!file.exists(files)], 5),
-                                             collapse = ", "), call. = FALSE)
+                                             collapse = ", "),
+         "\n  If the folder moved, pass rasters = \"<the folder they are in now>\": they are ",
+         "matched to the store's channels by file name.", call. = FALSE)
   }
   list(store_dir = store_dir, points = points, meta = meta, predictors = predictors,
        qc_table = qc, scaling = scaling, files = files, transform = transform,
@@ -1207,6 +1218,26 @@ print.dsm_prediction <- function(x, ...) {
 # layout of the files: the model, the rasters, the part, the units, the bands
 # and every number that calibrated them. Not the workers, threads, steps or
 # chunks -- those change the time.
+# A MAP IS THE SAME MAP WHEREVER ITS FOLDERS ARE. The settings name the final
+# run, the rasters and the calibration runs by absolute path, and a resume
+# compared them as written: when the project and the rasters moved
+# (2026-10-01), every map would have been refused, the finished units with it.
+# Compared here by what identifies them -- the final run's and the calibration
+# runs' folder names, the rasters' file names, and, unchanged, the model's
+# bytes, the seeds, the grid and every number of the calibration. The
+# settings on disk keep the full paths, for the record.
+.predict_settings_portable <- function(x) {
+  x$final_run <- basename(as.character(x$final_run))
+  x$rasters   <- basename(as.character(x$rasters))
+  if (!is.null(x$calibration)) {
+    x$calibration <- lapply(x$calibration, function(v) {
+      v[1] <- basename(as.character(v[1]))
+      v
+    })
+  }
+  x[setdiff(names(x), "step_rows_used")]
+}
+
 .predict_settings <- function(fr, inp, grid, work, band_tbl, alpha, clamp, engine, cal) {
   list(final_run = fr$run_dir, config_id = fr$config_id, seeds = fr$seeds,
        model_bytes = as.numeric(file.size(fr$model_files)), rasters = inp$files,

@@ -364,7 +364,32 @@ Sys.unsetenv(c("dlc_test_chr", "dlc_test_int", "dlc_test_csv"))
 
 unlink(scratch, recursive = TRUE, force = TRUE)
 
-cat(sprintf("  latest_run_dir           : picks by time (%s), skips unfinished, names them\n",
+# ── A project moved whole still finds its parts (2026-10-02) ─────────────────
+#
+# The project and the rasters moved on 2026-10-01 (R/ to projects/ and data/).
+# A final run now records its tuning run relative to itself too, and a map's
+# resume compares its runs and rasters by name, not by full path.
+ok["relative_path_climbs_and_descends"] <-
+  identical(.relative_path("D:/p/out/tuning/spatial", "D:/p/out/final_model/spatial"),
+            "../../tuning/spatial")
+ok["relative_path_of_itself_is_a_dot"] <- identical(.relative_path("D:/p/a", "D:/p/a"), ".")
+ok["relative_path_across_drives_is_na"] <- is.na(.relative_path("E:/x", "D:/p"))
+set_old <- list(final_run = "D:/a/R/proj/final/spatial", config_id = "cfg_003",
+                rasters = c("D:/a/R/rasters/bio1.tif", "D:/a/R/rasters/bio2.tif"),
+                calibration = list(block = c("D:/a/R/proj/tuning/spatial", "cfg_003", "0.71")),
+                step_rows_used = 64L)
+set_new <- set_old
+set_new$final_run <- "D:/a/projects/proj/final/spatial"
+set_new$rasters <- sub("/R/rasters/", "/data/rasters/", set_new$rasters)
+set_new$calibration$block[1] <- "D:/a/projects/proj/tuning/spatial"
+ok["a_moved_map_is_the_same_map"] <-
+  identical(.predict_settings_portable(set_old), .predict_settings_portable(set_new))
+set_other <- set_new
+set_other$calibration$block[3] <- "0.80"
+ok["another_calibration_is_still_another_map"] <-
+  !identical(.predict_settings_portable(set_old), .predict_settings_portable(set_other))
+
+cat(sprintf("  latest_run_dir          : picks by time (%s), skips unfinished, names them\n",
             picked))
 cat(sprintf("  pt-br csv round trip     : %.6f survives; NA stays NA; '%s' intact\n",
             back$value[1], tbl$note[2]))

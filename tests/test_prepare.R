@@ -378,6 +378,23 @@ ok["a_store_without_a_recipe_still_needs_its_tables"] <- {
   grepl("recipe", err(dsm_load(old, verbose = FALSE)))
 }
 
+# THE RASTERS MOVED (2026-10-01 here: R/ to data/). The store still opens, on
+# its own record of the resolution, and says where it looked; a table the
+# caller passes must still exist.
+moved_rdir <- paste0(rdir, "_moved")
+ok["the_rasters_were_moved_for_the_test"] <- file.rename(rdir, moved_rdir)
+said <- character(0)
+d_moved <- withCallingHandlers(
+  tryCatch(dsm_load(st, verbose = FALSE), error = function(e) e),
+  message = function(m) { said <<- c(said, conditionMessage(m)); invokeRestart("muffleMessage") })
+ok["a_store_whose_rasters_moved_still_loads"] <-
+  inherits(d_moved, "dsm_data") && isTRUE(all.equal(d_moved$cell_size, 1))
+ok["and_says_where_it_looked"] <- any(grepl("not where it recorded them", said))
+ok["a_raster_table_passed_by_hand_must_exist"] <-
+  grepl("does not exist", err(dsm_load(st, raster_table = file.path(st$store_dir, "raster_table_used.csv"),
+                                       verbose = FALSE)))
+invisible(file.rename(moved_rdir, rdir))
+
 unlink(base, recursive = TRUE)
 
 cat(sprintf("  fixture                  : 14 points -> 9 after QC -> 5 in the store (windows 3, 5)\n"))

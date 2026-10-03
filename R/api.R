@@ -70,6 +70,7 @@ dsm_load <- function(patch_dir, points = NULL, type_table = NULL, windows = NULL
   # as five paths to type. A store from before dsm_prepare() has no recipe,
   # and the explicit arguments stay required for it.
   if (inherits(patch_dir, "dsm_store")) patch_dir <- patch_dir$store_dir
+  raster_table_given <- !is.null(raster_table)
   recipe_path <- file.path(patch_dir, "recipe.rds")
   recipe <- if (file.exists(recipe_path)) readRDS(recipe_path) else NULL
   if (is.null(points) || is.null(type_table)) {
@@ -134,7 +135,17 @@ dsm_load <- function(patch_dir, points = NULL, type_table = NULL, windows = NULL
       stop("raster_table has no raster_file column: ", raster_table, call. = FALSE)
     }
     r1 <- rt$raster_file[1]
-    if (!file.exists(r1)) {
+    # THE RASTERS MOVED, AND THE STORE DID NOT ASK FOR THEM. A store written by
+    # dsm_prepare() names its rasters by absolute path; when the folder moves
+    # (2026-10-01 here: R/ to data/) the store itself is unchanged, and refusing
+    # to open it would make every run after the move stop on a path. With the
+    # table the store's own, the manifest's resolution is used, and said; a
+    # table the caller passed must still exist.
+    if (!file.exists(r1) && !raster_table_given) {
+      message("The store's rasters are not where it recorded them (", r1, "): the ",
+              "cell size is the store's own record. Mapping needs rasters = <their folder>.")
+      rt <- NULL
+    } else if (!file.exists(r1)) {
       stop("raster_table names ", r1, ", which does not exist -- the predictor ",
            "directory moved, or this table was written on another machine.",
            "\n  Pass cell_size = <number> instead, or fix the path.", call. = FALSE)
@@ -143,7 +154,7 @@ dsm_load <- function(patch_dir, points = NULL, type_table = NULL, windows = NULL
       stop("Reading cell_size from a raster needs the terra package. Install it, ",
            "or pass cell_size = <number>.", call. = FALSE)
     }
-    cell_size <- terra::res(terra::rast(r1))[1]
+    if (!is.null(rt)) cell_size <- terra::res(terra::rast(r1))[1]
   }
   if (is.null(cell_size)) {
     # The store recorded it at extraction time; that is a weaker source than

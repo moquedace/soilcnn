@@ -351,7 +351,7 @@ dsm_final <- function(tuning, data = NULL, config = "auto",
     run_id = run_id, tuning_run_id = basename(tuning_dir),
     # The path as well as the name: dsm_predict() calibrates the map's
     # intervals on this run's residuals, and a name alone says where nothing is.
-    tuning_dir = tuning_dir,
+    tuning_dir = tuning_dir, tuning_dir_rel = .relative_path(tuning_dir, run_dir),
     # What makes a seed's numbers reproducible, beside the seed itself.
     threads_per_unit = tpu, n_workers = run_info$n_workers, training = training,
     validation_frac = validation_frac, refit_method = refit$method, n_train = n_train,
