@@ -1,6 +1,8 @@
 ---
 title: "Getting started with soilcnn"
-output: rmarkdown::html_vignette
+output:
+  rmarkdown::html_vignette:
+    css: soilcnn.css
 vignette: >
   %\VignetteIndexEntry{Getting started with soilcnn}
   %\VignetteEngine{knitr::rmarkdown}
@@ -10,9 +12,12 @@ vignette: >
 ```{r, include = FALSE}
 # Nothing here is evaluated when the vignette is built: every step reads data
 # the package does not ship, and the tuning step trains for hours. The figures
-# are files in figures/, drawn once from real data by tools/vignette_figures.R.
+# are files in figures/, drawn once from real data (see the package's GitHub
+# repository, tools/vignette_figures.R).
 knitr::opts_chunk$set(eval = FALSE, collapse = TRUE, comment = "#>")
 ```
+
+<div class="soilcnn-kicker">SOILCNN / DIGITAL SOIL MAPPING</div>
 
 soilcnn maps a soil property from point observations and a stack of aligned
 rasters. A point-based model reads the covariates under each point. The
@@ -28,13 +33,19 @@ honest:
 
 This vignette walks the whole chain. Each step is one call.
 
-```{r, eval = TRUE, echo = FALSE, out.width = "100%"}
+```{r, eval = TRUE, echo = FALSE, out.width = "100%", fig.cap = "Figure 1. The workflow keeps data preparation, validation, tuning and final prediction explicit."}
 knitr::include_graphics("figures/workflow.png")
 ```
 
 The figures come from a real application: soil organic carbon stocks at
 0-30 cm over Latin America and the Caribbean, from about 26,000 profiles and
-174 predictors at 250 m.
+174 predictors at a nominal 250 m resolution. The completed extraction store
+contains 25,887 profiles. The geographic raster grid has latitude-dependent
+ground dimensions.
+
+```{r, eval = TRUE, echo = FALSE, out.width = "100%", fig.cap = "Figure 2. The full application dataset: profile locations and the predictor footprint. Uneven coverage motivates spatial validation and applicability diagnostics. The map uses a spherical Lambert azimuthal equal-area projection centred at 75 W / 15 S, with equal horizontal and vertical scales."}
+knitr::include_graphics("figures/observations.png")
+```
 
 ```{r}
 library(soilcnn)
@@ -63,11 +74,40 @@ store <- dsm_prepare(
 `windows` is required. A window's ground extent is its width times the
 resolution, so no default would be right at every resolution.
 
-This is what the network reads around one profile, here over two of the 174
-channels: the 3 x 3, 9 x 9 and 15 x 15 cells centred on it.
+The network reads a stack of predictor channels around each profile. The
+illustration below uses separate high-resolution rasters at one of the
+application's profiles, in south-eastern Brazil: NDVI, elevation and clay,
+aligned on a
+0.00025-degree grid (approximately 25.7 m east-west by 27.7 m north-south
+at this latitude). These inputs illustrate the patch concept; they were not
+used to train the 250 m application described above.
 
-```{r, eval = TRUE, echo = FALSE, out.width = "100%"}
+The top row shows approximately 4 km of landscape with nested window outlines.
+Below it, the 3 x 3, 9 x 9 and 15 x 15 windows are enlarged to the same display
+size. Their ground footprints are approximately 77 x 83 m, 231 x 249 m and
+385 x 415 m, respectively. Landscape panels and local patches have separate
+colour ranges, shown by their own bars, to reveal variation at both extents.
+The three window sizes share one range within each channel.
+
+Fine grid spacing does not imply equally fine original information in every
+predictor. The clay source is SoilGrids 2.0, whose source predictions are at
+250 m; alignment on the 28 m grid does not add independent fine-scale soil
+information. Clay is in g/kg, as documented by
+[ISRIC](https://docs.isric.org/globaldata/soilgrids/SoilGrids_faqs_01.html).
+Elevation is in metres
+([EDTM version 1.1](https://doi.org/10.5281/zenodo.7676373)). NDVI is
+dimensionless.
+
+```{r, eval = TRUE, echo = FALSE, out.width = "100%", fig.cap = "Figure 3. Landscape context and native-cell windows from the high-resolution example. The marker identifies the central cell. Bars show source raster values. This illustration is separate from the 250 m trial."}
 knitr::include_graphics("figures/patches.png")
+```
+
+A two-branch configuration learns a representation at each scale and combines
+them through a learned gate. This diagram shows the concept; the tuning grid
+also includes single-scale models and alternative fusion strategies.
+
+```{r, eval = TRUE, echo = FALSE, out.width = "100%", fig.cap = "Figure 4. Conceptual multiscale architecture. Predictor scaling is fitted on the training rows of each fold."}
+knitr::include_graphics("figures/architecture.png")
 ```
 
 ## 2. Load
@@ -108,19 +148,31 @@ its nearest training point is distributed like the distance from a map pixel to
 its nearest training point. It needs a sample of where the map will be drawn,
 and it needs the CAST and sf packages.
 
-The five designs on the same 3,000 profiles, with one test set for all, carved
-by the spatial design in whole blocks. Each colour is the fold a profile is
-validated in:
+The five panels below show the plans of a test run on 267 profiles (1% of
+the application), with one test set shared by all five designs. Each panel is
+fold 1: training, validation, test, and the profiles that fold leaves out.
+They illustrate how the designs split the data, not how the models perform.
+The spatial blocks here are 0.1 degree; the full run uses 1-degree blocks.
 
-```{r, eval = TRUE, echo = FALSE, out.width = "100%"}
+```{r, eval = TRUE, echo = FALSE, out.width = "100%", fig.cap = "Figure 5. Validation geometry: fold 1 of each design, with one test set for all five. Hollow points are not used in this fold. All panels use the same equal-area projection and extent."}
 knitr::include_graphics("figures/designs.png")
 ```
 
-The random folds scatter each fold over the whole continent, so a validation
-profile almost always has a training profile next to it: the score they give
-is the most optimistic. Blocks, ecoregions and kNNDM hold whole areas out
-together, and that is what makes their score an estimate for the places the
-map reaches without data.
+Random folds do not enforce geographic separation, so nearby observations can
+appear in training and validation. Spatial blocks and region-based plans
+introduce geographic separation; kNNDM targets the nearest-neighbour distance
+distribution faced during prediction. Each design asks a different validation
+question. Their relative scores must be measured in a completed experiment.
+
+The exclusion buffer is easier to see locally. The next illustration uses
+fold 1 of the full spatial plan, whose buffer is 0.0337 degrees (about
+3.7 km, the width of a 15 x 15 window) in the Chebyshev metric. The shaded
+square protects one validation location; every validation and test location
+has one.
+
+```{r, eval = TRUE, echo = FALSE, out.width = "100%", fig.cap = "Figure 6. The buffer in the full spatial plan. Grey training points stay outside the shaded exclusion zone; hollow points were removed from training by a buffer."}
+knitr::include_graphics("figures/buffer.png")
+```
 
 A plan is worth looking at before a night is spent on it:
 
@@ -148,6 +200,22 @@ print_one_se(one_se(fit$by_config))             # the simplest config within one
 The grid is drawn over the windows the store holds: every window alone, and
 every pair. The batch sizes are ones the smallest fold can fill. The predictions
 are scored in native units through the inverse of the store's own transform.
+
+### Choosing a supported level of complexity
+
+The best validation mean is not necessarily the selected model. For CCC,
+`one_se()` subtracts the best configuration's standard error from its mean,
+then selects the configuration with the fewest parameters among those whose
+mean reaches that threshold. Error-bar overlap does not determine eligibility,
+and the rule is not a test of statistical equivalence.
+
+```{r, eval = TRUE, echo = FALSE, out.width = "100%", fig.cap = "Figure 7. A didactic, simulated example of the one-standard-error rule. F has the highest mean; D is the smallest configuration above the 0.490 threshold. Bars show plus/minus one SE. These values are not results of the SOC application."}
+knitr::include_graphics("figures/selection.png")
+```
+
+The simulated values illustrate how to read the selection. For a completed
+run, use `fit$by_config` for the actual means, standard errors and parameter
+counts; the frozen test set stays outside this decision.
 
 ## 5. The baselines that give the number a scale
 
@@ -229,3 +297,27 @@ the model never met, and nothing in the raster tells them apart. The
 cross-validated error does not describe those pixels. The `di_*` and `aoa_*`
 bands (Meyer & Pebesma, 2021) say where it does, and they belong beside the
 map, not in a footnote.
+
+
+### Reading the final maps together
+
+Interpret the predicted stock together with the width of its calibrated
+90% interval and its area of applicability. A wide interval indicates less
+precise predictions; a pixel outside the AOA has predictor conditions beyond
+the applicability criterion derived from validation. The two diagnostics
+describe different aspects of reliability.
+
+The maps of the application will be shown here once its full run is
+complete.
+
+## About the illustrations
+
+Profile locations come from the full SOC 0-30 cm application at 250 m. The
+input-patch illustration uses separate high-resolution raster crops at one of
+its profiles. The continental validation panels come from the plans of a
+test run on 1% of the profiles; the local buffer detail comes from the full
+spatial plan. The model-selection plot uses simulated values. No prediction
+maps or performance figures are presented. The scripts that draw the figures
+are in the package's
+[GitHub repository](https://github.com/moquedace/soilcnn), under `tools/`;
+they read data and fold plans, and fit no model.

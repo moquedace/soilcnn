@@ -41,3 +41,6 @@ tools/*.py
 
 # Pilot reports (docx) kept locally only
 docs/pilot_reports/
+
+# Figure inputs (28 m rasters) and the records of where each figure came from.
+tools/figure_inputs/
