@@ -12,13 +12,19 @@
 # WHAT IT DOES NOT. No manual (that needs LaTeX), and no tests: tests/ is not
 # in the tarball, and tests/run_all.R is where the tests run.
 #
+# AS CRAN WILL. options(soilcnn.check_as_cran = TRUE) before source() adds
+# --as-cran: CRAN's own checks (its incoming checks ask the internet) and the
+# examples inside \donttest{} -- the ones that train on example_run(), several
+# minutes more. Without it those are skipped: the default is the quick check
+# run after an edit, and a CRAN check is a step of its own.
+#
 # A SUGGESTED PACKAGE THAT IS NOT INSTALLED -- ranger, here -- would stop the
 # check before it starts. _R_CHECK_FORCE_SUGGESTS_=false runs it as a user
 # without that package would meet it: the code that needs it asks for it by
 # requireNamespace(), and says so.
 #
 # COST: a few minutes. The check installs the package, loads torch, reads
-# every function for problems, runs the one example and rebuilds the vignette.
+# every function for problems, runs the examples and rebuilds the vignette.
 
 root <- (function() {
   cand <- character(0)
@@ -65,9 +71,15 @@ if (!all(copied)) {
 message("Building ", pkg, " (with its vignette) ...")
 tgz <- pkgbuild::build(stage, dest_path = work, manual = FALSE, quiet = TRUE)
 
-message("R CMD check --no-manual ", basename(tgz), " ...")
-res <- callr::rcmd("check", c("--no-manual", basename(tgz)), wd = work,
-                   env = c(callr::rcmd_safe_env(), "_R_CHECK_FORCE_SUGGESTS_" = "false"),
+check_args <- c(if (isTRUE(getOption("soilcnn.check_as_cran"))) "--as-cran", "--no-manual")
+message("R CMD check ", paste(check_args, collapse = " "), " ", basename(tgz), " ...")
+# TWO THREADS, AS CRAN ALLOWS. torch sizes its pool to the machine unless told
+# otherwise, so an example that trains would take every core here -- beside
+# whatever else runs -- and a check that passes on 32 cores says nothing of
+# one on CRAN's two.
+res <- callr::rcmd("check", c(check_args, basename(tgz)), wd = work,
+                   env = c(callr::rcmd_safe_env(), "_R_CHECK_FORCE_SUGGESTS_" = "false",
+                           OMP_NUM_THREADS = "2", MKL_NUM_THREADS = "2"),
                    fail_on_status = FALSE, show = FALSE)
 
 log_file <- file.path(work, paste0(pkg, ".Rcheck"), "00check.log")
