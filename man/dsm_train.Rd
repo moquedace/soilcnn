@@ -14,7 +14,7 @@ dsm_train(
   transform = NULL,
   clamp = c(0, Inf),
   features = c("centre", "window_mean"),
-  output_dir = "./outputs/tuning",
+  output_dir,
   run_id = format(Sys.time(), "\%Y\%m\%d_\%H\%M\%S"),
   base_seed = 42L,
   device = NULL,
@@ -62,7 +62,9 @@ dsm_final() refits with the same.}
 
 \item{features}{For tabular models: "centre", "window_mean", or both.}
 
-\item{output_dir}{Where runs go; each run is a directory under it.}
+\item{output_dir}{Where runs go; each run is a directory under it.
+Required: nothing is written where nobody said -- a folder of your
+project, or \code{tempdir()} for a try.}
 
 \item{run_id}{The run's directory name. Reusing one resumes that run
 (see \code{resume}); the default, a timestamp, always starts a fresh one.}

@@ -23,6 +23,8 @@
 #      SAME comparison shape -- which is what makes families comparable
 #   5. the plan dsm_train() used is the plan it was given
 #   6. a run is resumable through the front door
+#   7. no output_dir, no run: the call is refused before anything is written;
+#      and training in the session leaves the session's random numbers alone
 #
 # Run: source("<package root>/tests/test_api_run.R")   (trains; ~1 min on CPU)
 
@@ -171,6 +173,19 @@ plan <- suppressMessages(resolve_resampling(
 ok["auto_buffer_used_the_stores_resolution"] <-
   isTRUE(all.equal(plan$params$buffer, win * CELL))
 
+# NOTHING WRITTEN WHERE NOBODY SAID: the same call without output_dir passes
+# every other check and is refused before anything trains or is written.
+no_dir <- tryCatch(suppressMessages(dsm_train(
+  data, model = "cnn", resampling = plan, tune_grid = grid, n_seeds = 1L, transform = expm1,
+  device = setup_torch_device(n_threads = 1L, use_cuda = FALSE), verbose = FALSE)),
+  error = function(e) conditionMessage(e))
+ok["dsm_train_wants_an_output_dir"] <- is.character(no_dir) &&
+  grepl("output_dir. is required", no_dir)
+
+# TRAINED IN THIS SESSION, the units seed R's generator with their own seeds,
+# and the session's random numbers come back as they were.
+set.seed(17)
+rng_before <- .Random.seed
 fit <- suppressMessages(dsm_train(
   data, model = "cnn", resampling = plan, tune_grid = grid,
   n_seeds = 1L, transform = expm1,
@@ -178,6 +193,8 @@ fit <- suppressMessages(dsm_train(
   device = setup_torch_device(n_threads = 1L, use_cuda = FALSE),
   n_epochs = 2L, patience = 2L, print_every = 100L, augment = FALSE,
   verbose = FALSE))
+ok["training_in_the_session_leaves_its_random_numbers_alone"] <-
+  identical(rng_before, .Random.seed)
 
 ok["dsm_train_returns_a_dsm_fit"] <- inherits(fit, "dsm_fit")
 ok["dsm_train_records_the_model"]  <- identical(fit$model, "cnn")

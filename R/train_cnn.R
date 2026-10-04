@@ -569,7 +569,7 @@ run_cnn_tuning <- function(
   cache,
   points_valid,
   transform   = identity,
-  output_dir  = "./outputs/tuning",
+  output_dir,
   device,
   run_id      = format(Sys.time(), "%Y%m%d_%H%M%S"),
   base_seed   = 42L,
@@ -753,6 +753,11 @@ run_cnn_tuning <- function(
 .train_unit <- function(cfg, unit_id, fold, this_seed, header, cache, points_valid,
                         n_channels, transform, device, run_dir, evaluate_test,
                         training) {
+  # The unit's seed, and the session's random numbers put back when it returns
+  # (.rng_state(), R/resample.R): trained in the user's session, it no longer
+  # moves their next draws.
+  rng <- .rng_state()
+  on.exit(.rng_restore(rng), add = TRUE)
   set.seed(this_seed)
   torch::torch_manual_seed(this_seed)
 
@@ -1010,7 +1015,7 @@ run_cnn_tuning <- function(
 #' @noRd
 run_cnn_resample <- function(tune_grid, store, points, type_table, plan,
                              transform  = identity,
-                             output_dir = "./outputs/tuning",
+                             output_dir,
                              device,
                              run_id     = format(Sys.time(), "%Y%m%d_%H%M%S"),
                              base_seed  = 42L,

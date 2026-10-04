@@ -189,7 +189,8 @@ fit <- dsm_train(
   model       = "cnn",
   resampling  = plan,
   tune_length = 30,      # a budget, as in caret, not a lattice
-  n_seeds     = 3        # what turns "A beat B" into a claim with an error bar
+  n_seeds     = 3,       # what turns "A beat B" into a claim with an error bar
+  output_dir  = "outputs/tuning"
 )
 
 fit$by_config                                   # mean and sd, one row per config
@@ -224,9 +225,10 @@ between experiments:
 
 ```{r}
 rf_context <- dsm_train(data, model = "rf", resampling = plan,
-                        features = c("centre", "window_mean"), tune_length = 4)
+                        features = c("centre", "window_mean"), tune_length = 4,
+                        output_dir = "outputs/tuning")
 rf_point   <- dsm_train(data, model = "rf", resampling = plan,
-                        features = "centre", tune_length = 4)
+                        features = "centre", tune_length = 4, output_dir = "outputs/tuning")
 ```
 
 The gap between `rf_context` and the CNN is what the spatial *arrangement* of
@@ -238,7 +240,8 @@ The same plan runs any of caret's ~230 methods:
 ```{r}
 caret_available("^xgb")
 register_model(caret_spec("xgbTree"))
-xgb <- dsm_train(data, model = "xgbTree", resampling = plan, tune_length = 4)
+xgb <- dsm_train(data, model = "xgbTree", resampling = plan, tune_length = 4,
+                 output_dir = "outputs/tuning")
 ```
 
 ## 6. The test set, once

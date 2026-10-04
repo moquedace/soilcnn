@@ -224,6 +224,14 @@ ok["the_mlps_epochs_are_its_specs_not_dsm_trains"] <-
 ok["an_option_the_model_declares_goes_through"] <-
   !grepl("does not know", err(dsm_train(d_bare, model = m_alpha, alpha = 2, verbose = FALSE)))
 
+# A GRID DRAWN UNDER ITS OWN SEED: the same grid for the same seed, and the
+# session's random numbers left where they were.
+set.seed(3)
+rng_before <- .Random.seed
+g_a <- make_tune_grid(tune_length = 5L, seed = 9L)
+ok["a_seeded_grid_leaves_the_sessions_random_numbers_alone"] <- identical(rng_before, .Random.seed)
+ok["the_same_seed_draws_the_same_grid"] <- identical(g_a, make_tune_grid(tune_length = 5L, seed = 9L))
+
 # ── 5. a grid given by hand, checked against the parameter space ─────────────
 #
 # A missing or misspelt column used to surface at the first unit -- after the

@@ -530,6 +530,8 @@ resolve_resampling <- function(spec, data, test_ids = NULL, windows = NULL,
 #'   70% of what is available when they start.
 #' @param test_ids   Sample ids forced into the test set.
 #' @param output_dir Where runs go; each run is a directory under it.
+#'   Required: nothing is written where nobody said -- a folder of your
+#'   project, or `tempdir()` for a try.
 #' @param run_id     The run's directory name. Reusing one resumes that run
 #'   (see `resume`); the default, a timestamp, always starts a fresh one.
 #' @param base_seed  Repetition s of every configuration trains under the
@@ -550,13 +552,16 @@ dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
                       tune_grid = NULL, tune_length = 20L, n_seeds = 3L,
                       transform = NULL, clamp = c(0, Inf),
                       features = c("centre", "window_mean"),
-                      output_dir = "./outputs/tuning",
+                      output_dir,
                       run_id = format(Sys.time(), "%Y%m%d_%H%M%S"),
                       base_seed = 42L, device = NULL, n_cores = NULL,
                       in_session = !is.null(device), threads_per_unit = 5L,
                       max_ram_gb = NULL,
                       test_ids = NULL, resume = TRUE, evaluate_test = FALSE,
                       verbose = TRUE, ...) {
+  # Asked for where it is first used (.check_output_dir()), after every other
+  # argument is checked: a call wrong in two ways says the other one first.
+  output_dir <- if (missing(output_dir)) NULL else output_dir
 
   # THE DOOR. Each of these used to fail later and worse: a wrong `data`
   # died inside the store code, a caret-style resampling = "cv" died in a
@@ -707,6 +712,7 @@ dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
       threads_mode <- if (identical(device$type, "cuda")) "cuda" else "session"
       threads_used <- torch::torch_get_num_threads()
     }
+    .check_output_dir(output_dir)
     .train_clamp_record(file.path(output_dir, run_id), clamp, resume)
     .train_threads_record(file.path(output_dir, run_id), threads_mode, threads_used, resume)
     res <- run_cnn_resample(
@@ -723,6 +729,7 @@ dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
     # A torch model on the table path (the MLP) gets its threads the same way;
     # the forest reads n_cores itself, through the runner's `...`.
     if (!is.null(n_cores) && isNamespaceLoaded("torch")) set_torch_threads(n_cores)
+    .check_output_dir(output_dir)
     .train_clamp_record(file.path(output_dir, run_id), clamp, resume)
     res <- run_table_resample(
       model = model, tune_grid = tune_grid, store = data$store,
@@ -824,6 +831,20 @@ dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
          call. = FALSE)
   }
   as.numeric(clamp)
+}
+
+# NOTHING WRITTEN WHERE NOBODY SAID. A run went to ./outputs/tuning unless told
+# otherwise -- under the working directory, where a package must not write by
+# default (CRAN's policy, and a surprise to anyone who did not expect a folder
+# there). Every script of the SOC project already names its own.
+.check_output_dir <- function(output_dir) {
+  if (is.null(output_dir) || !is.character(output_dir) || length(output_dir) != 1L ||
+      is.na(output_dir) || !nzchar(output_dir)) {
+    stop("`output_dir` is required: the folder the run's directory is made in -- a folder ",
+         "of your project, or tempdir() for a try. Nothing is written where nobody said.",
+         call. = FALSE)
+  }
+  invisible(output_dir)
 }
 
 # The clamp a run scored its units with is part of the run. Resumed with

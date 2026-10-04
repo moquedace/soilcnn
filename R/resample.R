@@ -61,6 +61,27 @@ with_local_seed <- function(seed, expr) {
   force(expr)
 }
 
+# THE SESSION'S RANDOM NUMBERS, KEPT AND PUT BACK. A training unit seeds R's
+# generator with its own seed, and a unit trained in the user's session used
+# to leave it there: every draw the user made afterwards had moved, which a
+# package must not do (and CRAN's reviewers ask about). The caller takes the
+# state on entry and puts it back on exit; what the unit draws is unchanged,
+# since it seeds itself, and so is every number of the run -- each unit, fold
+# and grid seeds what it uses.
+.rng_state <- function() {
+  if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+    get(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
+  } else NULL
+}
+.rng_restore <- function(state) {
+  if (is.null(state)) {
+    suppressWarnings(rm(".Random.seed", envir = .GlobalEnv))
+  } else {
+    assign(".Random.seed", state, envir = .GlobalEnv)
+  }
+  invisible(NULL)
+}
+
 # Draw WHOLE groups, in random order, until `frac` of the POINTS is reached.
 #
 # The one primitive behind every cut in this file. Drawing a fraction of GROUPS

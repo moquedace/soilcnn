@@ -80,7 +80,7 @@ run_table_resample <- function(model, tune_grid = NULL, store, points,
                                features    = c("centre", "window_mean"),
                                windows     = NULL,
                                transform   = identity,
-                               output_dir  = "./outputs/tuning",
+                               output_dir,
                                run_id      = format(Sys.time(), "%Y%m%d_%H%M%S"),
                                base_seed   = 42L,
                                n_seeds     = 1L,
@@ -91,6 +91,10 @@ run_table_resample <- function(model, tune_grid = NULL, store, points,
                                clamp       = c(0, Inf),
                                ...) {
 
+  # Every unit seeds R's generator itself; the session's state is put back
+  # when the run returns (.rng_state(), R/resample.R).
+  rng <- .rng_state()
+  on.exit(.rng_restore(rng), add = TRUE)
   if (is.character(model)) model <- get_model(model)
   stopifnot(inherits(model, "model_spec"), inherits(plan, "fold_plan"))
   if (!identical(model$input, "table")) {

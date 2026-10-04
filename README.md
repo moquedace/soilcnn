@@ -99,7 +99,8 @@ fit <- dsm_train(
   model       = "cnn",
   resampling  = spatial_cv(k = 5, block_size = "auto", buffer = "auto"),
   tune_length = 30,            # a budget, like caret's
-  n_seeds     = 3              # a claim without repetitions has no error bar
+  n_seeds     = 3,             # a claim without repetitions has no error bar
+  output_dir  = "outputs/tuning"   # required: nothing is written where nobody said
 )
 # What it did not have to be told, and read instead:
 #   the grid's windows    every window the store holds, alone and in pairs
@@ -158,11 +159,12 @@ fewer blocks of the **same** width.
 list_models()
 
 rf  <- dsm_train(data, model = "rf", resampling = plan,
-                 features = c("centre", "window_mean"))
-mlp <- dsm_train(data, model = "mlp", resampling = plan, features = "centre")
+                 features = c("centre", "window_mean"), output_dir = "outputs/tuning")
+mlp <- dsm_train(data, model = "mlp", resampling = plan, features = "centre",
+                 output_dir = "outputs/tuning")
 
 register_model(caret_spec("xgbTree"))    # ~230 methods, borrowed from caret
-xgb <- dsm_train(data, model = "xgbTree", resampling = plan)
+xgb <- dsm_train(data, model = "xgbTree", resampling = plan, output_dir = "outputs/tuning")
 ```
 
 Every family produces the same comparison table, so `summarise_resamples()`,

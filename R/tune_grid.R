@@ -226,7 +226,14 @@
 #' @export
 make_tune_grid <- function(tune_length = 20L, seed = NULL, fixed = list(),
                            windows = NULL, n_train = NULL) {
-  if (!is.null(seed)) set.seed(seed)
+  # Drawn under its own seed, the session's random numbers put back after
+  # (.rng_state(), R/resample.R): the same grid for the same seed, and the
+  # user's next draws where they were.
+  if (!is.null(seed)) {
+    rng <- .rng_state()
+    on.exit(.rng_restore(rng), add = TRUE)
+    set.seed(seed)
+  }
 
   space        <- .cnn_param_space
   list_params  <- c("window_sizes", "conv_channels")
