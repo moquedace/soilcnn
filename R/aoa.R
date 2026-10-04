@@ -65,6 +65,11 @@
 #'   deserves.
 #' @param seed     Draw seed for that sample.
 #' @return An object of class "di_reference".
+#' @examples
+#' set.seed(1)
+#' x_train <- matrix(rnorm(200), 100, 2)    # 100 training rows of 2 scaled predictors
+#' ref <- di_reference(x_train)
+#' ref
 #' @export
 di_reference <- function(x_train, weights = NULL, max_pairs = 2e6, seed = 42L) {
   x_train <- as.matrix(x_train)
@@ -194,6 +199,11 @@ di_reference <- function(x_train, weights = NULL, max_pairs = 2e6, seed = 42L) {
 #'   from each other on average.
 #' @param chunk Rows of `x` compared at a time. It bounds the memory a call
 #'   takes and does not change the result.
+#' @examples
+#' set.seed(1)
+#' x_train <- matrix(rnorm(200), 100, 2)    # 100 training rows of 2 scaled predictors
+#' ref <- di_reference(x_train)
+#' dissimilarity_index(ref, rbind(c(0, 0), c(4, 4)))   # near the data, and far from it
 #' @export
 dissimilarity_index <- function(ref, x, chunk = 2000L) {
   stopifnot(inherits(ref, "di_reference"))
@@ -219,6 +229,13 @@ dissimilarity_index <- function(ref, x, chunk = 2000L) {
 #'   fence and the value Meyer & Pebesma use.
 #' @return The threshold, with the cross-validated DI attached as "cv_di"
 #'   (`NA` for the rows never held out).
+#' @examples
+#' set.seed(1)
+#' x_train <- matrix(rnorm(200), 100, 2)    # 100 training rows of 2 scaled predictors
+#' ref <- di_reference(x_train)
+#' th <- aoa_threshold(ref, folds = rep(1:5, 20))
+#' as.numeric(th)                 # the threshold
+#' summary(attr(th, "cv_di"))     # the cross-validated DI it was taken from
 #' @export
 aoa_threshold <- function(ref, folds, k_iqr = 1.5) {
   stopifnot(inherits(ref, "di_reference"))
@@ -271,6 +288,12 @@ aoa_threshold <- function(ref, folds, k_iqr = 1.5) {
 #' @param di        From dissimilarity_index().
 #' @param threshold From aoa_threshold().
 #' @return Logical vector. TRUE means the cross-validated error applies here.
+#' @examples
+#' set.seed(1)
+#' x_train <- matrix(rnorm(200), 100, 2)    # 100 training rows of 2 scaled predictors
+#' ref <- di_reference(x_train)
+#' threshold <- aoa_threshold(ref, folds = rep(1:5, 20))
+#' inside_aoa(dissimilarity_index(ref, rbind(c(0, 0), c(4, 4))), threshold)
 #' @export
 inside_aoa <- function(di, threshold) as.numeric(di) <= as.numeric(threshold)
 
@@ -283,6 +306,12 @@ inside_aoa <- function(di, threshold) as.numeric(di) <= as.numeric(threshold)
 #' @param threshold From aoa_threshold().
 #' @param label     What the cells are, for the report.
 #' @return The logical mask of the cells inside (inside_aoa()), invisibly.
+#' @examples
+#' set.seed(1)
+#' x_train <- matrix(rnorm(200), 100, 2)    # 100 training rows of 2 scaled predictors
+#' ref <- di_reference(x_train)
+#' threshold <- aoa_threshold(ref, folds = rep(1:5, 20))
+#' print_aoa(dissimilarity_index(ref, matrix(rnorm(400, sd = 1.5), 200, 2)), threshold)
 #' @export
 print_aoa <- function(di, threshold, label = "prediction area") {
   inside <- inside_aoa(di, threshold)
@@ -354,6 +383,24 @@ print.di_reference <- function(x, ...) {
 #'   Pebesma 2021).
 #' @return An `aoa_reference`: the DI reference, the AOA threshold, and each
 #'   used point's fold and cross-validated DI (`NA` for a point never held out).
+#' @examples
+#' ex <- example_landscape()
+#' store <- dsm_prepare(ex$profiles, target = "soc_stock", raster_dir = ex$raster_dir,
+#'                      windows = c(3, 7), out_dir = file.path(tempdir(), "landscape"),
+#'                      percentage = "^clay_pct$", transform = "log1p", n_cores = 1,
+#'                      overwrite = TRUE, verbose = FALSE)
+#' data <- dsm_load(store, windows = integer(0), verbose = FALSE)
+#' predictors <- as.character(data$store$predictors)
+#' qc <- utils::read.csv2(file.path(data$patch_dir, "qc_table.csv"))
+#' qc <- qc[match(predictors, qc$predictor), ]
+#' # a fitted model's scaling is its predictor_scaling.csv; here, the profiles' own
+#' x <- as.matrix(data$points[, predictors])
+#' scaling <- data.frame(predictor = predictors, center = colMeans(x),
+#'                       scale = apply(x, 2, sd))
+#' plan <- spatial_folds(data$store$meta, k = 3, block_size = 0.05)
+#' aref <- aoa_reference(data$points, predictors, qc, scaling, plan)
+#' as.numeric(aref$threshold)     # beyond it, the cross-validated error does not apply
+#' head(aref$cv)
 #' @export
 aoa_reference <- function(points, predictors, qc_table, scaling, plan, weights = NULL) {
   stopifnot(inherits(plan, "fold_plan"))
@@ -407,6 +454,23 @@ aoa_reference <- function(points, predictors, qc_table, scaling, plan, weights =
 #' @param aref   From aoa_reference().
 #' @param values Matrix or data frame of raw values, columns in the model's order.
 #' @return The DI of each row; NA where a channel is missing after QC.
+#' @examples
+#' ex <- example_landscape()
+#' store <- dsm_prepare(ex$profiles, target = "soc_stock", raster_dir = ex$raster_dir,
+#'                      windows = c(3, 7), out_dir = file.path(tempdir(), "landscape"),
+#'                      percentage = "^clay_pct$", transform = "log1p", n_cores = 1,
+#'                      overwrite = TRUE, verbose = FALSE)
+#' data <- dsm_load(store, windows = integer(0), verbose = FALSE)
+#' predictors <- as.character(data$store$predictors)
+#' qc <- utils::read.csv2(file.path(data$patch_dir, "qc_table.csv"))
+#' qc <- qc[match(predictors, qc$predictor), ]
+#' # a fitted model's scaling is its predictor_scaling.csv; here, the profiles' own
+#' x <- as.matrix(data$points[, predictors])
+#' scaling <- data.frame(predictor = predictors, center = colMeans(x),
+#'                       scale = apply(x, 2, sd))
+#' plan <- spatial_folds(data$store$meta, k = 3, block_size = 0.05)
+#' aref <- aoa_reference(data$points, predictors, qc, scaling, plan)
+#' aoa_di(aref, data$points[1:5, predictors])
 #' @export
 aoa_di <- function(aref, values) {
   stopifnot(inherits(aref, "aoa_reference"))

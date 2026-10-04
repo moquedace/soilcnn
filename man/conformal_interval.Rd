@@ -25,3 +25,11 @@ A tibble: pred, lower, upper and width, one row per prediction.
 \description{
 Turn predictions into intervals.
 }
+\examples{
+set.seed(1)
+obs  <- rlnorm(300, 3, 0.4)
+pred <- obs * exp(rnorm(300, 0, 0.25))
+cal  <- conformal_calibrate(obs[1:150], pred[1:150], alpha = 0.1)
+iv <- conformal_interval(cal, pred[151:300], lower_limit = 0)
+head(iv)
+}

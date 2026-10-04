@@ -39,3 +39,6 @@ prediction with the whole patch made each class, less the prediction as it
 is. That is a partial dependence, which asks about a class also where it
 does not occur; the number of points in each class says where it does.
 }
+\examples{
+ale_effect(bins = 10)
+}

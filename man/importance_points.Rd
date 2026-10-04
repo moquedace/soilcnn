@@ -29,3 +29,12 @@ columns, inside \code{extent}, where the first channel has a value. With
 250 m, one point every 10 km, for a region. The points carry their grid, so
 \code{\link[=importance_map]{importance_map()}} can lay the values back on it.
 }
+\examples{
+\dontshow{if (torch::torch_is_installed()) withAutoprint(\{ # examplesIf}
+\donttest{
+run <- example_run()    # a small fitted run, made once a session
+pts <- importance_points(run$final, run$data, every = 4)   # every 4th cell
+nrow(pts)
+}
+\dontshow{\}) # examplesIf}
+}

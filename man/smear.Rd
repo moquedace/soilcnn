@@ -30,3 +30,12 @@ median.
 \description{
 The conditional MEAN surface, from transform-space predictions.
 }
+\examples{
+set.seed(1)
+f <- runif(500, 2, 5)                    # predictions, in log1p space
+z <- f + rnorm(500, 0, 0.4)              # what was observed, in log1p space
+cal <- smearing_factor(z, f)
+expm1(c(2, 3, 4))                          # the median surface
+smear(c(2, 3, 4), cal)                     # the mean surface, by Duan's factor
+smear(c(2, 3, 4), cal, method = "level")   # by a factor that follows the level
+}

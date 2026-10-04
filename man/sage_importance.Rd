@@ -46,3 +46,6 @@ loss of the mean prediction -- no variable known -- less the model's own.
 Exact over every coalition up to 14 variables, by sampled permutations up
 to 40: meant for a few variables -- give \code{groups} themes.
 }
+\examples{
+sage_importance(background = 8, max_points = 100)
+}

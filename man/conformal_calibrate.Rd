@@ -23,3 +23,10 @@ An object of class "conformal_cal".
 \description{
 Calibrate a conformal interval from held-out residuals.
 }
+\examples{
+set.seed(1)
+obs  <- rlnorm(300, 3, 0.4)
+pred <- obs * exp(rnorm(300, 0, 0.25))
+cal  <- conformal_calibrate(obs[1:150], pred[1:150], alpha = 0.1)
+cal
+}

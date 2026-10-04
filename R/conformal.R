@@ -59,6 +59,12 @@
 #' @param difficulty Optional per-point difficulty score (e.g. the ensemble
 #'   spread). When given, intervals scale with it. Must be positive.
 #' @return An object of class "conformal_cal".
+#' @examples
+#' set.seed(1)
+#' obs  <- rlnorm(300, 3, 0.4)
+#' pred <- obs * exp(rnorm(300, 0, 0.25))
+#' cal  <- conformal_calibrate(obs[1:150], pred[1:150], alpha = 0.1)
+#' cal
 #' @export
 conformal_calibrate <- function(obs, pred, alpha = 0.1, difficulty = NULL) {
   stopifnot(length(obs) == length(pred))
@@ -116,6 +122,13 @@ conformal_calibrate <- function(obs, pred, alpha = 0.1, difficulty = NULL) {
 #'   bound at a physical limit can only INCREASE coverage, so the guarantee
 #'   survives it.
 #' @return A tibble: pred, lower, upper and width, one row per prediction.
+#' @examples
+#' set.seed(1)
+#' obs  <- rlnorm(300, 3, 0.4)
+#' pred <- obs * exp(rnorm(300, 0, 0.25))
+#' cal  <- conformal_calibrate(obs[1:150], pred[1:150], alpha = 0.1)
+#' iv <- conformal_interval(cal, pred[151:300], lower_limit = 0)
+#' head(iv)
 #' @export
 conformal_interval <- function(cal, pred, difficulty = NULL,
                                lower_limit = -Inf) {
@@ -173,6 +186,15 @@ picp <- function(obs, lower, upper) {
 #' @param group  Optional grouping (a spatial block, a region, a soil class).
 #' @param alpha  The nominal miscoverage, for the verdict.
 #' @return An object of class "picp_report".
+#' @examples
+#' set.seed(1)
+#' obs  <- rlnorm(300, 3, 0.4)
+#' pred <- obs * exp(rnorm(300, 0, 0.25))
+#' cal  <- conformal_calibrate(obs[1:150], pred[1:150], alpha = 0.1)
+#' iv <- conformal_interval(cal, pred[151:300], lower_limit = 0)
+#' # one width for every level: right on average, and by level?
+#' picp_report(obs[151:300], iv$lower, iv$upper, alpha = 0.1,
+#'             group = ifelse(pred[151:300] > median(pred), "high", "low"))
 #' @export
 picp_report <- function(obs, lower, upper, group = NULL, alpha = 0.1) {
   overall <- picp(obs, lower, upper)
@@ -284,6 +306,11 @@ print.conformal_cal <- function(x, ...) {
 #' @param difficulty Optional column name holding a difficulty score.
 #' @param group    Optional column name to break coverage down by.
 #' @return A picp_report over the pooled out-of-calibration points.
+#' @examples
+#' set.seed(1)
+#' pred_obs <- data.frame(fold = rep(1:5, each = 60), obs = rlnorm(300, 3, 0.4))
+#' pred_obs$pred <- pred_obs$obs * exp(rnorm(300, 0, 0.25))
+#' conformal_cv(pred_obs, alpha = 0.1)
 #' @export
 conformal_cv <- function(pred_obs, alpha = 0.1, difficulty = NULL,
                          group = NULL) {
@@ -370,6 +397,16 @@ conformal_cv <- function(pred_obs, alpha = 0.1, difficulty = NULL,
 #'   claim a certainty the data never gave.
 #' @param seed       Seed of the split.
 #' @return A `conformal_scaled` (also a `conformal_cal`).
+#' @examples
+#' set.seed(1)
+#' level <- runif(300, 1, 4)
+#' di    <- runif(300)                      # a dissimilarity index
+#' obs   <- exp(level + rnorm(300, 0, 0.1 + 0.3 * di))
+#' pred  <- exp(level)
+#' covariates <- data.frame(level = pred, di = di)
+#' cal <- conformal_scaled_calibrate(obs[1:200], pred[1:200], covariates[1:200, ],
+#'                                   alpha = 0.1)
+#' cal
 #' @export
 conformal_scaled_calibrate <- function(obs, pred, covariates, alpha = 0.1,
                                        fit_frac = 0.5, floor_frac = 0.05,
@@ -441,6 +478,18 @@ conformal_scaled_calibrate <- function(obs, pred, covariates, alpha = 0.1,
 #'   way as the calibration points' was.
 #' @param lower_limit Floor of the lower bound (0 for a stock).
 #' @return A tibble: pred, lower, upper and width, one row per prediction.
+#' @examples
+#' set.seed(1)
+#' level <- runif(300, 1, 4)
+#' di    <- runif(300)                      # a dissimilarity index
+#' obs   <- exp(level + rnorm(300, 0, 0.1 + 0.3 * di))
+#' pred  <- exp(level)
+#' covariates <- data.frame(level = pred, di = di)
+#' cal <- conformal_scaled_calibrate(obs[1:200], pred[1:200], covariates[1:200, ],
+#'                                   alpha = 0.1)
+#' iv <- conformal_scaled_interval(cal, pred[201:300], covariates[201:300, ],
+#'                                 lower_limit = 0)
+#' picp_report(obs[201:300], iv$lower, iv$upper)
 #' @export
 conformal_scaled_interval <- function(cal, pred, covariates, lower_limit = -Inf) {
   stopifnot(inherits(cal, "conformal_scaled"))
@@ -512,6 +561,13 @@ print.conformal_scaled <- function(x, ...) {
 #' @param role      Which role to keep. "validation" is the point of this.
 #' @return A tibble with sample_id, obs, pred (the seed ensemble's median), and
 #'   n_seeds; or NULL when the run wrote no usable predictions.
+#' @examplesIf torch::torch_is_installed()
+#' \donttest{
+#' run <- example_run()    # a small fitted run, made once a session
+#' res <- cv_residuals(run$fit$run_dir, run$final$selected_config_ids)
+#' head(res)
+#' conformal_calibrate(res$obs, res$pred, alpha = 0.1)
+#' }
 #' @export
 cv_residuals <- function(run_dir, config_id, role = "validation") {
   pred_dir <- file.path(run_dir, "predictions")
@@ -572,6 +628,14 @@ cv_residuals <- function(run_dir, config_id, role = "validation") {
 #'   configuration; FALSE says why and returns NULL.
 #' @return What cv_residuals() returns, with the run's own config_id attached
 #'   as attribute "config_id".
+#' @examplesIf torch::torch_is_installed()
+#' \donttest{
+#' run <- example_run()    # a small fitted run, made once a session
+#' grid <- readRDS(file.path(run$fit$run_dir, "tune_grid.rds"))
+#' cfg  <- grid[grid$config_id == run$final$selected_config_ids, ]
+#' # found by its hyperparameters, so the same call reads any other tuning run
+#' head(cv_residuals_for_config(run$fit$run_dir, cfg))
+#' }
 #' @export
 cv_residuals_for_config <- function(run_dir, cfg_row, required = TRUE) {
   fail <- function(reason) {

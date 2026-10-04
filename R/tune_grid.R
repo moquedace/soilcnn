@@ -223,6 +223,8 @@
 #'
 #' @return A tibble with one row per configuration.
 #'   window_sizes and conv_channels are stored as list-columns.
+#' @examples
+#' make_tune_grid(tune_length = 3, seed = 1, windows = c(3, 7))
 #' @export
 make_tune_grid <- function(tune_length = 20L, seed = NULL, fixed = list(),
                            windows = NULL, n_train = NULL) {

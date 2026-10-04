@@ -98,3 +98,14 @@ categorical (see \code{\link[=importance_groups]{importance_groups()}}), or a gr
 Before anything is perturbed, each model's own score is computed again and
 must reproduce the one its run wrote; if it does not, nothing is measured.
 }
+\examples{
+\dontshow{if (torch::torch_is_installed()) withAutoprint(\{ # examplesIf}
+\donttest{
+run <- example_run()    # a small fitted run, made once a session
+imp <- dsm_importance(run$final, run$data, permutation_importance(draws = 2),
+                      verbose = FALSE)
+imp
+plot(imp)
+}
+\dontshow{\}) # examplesIf}
+}

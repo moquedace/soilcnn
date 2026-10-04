@@ -34,3 +34,14 @@ the classes of a categorical named outright, or themes (climate, relief,
 vegetation...), which answers how much the model relies on each theme as a
 block -- the way to read many correlated variables.
 }
+\examples{
+ex <- example_landscape()
+store <- dsm_prepare(ex$profiles, target = "soc_stock", raster_dir = ex$raster_dir,
+                     windows = c(3, 7), out_dir = file.path(tempdir(), "landscape"),
+                     percentage = "^clay_pct$", transform = "log1p", n_cores = 1,
+                     overwrite = TRUE, verbose = FALSE)
+data <- dsm_load(store, windows = integer(0), verbose = FALSE)
+importance_groups(data)          # the geology dummies, found as one variable
+themes <- data.frame(channel = c("temperature", "precipitation"), variable = "climate")
+importance_groups(data, themes)  # and two channels made one by you
+}

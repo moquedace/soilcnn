@@ -23,3 +23,16 @@ A tibble: pred, lower, upper and width, one row per prediction.
 \description{
 Turn predictions into intervals with a fitted scale.
 }
+\examples{
+set.seed(1)
+level <- runif(300, 1, 4)
+di    <- runif(300)                      # a dissimilarity index
+obs   <- exp(level + rnorm(300, 0, 0.1 + 0.3 * di))
+pred  <- exp(level)
+covariates <- data.frame(level = pred, di = di)
+cal <- conformal_scaled_calibrate(obs[1:200], pred[1:200], covariates[1:200, ],
+                                  alpha = 0.1)
+iv <- conformal_scaled_interval(cal, pred[201:300], covariates[201:300, ],
+                                lower_limit = 0)
+picp_report(obs[201:300], iv$lower, iv$upper)
+}

@@ -22,3 +22,9 @@ from each other on average.
 \description{
 The dissimilarity index of new data.
 }
+\examples{
+set.seed(1)
+x_train <- matrix(rnorm(200), 100, 2)    # 100 training rows of 2 scaled predictors
+ref <- di_reference(x_train)
+dissimilarity_index(ref, rbind(c(0, 0), c(4, 4)))   # near the data, and far from it
+}

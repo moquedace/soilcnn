@@ -99,6 +99,12 @@ project_xy <- function(x, y, crs = 4326,
 #' @param ...        Passed to CAST::knndm() -- `maxp`, `clustering`,
 #'   `samplesize`, `modeldomain`, `space`.
 #' @return A fold_plan.
+#' @examplesIf requireNamespace("CAST", quietly = TRUE) && requireNamespace("sf", quietly = TRUE)
+#' ex <- example_landscape()
+#' meta <- data.frame(sample_id = seq_len(nrow(ex$profiles)), x = ex$profiles$x,
+#'                    y = ex$profiles$y)
+#' elevation <- terra::rast(file.path(ex$raster_dir, "elevation.tif"))
+#' knndm_folds(meta, k = 3, predpoints = prediction_sample(elevation, size = 500))
 #' @export
 knndm_folds <- function(meta, k = 5L, predpoints = NULL, test_ids = NULL,
                         hold_out_test = FALSE, crs = 4326,
@@ -263,6 +269,10 @@ knndm_folds <- function(meta, k = 5L, predpoints = NULL, test_ids = NULL,
 #'   -- the sea around a continent -- do not count: when too few land on
 #'   data, the sample is drawn again, denser.
 #' @return A data frame with x and y, in the raster's own CRS.
+#' @examples
+#' ex <- example_landscape()
+#' elevation <- terra::rast(file.path(ex$raster_dir, "elevation.tif"))
+#' head(prediction_sample(elevation, size = 200))
 #' @export
 prediction_sample <- function(raster, size = 5000L) {
   if (!requireNamespace("terra", quietly = TRUE)) {

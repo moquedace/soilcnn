@@ -22,3 +22,8 @@ A few thousand regularly spaced pixels describe that well enough -- the
 method compares DISTRIBUTIONS of distances, and a regular sample estimates
 one cheaply. A random sample would work too and is noisier for the same size.
 }
+\examples{
+ex <- example_landscape()
+elevation <- terra::rast(file.path(ex$raster_dir, "elevation.tif"))
+head(prediction_sample(elevation, size = 200))
+}

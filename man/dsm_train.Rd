@@ -120,3 +120,19 @@ The runner's result, plus the plan and the data it used.
 \description{
 Fit and tune a model over a resampling plan.
 }
+\examples{
+\dontshow{if (torch::torch_is_installed()) withAutoprint(\{ # examplesIf}
+\donttest{
+ex <- example_landscape()
+store <- dsm_prepare(ex$profiles, target = "soc_stock", raster_dir = ex$raster_dir,
+                     windows = c(3, 7), out_dir = file.path(tempdir(), "landscape"),
+                     percentage = "^clay_pct$", transform = "log1p", n_cores = 1,
+                     overwrite = TRUE, verbose = FALSE)
+data <- dsm_load(store, verbose = FALSE)
+fit <- dsm_train(data, resampling = spatial_cv(k = 2, block_size = 0.05, test_frac = 0.2),
+                 tune_length = 2, n_seeds = 1, output_dir = tempdir(),
+                 in_session = TRUE, n_cores = 2, n_epochs = 5, verbose = FALSE)
+fit
+}
+\dontshow{\}) # examplesIf}
+}

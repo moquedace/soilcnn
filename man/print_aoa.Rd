@@ -20,3 +20,10 @@ The logical mask of the cells inside (inside_aoa()), invisibly.
 Prints the threshold, the share of cells inside it and the quantiles of
 the DI, and says so plainly when less than half the map is inside.
 }
+\examples{
+set.seed(1)
+x_train <- matrix(rnorm(200), 100, 2)    # 100 training rows of 2 scaled predictors
+ref <- di_reference(x_train)
+threshold <- aoa_threshold(ref, folds = rep(1:5, 20))
+print_aoa(dissimilarity_index(ref, matrix(rnorm(400, sd = 1.5), 200, 2)), threshold)
+}

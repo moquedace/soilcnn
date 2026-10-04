@@ -123,3 +123,11 @@ A \code{dsm_store}, which dsm_load() accepts directly.
 \description{
 Build a patch store from a point table and a folder of aligned rasters.
 }
+\examples{
+ex <- example_landscape()
+store <- dsm_prepare(ex$profiles, target = "soc_stock", raster_dir = ex$raster_dir,
+                     windows = c(3, 7), out_dir = file.path(tempdir(), "landscape"),
+                     percentage = "^clay_pct$", transform = "log1p", n_cores = 1,
+                     overwrite = TRUE, verbose = FALSE)
+store
+}

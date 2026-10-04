@@ -26,3 +26,13 @@ A \code{fold_plan}, already checked with check_fold_plan().
 Exported because a plan is worth looking at before spending a night on it:
 \verb{plan <- resolve_resampling(spatial_cv(k = 5), data); print(plan)}.
 }
+\examples{
+ex <- example_landscape()
+store <- dsm_prepare(ex$profiles, target = "soc_stock", raster_dir = ex$raster_dir,
+                     windows = c(3, 7), out_dir = file.path(tempdir(), "landscape"),
+                     percentage = "^clay_pct$", transform = "log1p", n_cores = 1,
+                     overwrite = TRUE, verbose = FALSE)
+data <- dsm_load(store, windows = integer(0), verbose = FALSE)
+resolve_resampling(spatial_cv(k = 3, block_size = 0.05, test_frac = 0.2), data,
+                   windows = c(3, 7))
+}

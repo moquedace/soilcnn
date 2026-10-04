@@ -29,3 +29,9 @@ For when the unit that must not leak is named rather than geometric -- a
 survey campaign, a country, a laboratory, a soil map unit. With
 k = number of groups this is leave-one-group-out.
 }
+\examples{
+ex <- example_landscape()
+meta <- data.frame(sample_id = seq_len(nrow(ex$profiles)), x = ex$profiles$x,
+                   y = ex$profiles$y)
+region_folds(meta, group = ex$profiles$survey, k = 3)
+}

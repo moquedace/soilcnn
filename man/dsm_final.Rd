@@ -86,3 +86,14 @@ A \code{dsm_final}, printed with the report.
 \description{
 Refit the configuration a tuning run selects, under N seeds.
 }
+\examples{
+\dontshow{if (torch::torch_is_installed()) withAutoprint(\{ # examplesIf}
+\donttest{
+run <- example_run()    # a small fitted run, made once a session
+final <- dsm_final(run$fit, seeds = 2, n_cores = 1, threads_per_unit = 1,
+                   training = list(n_epochs = 10, patience = 5), output_dir = tempdir(),
+                   run_id = "final_example", verbose = FALSE)
+final
+}
+\dontshow{\}) # examplesIf}
+}

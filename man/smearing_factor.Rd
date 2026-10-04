@@ -32,3 +32,10 @@ An object of class "smearing_cal".
 \description{
 The smearing factor, from held-out residuals in transform space.
 }
+\examples{
+set.seed(1)
+f <- runif(500, 2, 5)                    # predictions, in log1p space
+z <- f + rnorm(500, 0, 0.4)              # what was observed, in log1p space
+cal <- smearing_factor(z, f)
+cal
+}

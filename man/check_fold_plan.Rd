@@ -25,3 +25,10 @@ and that across the folds every pooled row is validated exactly once -- the
 property that makes the k metrics a partition of the pool rather than an
 arbitrary set of overlapping subsets.
 }
+\examples{
+ex <- example_landscape()
+meta <- data.frame(sample_id = seq_len(nrow(ex$profiles)), x = ex$profiles$x,
+                   y = ex$profiles$y)
+plan <- spatial_folds(meta, k = 3, test_frac = 0.2, block_size = 0.05)
+check_fold_plan(plan, meta)
+}

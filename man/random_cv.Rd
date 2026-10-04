@@ -26,3 +26,6 @@ Right when the rows really are independent, and the cleanest way to MEASURE
 what geography is worth: run it against spatial_cv() on the same points and
 the gap is the spatial optimism.
 }
+\examples{
+random_cv(k = 10)
+}

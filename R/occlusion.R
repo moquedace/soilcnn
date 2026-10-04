@@ -372,6 +372,12 @@ print.spatial_occlusion <- function(x, ...) {
 #'   pixels hidden, the CCC and MAE without them and the change in CCC, and
 #'   `baseline_ccc`, the unit's own. Printed with what it does and does not
 #'   mean.
+#' @examplesIf torch::torch_is_installed()
+#' \donttest{
+#' run <- example_run()    # a small fitted run, made once a session
+#' occlusion_report(run$fit$run_dir, run$data, config_id = run$final$selected_config_ids,
+#'                  device = torch::torch_device("cpu"))
+#' }
 #' @export
 occlusion_report <- function(run_dir, data, config_id, fold = 1L, seed_i = 1L,
                              role = "validation", transform = NULL,

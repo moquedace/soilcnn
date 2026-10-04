@@ -38,6 +38,10 @@
 #'
 #' @param obs,pred Numeric vectors of the same length.
 #' @return A single numeric, or NA when fewer than two finite pairs remain.
+#' @examples
+#' obs <- c(10, 20, 30, 40)
+#' ccc(obs, obs)        # 1: perfect agreement
+#' ccc(obs, obs + 5)    # below 1: an offset is disagreement too, though r is 1
 #' @export
 ccc <- function(obs, pred) {
   keep <- is.finite(obs) & is.finite(pred)
@@ -65,6 +69,10 @@ ccc <- function(obs, pred) {
 #' @param pred Numeric vector of predicted values (same length as obs).
 #' @return A one-row tibble with columns: n, ccc, r2, mae, nse, rmse, rpd,
 #'   mqi, bias (signed, native units) and bias_pct (relative to mean(obs)).
+#' @examples
+#' obs  <- c(12, 25, 31, 48, 60)
+#' pred <- c(15, 22, 35, 40, 66)
+#' calc_metrics(obs, pred)
 #' @export
 calc_metrics <- function(obs, pred) {
   obs  <- as.numeric(obs)

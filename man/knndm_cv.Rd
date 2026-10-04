@@ -57,3 +57,8 @@ prediction will not face. That is the property blocks cannot have.
 Needs the CAST and sf packages. See R/knndm.R for the projection question,
 which is not optional on lon/lat data.
 }
+\examples{
+ex <- example_landscape()
+elevation <- terra::rast(file.path(ex$raster_dir, "elevation.tif"))
+knndm_cv(k = 5, predpoints = prediction_sample(elevation, size = 500))
+}

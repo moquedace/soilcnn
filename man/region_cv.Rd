@@ -22,3 +22,7 @@ A \code{resample_spec}, as spatial_cv() returns.
 \description{
 Leave-region-out, on a grouping that already exists (biome, catchment, ...).
 }
+\examples{
+ex <- example_landscape()
+region_cv(group = ex$profiles$survey)
+}

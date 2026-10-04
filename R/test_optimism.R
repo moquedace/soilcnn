@@ -63,6 +63,11 @@
 #' @param metric    The selection metric.
 #' @param note      Anything a reader would need to reconstruct the decision.
 #' @return The selection record, invisibly.
+#' @examples
+#' run_dir <- file.path(tempdir(), "tuning_example")
+#' freeze_selection(run_dir, "cfg_002", note = "one_se on the cross-validation")
+#' # the same choice again is accepted; another is refused
+#' try(freeze_selection(run_dir, "cfg_005"))
 #' @export
 freeze_selection <- function(run_dir, config_id, rule = "one_se",
                              metric = "val_ccc", note = NA_character_) {
@@ -127,6 +132,12 @@ freeze_selection <- function(run_dir, config_id, rule = "one_se",
 #' @param allow_unfrozen Escape hatch for teaching or for a run whose selection
 #'   was recorded elsewhere. Not a default, and the report says it was used.
 #' @return An object of class "test_optimism".
+#' @examplesIf torch::torch_is_installed()
+#' \donttest{
+#' run <- example_run()    # a small fitted run, made once a session
+#' # every configuration on the test set, once the choice is frozen
+#' score_test_grid(run$fit$run_dir, run$data, device = torch::torch_device("cpu"))
+#' }
 #' @export
 score_test_grid <- function(run_dir, data, transform = NULL, device,
                             config_ids = NULL, allow_unfrozen = FALSE) {

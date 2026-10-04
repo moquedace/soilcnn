@@ -29,3 +29,6 @@ A \code{resample_spec}, as spatial_cv() returns.
 \description{
 A single train/validation/test split.
 }
+\examples{
+holdout_cv(validation_frac = 0.2)
+}

@@ -55,3 +55,7 @@ frequency, so \code{fill = "mean"} gives every point the average landscape,
 flat. A large drop under it with a small one under permutation says the
 model reacts to the input being unusual rather than to its content.
 }
+\examples{
+permutation_importance()
+permutation_importance(draws = 3, within = 0.05)   # donors from the same 0.05 block
+}

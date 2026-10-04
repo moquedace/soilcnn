@@ -18,3 +18,8 @@ mqi, bias (signed, native units) and bias_pct (relative to mean(obs)).
 \description{
 Compute all regression metrics for one obs/pred pair.
 }
+\examples{
+obs  <- c(12, 25, 31, 48, 60)
+pred <- c(15, 22, 35, 40, 66)
+calc_metrics(obs, pred)
+}

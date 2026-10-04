@@ -26,3 +26,12 @@ training point, and sharing patch pixels at each window. Deliberately the
 SAME criterion, so a number here can be compared with a number there rather
 than being a second, incompatible notion of leakage.
 }
+\examples{
+ex <- example_landscape()
+meta <- data.frame(sample_id = seq_len(nrow(ex$profiles)), x = ex$profiles$x,
+                   y = ex$profiles$y)
+blocks   <- spatial_folds(meta, k = 3, block_size = 0.05)
+buffered <- spatial_folds(meta, k = 3, block_size = 0.05, buffer = 7 * 0.0025)
+fold_leakage_report(blocks, meta, cell_size = 0.0025, windows = c(3, 7))
+fold_leakage_report(buffered, meta, cell_size = 0.0025, windows = c(3, 7))
+}

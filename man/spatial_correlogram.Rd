@@ -35,3 +35,15 @@ the distance where it falls to zero is the scale blocks should exceed. For
 two models compared at the same points, \code{value} is the difference of their
 errors -- the quantity whose mean is compared.
 }
+\examples{
+ex <- example_landscape()
+obs <- ex$profiles$soc_stock
+set.seed(1)
+pred_a <- obs * exp(rnorm(length(obs), 0, 0.20))   # two models' predictions
+pred_b <- obs * exp(rnorm(length(obs), 0, 0.25))
+d <- abs(pred_a - obs) - abs(pred_b - obs)    # what a comparison of the two compares
+cg <- spatial_correlogram(ex$profiles$x, ex$profiles$y, d,
+                          breaks_km = c(0, 1, 2, 5, 10, 20))
+cg
+plot(cg)
+}

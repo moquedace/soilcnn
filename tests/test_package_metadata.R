@@ -32,6 +32,8 @@
 #  10. every exported function that scores a store's predictions defaults to
 #      the store's own inverse transform
 #  11. .Rbuildignore keeps the user's directories out and the package in
+#  12. every export has an example, and an example that needs torch is
+#      guarded by @examplesIf torch::torch_is_installed()
 #
 # Run: source("<package root>/tests/test_package_metadata.R")
 
@@ -217,7 +219,48 @@ package_parts <- c("DESCRIPTION", "NAMESPACE", "LICENSE", "R", "man", "vignettes
 ok["buildignore_keeps_the_user_parts_out"] <- all(vapply(user_parts, kept_out, logical(1)))
 ok["buildignore_keeps_the_package_in"] <- !any(vapply(package_parts, kept_out, logical(1)))
 
+# ── 12. every export has an example; one that needs torch asks for it ────────
+# CRAN runs every example, on machines that have the torch package but not
+# the libtorch it downloads at first use: an example that trains, or calls
+# torch, fails there and nowhere else unless it is guarded. The example is
+# read from the roxygen block of the export, from its @examples tag to the
+# next tag; comments do not count as calls.
+export_blocks <- unlist(lapply(r_files, function(f) {
+  ln <- readLines(f, warn = FALSE)
+  lapply(which(trimws(ln) == "#' @export"), function(i) {
+    j <- i + 1L
+    while (j <= length(ln) && grepl("^\\s*#", ln[j])) j <- j + 1L
+    s <- i
+    while (s > 1L && startsWith(ln[s - 1L], "#'")) s <- s - 1L
+    list(name  = sub("^([A-Za-z_.][A-Za-z0-9_.]*)\\s*<-\\s*function.*$", "\\1", ln[j]),
+         block = ln[s:i])
+  })
+}), recursive = FALSE)
+export_blocks <- Filter(function(b) b$name %in% exported, export_blocks)
+example_of <- function(block) {
+  at <- grep("^#' @examples", block)
+  if (length(at) != 1L) return(NULL)
+  tags <- grep("^#' @", block)
+  end  <- min(c(tags[tags > at], length(block) + 1L))
+  list(tag = block[at], code = sub("^#' ?", "", block[seq_len(end - at - 1L) + at]))
+}
+examples <- lapply(export_blocks, function(b) example_of(b$block))
+names(examples) <- vapply(export_blocks, `[[`, "", "name")
+no_example <- setdiff(exported, names(examples)[!vapply(examples, is.null, logical(1))])
+guarded <- vapply(examples, function(e)
+  !is.null(e) && startsWith(e$tag, "#' @examplesIf torch::torch_is_installed()"), logical(1))
+needs_torch <- vapply(examples, function(e)
+  !is.null(e) && any(grepl("example_run\\(|torch::|dsm_train\\(", sub("#.*$", "", e$code))),
+  logical(1))
+unguarded <- names(examples)[needs_torch & !guarded]
+ok["every_export_has_an_example"]    <- length(no_example) == 0L
+ok["every_torch_example_is_guarded"] <- length(unguarded) == 0L
+if (length(no_example)) cat("  without an example       : ", paste(no_example, collapse = ", "), "\n", sep = "")
+if (length(unguarded))  cat("  torch, unguarded         : ", paste(unguarded, collapse = ", "), "\n", sep = "")
+
 cat("  imports declared/used    : ", length(imports), " / ", sum(imports %in% used), "\n", sep = "")
 cat("  exports, S3 methods      : ", length(exported), ", ", length(registered), "\n", sep = "")
+cat("  examples, torch-guarded  : ", sum(!vapply(examples, is.null, logical(1))), ", ",
+    sum(guarded), "\n", sep = "")
 
 .report(ok, "test_package_metadata")

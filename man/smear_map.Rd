@@ -29,7 +29,15 @@ temporary files.}
 A SpatRaster: the conditional mean, cell by cell.
 }
 \description{
-The conditional mean is \code{exp(z) S(z) - 1} of the median \code{z} in transform
+The conditional mean is \verb{exp(z) S(z) - 1} of the median \code{z} in transform
 space, so a mean map by any of \code{\link[=smear]{smear()}}'s factors comes from the median
 map alone, cell by cell, without running the network again.
+}
+\examples{
+set.seed(1)
+f <- runif(500, 2, 5)                    # predictions, in log1p space
+z <- f + rnorm(500, 0, 0.4)              # what was observed, in log1p space
+cal <- smearing_factor(z, f)
+median_map <- terra::rast(nrows = 10, ncols = 10, vals = expm1(runif(100, 2, 5)))
+smear_map(median_map, cal)
 }

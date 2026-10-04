@@ -319,6 +319,13 @@ fcn_predict_strip <- function(model, x_strip, centres, engine = c("fcn", "patch"
 #'   final run's stored predictions (see above). A failure stops the map.
 #' @param verbose Report progress, and print the result.
 #' @return A `dsm_prediction`, printed.
+#' @examplesIf torch::torch_is_installed()
+#' \donttest{
+#' run <- example_run()    # a small fitted run, made once a session
+#' map <- dsm_predict(run$final, run$data, output_dir = tempdir(), run_id = "map_example",
+#'                    n_cores = 1, threads_per_worker = 1, verbose = FALSE)
+#' map
+#' }
 #' @export
 dsm_predict <- function(final, data, rasters = NULL, qc_table = NULL, extent = NULL,
                         config = NULL, calibration = NULL, aoa_weights = NULL,

@@ -54,3 +54,6 @@ centre, and a network can lean on the rim and learn nothing the centre would
 not have told it. Ring d holds 8d pixels, so the table gives the cost per
 pixel beside the total: a wider ring costs more for its area alone.
 }
+\examples{
+context_importance(by = "ring")
+}

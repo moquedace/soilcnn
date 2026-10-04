@@ -28,3 +28,15 @@ folds, the spatial design against the random one -- by what each perturbed
 variable that keeps its importance within blocks discriminates locally; one
 that loses it carries a regional gradient.
 }
+\examples{
+\dontshow{if (torch::torch_is_installed()) withAutoprint(\{ # examplesIf}
+\donttest{
+run <- example_run()    # a small fitted run, made once a session
+perm <- dsm_importance(run$final, run$data, permutation_importance(draws = 2),
+                       verbose = FALSE)
+shap <- dsm_importance(run$final, run$data, shap_importance(samples = 20, background = 20),
+                       verbose = FALSE)
+compare_importance(permutation = perm, shap = shap)
+}
+\dontshow{\}) # examplesIf}
+}

@@ -32,3 +32,12 @@ is on disk, re-assembling the seeds the way P3 proved dsm_final() does,
 and changes nothing that is there: it ADDS final_report.md and
 selected_hyperparameters.csv to the run directory.
 }
+\examples{
+\dontshow{if (torch::torch_is_installed()) withAutoprint(\{ # examplesIf}
+\donttest{
+run <- example_run()    # a small fitted run, made once a session
+# the declaration of a final run, written from what is on disk
+dsm_report_final(run$final$run_dir, run$fit$run_dir)
+}
+\dontshow{\}) # examplesIf}
+}

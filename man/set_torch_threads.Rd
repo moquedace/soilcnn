@@ -24,3 +24,15 @@ torch call gets.
 The interop pool can be sized once per session, before torch first runs
 work in parallel; later calls leave it as it is and say so once.
 }
+\examples{
+\dontshow{if (torch::torch_is_installed()) withAutoprint(\{ # examplesIf}
+before <- Sys.getenv(c("OMP_NUM_THREADS", "MKL_NUM_THREADS"), unset = NA)
+n <- torch::torch_get_num_threads()
+set_torch_threads(2)
+torch::torch_get_num_threads()
+# the session as it was: torch's threads, and the two variables set here
+torch::torch_set_num_threads(n)
+Sys.unsetenv(names(before)[is.na(before)])
+if (any(!is.na(before))) do.call(Sys.setenv, as.list(before[!is.na(before)]))
+\dontshow{\}) # examplesIf}
+}

@@ -19,3 +19,12 @@ name in the same session, and the results carry no mark of which ran.}
 \description{
 Add a model to the registry.
 }
+\examples{
+mean_only <- model_spec(
+  "mean_only", input = "table",
+  fit = function(x, y, cfg, ...) list(mu = mean(y)),
+  predict = function(object, x, ...) rep(object$mu, nrow(x)),
+  description = "the training mean: a floor every model must beat")
+register_model(mean_only, overwrite = TRUE)
+list_models()      # dsm_train(data, model = "mean_only", ...) now fits it
+}

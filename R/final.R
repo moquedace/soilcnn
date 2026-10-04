@@ -129,6 +129,14 @@
 #'   is a directory dsm_final() did not start.
 #' @param verbose    Report progress, and print the result.
 #' @return A `dsm_final`, printed with the report.
+#' @examplesIf torch::torch_is_installed()
+#' \donttest{
+#' run <- example_run()    # a small fitted run, made once a session
+#' final <- dsm_final(run$fit, seeds = 2, n_cores = 1, threads_per_unit = 1,
+#'                    training = list(n_epochs = 10, patience = 5), output_dir = tempdir(),
+#'                    run_id = "final_example", verbose = FALSE)
+#' final
+#' }
 #' @export
 dsm_final <- function(tuning, data = NULL, config = "auto",
                       rule = c("one_se", "rank1"), metric = "val_ccc",
@@ -432,6 +440,12 @@ print.dsm_final <- function(x, ...) {
 #' @param conformal_alpha As the run was calibrated; stage 04 used c(0.1, 0.05).
 #' @param verbose    Print the result.
 #' @return A `dsm_final` describing the run, printed with the declaration.
+#' @examplesIf torch::torch_is_installed()
+#' \donttest{
+#' run <- example_run()    # a small fitted run, made once a session
+#' # the declaration of a final run, written from what is on disk
+#' dsm_report_final(run$final$run_dir, run$fit$run_dir)
+#' }
 #' @export
 dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05),
                              verbose = TRUE) {

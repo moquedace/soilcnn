@@ -57,3 +57,14 @@ directory before its own validations run, so a failure leaves a
 final_\if{html}{\out{<timestamp>}} behind that "latest" would then deploy -- which is what
 B2's review found from the other direction.
 }
+\examples{
+base <- file.path(tempdir(), "runs")
+for (id in c("run_a", "run_b")) {
+  dir.create(file.path(base, id, "comparison"), recursive = TRUE, showWarnings = FALSE)
+  writeLines("done", file.path(base, id, "comparison", "comparison_ranked.csv"))
+}
+Sys.setFileTime(file.path(base, "run_a", "comparison", "comparison_ranked.csv"),
+                Sys.time() - 3600)
+dir.create(file.path(base, "run_c"), showWarnings = FALSE)   # started, never finished
+latest_run_dir(base, "run_", require_file = "comparison/comparison_ranked.csv")
+}

@@ -28,3 +28,9 @@ An object of class "di_reference".
 Computed once and reused for every prediction chunk: the training data does
 not change, and the pairwise mean is the expensive part.
 }
+\examples{
+set.seed(1)
+x_train <- matrix(rnorm(200), 100, 2)    # 100 training rows of 2 scaled predictors
+ref <- di_reference(x_train)
+ref
+}

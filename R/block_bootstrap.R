@@ -68,6 +68,11 @@
 #'   latitude)`. NULL: the points' own means.
 #' @return A character vector, one block per point (the cell's column and row,
 #'   "i_j"), with the size and the projection as attributes.
+#' @examples
+#' ex <- example_landscape()
+#' blk <- equal_area_blocks(ex$profiles$x, ex$profiles$y, size_km = 2)
+#' length(unique(blk))    # blocks holding a profile
+#' table(table(blk))      # how many blocks hold 1, 2, ... profiles
 #' @export
 equal_area_blocks <- function(x, y, size_km, coords = c("lonlat", "metres"), centre = NULL) {
   coords <- match.arg(coords)
@@ -153,6 +158,14 @@ equal_area_blocks <- function(x, y, size_km, coords = c("lonlat", "metres"), cen
 #'   "profile": the number of independent points that would give the same
 #'   interval) and `share_better` (the share of points, or of blocks, where
 #'   `pred` errs less).
+#' @examples
+#' ex <- example_landscape()
+#' obs <- ex$profiles$soc_stock
+#' set.seed(1)
+#' pred_a <- obs * exp(rnorm(length(obs), 0, 0.20))   # two models' predictions
+#' pred_b <- obs * exp(rnorm(length(obs), 0, 0.25))
+#' blk <- equal_area_blocks(ex$profiles$x, ex$profiles$y, size_km = 2)
+#' block_bootstrap(obs, pred_a, blk, against = pred_b, metric = "mae", n_boot = 500)
 #' @export
 block_bootstrap <- function(obs, pred, blocks, against = NULL,
                             metric = c("mae", "rmse", "ccc", "bias"),
@@ -353,6 +366,16 @@ print.block_bootstrap <- function(x, ...) {
 #' @return A `block_bootstrap_by_size`: a tibble, one row per size, with
 #'   `size_km`, `n_blocks`, the `estimate` (or the `difference`), `ci_low`,
 #'   `ci_high`, `width` and `n_effective`.
+#' @examples
+#' ex <- example_landscape()
+#' obs <- ex$profiles$soc_stock
+#' set.seed(1)
+#' pred_a <- obs * exp(rnorm(length(obs), 0, 0.20))   # two models' predictions
+#' pred_b <- obs * exp(rnorm(length(obs), 0, 0.25))
+#' s <- block_bootstrap_by_size(ex$profiles$x, ex$profiles$y, obs, pred_a, against = pred_b,
+#'                              sizes_km = c(1, 2, 5, 10), n_boot = 500)
+#' s
+#' plot(s)
 #' @export
 block_bootstrap_by_size <- function(x, y, obs, pred, against = NULL,
                                     sizes_km = c(25, 50, 100, 200, 400), metric = "mae",
@@ -431,6 +454,17 @@ plot.block_bootstrap_by_size <- function(x, ...) {
 #' @return A `spatial_correlogram`: a tibble with `from_km`, `to_km`,
 #'   `n_pairs`, `moran_i`, and `expected`, Moran's I with no spatial structure
 #'   (-1/(n-1)).
+#' @examples
+#' ex <- example_landscape()
+#' obs <- ex$profiles$soc_stock
+#' set.seed(1)
+#' pred_a <- obs * exp(rnorm(length(obs), 0, 0.20))   # two models' predictions
+#' pred_b <- obs * exp(rnorm(length(obs), 0, 0.25))
+#' d <- abs(pred_a - obs) - abs(pred_b - obs)    # what a comparison of the two compares
+#' cg <- spatial_correlogram(ex$profiles$x, ex$profiles$y, d,
+#'                           breaks_km = c(0, 1, 2, 5, 10, 20))
+#' cg
+#' plot(cg)
 #' @export
 spatial_correlogram <- function(x, y, value, breaks_km = c(0, 5, 10, 25, 50, 100, 200, 400, 800),
                                 coords = c("lonlat", "metres")) {

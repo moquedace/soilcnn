@@ -19,3 +19,13 @@ An object of class "picp_report".
 \description{
 Coverage, and whether it holds where it is needed.
 }
+\examples{
+set.seed(1)
+obs  <- rlnorm(300, 3, 0.4)
+pred <- obs * exp(rnorm(300, 0, 0.25))
+cal  <- conformal_calibrate(obs[1:150], pred[1:150], alpha = 0.1)
+iv <- conformal_interval(cal, pred[151:300], lower_limit = 0)
+# one width for every level: right on average, and by level?
+picp_report(obs[151:300], iv$lower, iv$upper, alpha = 0.1,
+            group = ifelse(pred[151:300] > median(pred), "high", "low"))
+}

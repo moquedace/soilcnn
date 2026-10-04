@@ -81,6 +81,13 @@
 #'   other: a misspelt option for a table model used to vanish into fit()'s
 #'   `...` and train as if it had not been given.
 #' @return A model_spec.
+#' @examples
+#' mean_only <- model_spec(
+#'   "mean_only", input = "table",
+#'   fit = function(x, y, cfg, ...) list(mu = mean(y)),
+#'   predict = function(object, x, ...) rep(object$mu, nrow(x)),
+#'   description = "the training mean: a floor every model must beat")
+#' mean_only
 #' @export
 model_spec <- function(name, input, fit, predict,
                        default_grid = NULL, count_params = NULL,
@@ -132,6 +139,14 @@ model_spec <- function(name, input, fit, predict,
 #'   silent replacement is how two different models come to answer to the same
 #'   name in the same session, and the results carry no mark of which ran.
 #' @return `spec`, invisibly.
+#' @examples
+#' mean_only <- model_spec(
+#'   "mean_only", input = "table",
+#'   fit = function(x, y, cfg, ...) list(mu = mean(y)),
+#'   predict = function(object, x, ...) rep(object$mu, nrow(x)),
+#'   description = "the training mean: a floor every model must beat")
+#' register_model(mean_only, overwrite = TRUE)
+#' list_models()      # dsm_train(data, model = "mean_only", ...) now fits it
 #' @export
 register_model <- function(spec, overwrite = FALSE) {
   stopifnot(inherits(spec, "model_spec"))
@@ -147,6 +162,8 @@ register_model <- function(spec, overwrite = FALSE) {
 #'
 #' @param name Registered name.
 #' @return The `model_spec` registered under `name`.
+#' @examples
+#' get_model("rf")
 #' @export
 get_model <- function(name) {
   if (!exists(name, envir = .model_registry, inherits = FALSE)) {
@@ -160,6 +177,8 @@ get_model <- function(name) {
 #'
 #' @return A tibble: name, input ("table" or "patches"), tunable (whether it
 #'   draws its own grid) and description.
+#' @examples
+#' list_models()
 #' @export
 list_models <- function() {
   nms <- sort(ls(.model_registry))

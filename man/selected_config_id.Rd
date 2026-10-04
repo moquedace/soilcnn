@@ -18,3 +18,7 @@ the config id, or stop() -- "auto" must never travel on unresolved.
 Read from the list of configurations in the order they were chosen -- not
 from the grid's order, in which a runner-up can come first.
 }
+\examples{
+summary <- list(selected_config_ids = c("cfg_004", "cfg_011"))
+selected_config_id(summary)   # the first chosen; the grid's order can differ
+}

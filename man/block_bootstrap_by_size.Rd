@@ -46,3 +46,14 @@ distance over which the values resemble each other are themselves
 dependent, and their interval is still too narrow; where the width stops
 growing, they no longer are.
 }
+\examples{
+ex <- example_landscape()
+obs <- ex$profiles$soc_stock
+set.seed(1)
+pred_a <- obs * exp(rnorm(length(obs), 0, 0.20))   # two models' predictions
+pred_b <- obs * exp(rnorm(length(obs), 0, 0.25))
+s <- block_bootstrap_by_size(ex$profiles$x, ex$profiles$y, obs, pred_a, against = pred_b,
+                             sizes_km = c(1, 2, 5, 10), n_boot = 500)
+s
+plot(s)
+}

@@ -122,6 +122,8 @@ caret_grid <- function(method, tune_length = 6L, seed = 42L, x, y,
 #' @param ...     Extra arguments forwarded to every caret::train() call --
 #'   this is where a model's own arguments go (num.threads, nthread, ...).
 #' @return A model_spec with input == "table".
+#' @examplesIf requireNamespace("caret", quietly = TRUE)
+#' caret_spec("rf")
 #' @export
 caret_spec <- function(method, name = method, search = c("grid", "random"),
                        ...) {
@@ -197,6 +199,8 @@ caret_spec <- function(method, name = method, search = c("grid", "random"),
 #'
 #' @param pattern Optional regular expression on the method name.
 #' @return A tibble of method, label and the parameters it tunes.
+#' @examplesIf requireNamespace("caret", quietly = TRUE)
+#' caret_available("^rf$|^ranger$")
 #' @export
 caret_available <- function(pattern = NULL) {
   .need_caret()

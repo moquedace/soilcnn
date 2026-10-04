@@ -15,3 +15,6 @@ The \code{model_spec} registered under \code{name}.
 \description{
 Fetch a registered model.
 }
+\examples{
+get_model("rf")
+}

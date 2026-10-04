@@ -59,3 +59,6 @@ the refit is not the run's training, and it stops. It trains (variables x
 seeds + check_seeds) networks, side by side as \code{\link[=dsm_final]{dsm_final()}} does: give
 \code{\link[=dsm_importance]{dsm_importance()}} themes as \code{groups}, and a few of the run's \code{seeds}.
 }
+\examples{
+refit_importance(check_seeds = 1)
+}

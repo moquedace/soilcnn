@@ -22,3 +22,13 @@ Every point appears once as validation, pooled over folds and averaged over
 seeds, so the residual distribution covers the whole study area instead of
 one fold's worth of it.
 }
+\examples{
+\dontshow{if (torch::torch_is_installed()) withAutoprint(\{ # examplesIf}
+\donttest{
+run <- example_run()    # a small fitted run, made once a session
+res <- cv_residuals(run$fit$run_dir, run$final$selected_config_ids)
+head(res)
+conformal_calibrate(res$obs, res$pred, alpha = 0.1)
+}
+\dontshow{\}) # examplesIf}
+}

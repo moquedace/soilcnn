@@ -15,3 +15,8 @@ A tibble of method, label and the parameters it tunes.
 \description{
 Every caret method that could be borrowed here.
 }
+\examples{
+\dontshow{if (requireNamespace("caret", quietly = TRUE)) withAutoprint(\{ # examplesIf}
+caret_available("^rf$|^ranger$")
+\dontshow{\}) # examplesIf}
+}

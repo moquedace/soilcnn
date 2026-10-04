@@ -13,3 +13,6 @@ draws its own grid) and description.
 \description{
 Every registered model, as a table.
 }
+\examples{
+list_models()
+}

@@ -48,3 +48,12 @@ A fold_plan.
 \description{
 Fold plan from k-fold Nearest Neighbour Distance Matching.
 }
+\examples{
+\dontshow{if (requireNamespace("CAST", quietly = TRUE) && requireNamespace("sf", quietly = TRUE)) withAutoprint(\{ # examplesIf}
+ex <- example_landscape()
+meta <- data.frame(sample_id = seq_len(nrow(ex$profiles)), x = ex$profiles$x,
+                   y = ex$profiles$y)
+elevation <- terra::rast(file.path(ex$raster_dir, "elevation.tif"))
+knndm_folds(meta, k = 3, predpoints = prediction_sample(elevation, size = 500))
+\dontshow{\}) # examplesIf}
+}

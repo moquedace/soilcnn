@@ -30,3 +30,9 @@ The selection record, invisibly.
 Writes the selection into the run directory so a later test-set report can
 prove the choice preceded it. Call it at the moment the choice is made.
 }
+\examples{
+run_dir <- file.path(tempdir(), "tuning_example")
+freeze_selection(run_dir, "cfg_002", note = "one_se on the cross-validation")
+# the same choice again is accepted; another is refused
+try(freeze_selection(run_dir, "cfg_005"))
+}

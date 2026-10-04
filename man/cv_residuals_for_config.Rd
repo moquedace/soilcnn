@@ -22,3 +22,14 @@ as attribute "config_id".
 \description{
 Cross-validated residuals of a configuration, from any tuning run.
 }
+\examples{
+\dontshow{if (torch::torch_is_installed()) withAutoprint(\{ # examplesIf}
+\donttest{
+run <- example_run()    # a small fitted run, made once a session
+grid <- readRDS(file.path(run$fit$run_dir, "tune_grid.rds"))
+cfg  <- grid[grid$config_id == run$final$selected_config_ids, ]
+# found by its hyperparameters, so the same call reads any other tuning run
+head(cv_residuals_for_config(run$fit$run_dir, cfg))
+}
+\dontshow{\}) # examplesIf}
+}

@@ -61,6 +61,10 @@
 #'
 #' @param name "none" or "log1p".
 #' @return list(name, forward, inverse).
+#' @examples
+#' tr <- target_transform_spec("log1p")
+#' tr$forward(10)
+#' tr$inverse(tr$forward(10))
 #' @export
 target_transform_spec <- function(name) {
   if (is.null(name) || length(name) != 1L || is.na(name) ||
@@ -133,6 +137,13 @@ target_transform_spec <- function(name) {
 #' @param overwrite  A store_dir that already holds a store is refused unless
 #'   TRUE, in which case that store's files are removed first.
 #' @return A `dsm_store`, which dsm_load() accepts directly.
+#' @examples
+#' ex <- example_landscape()
+#' store <- dsm_prepare(ex$profiles, target = "soc_stock", raster_dir = ex$raster_dir,
+#'                      windows = c(3, 7), out_dir = file.path(tempdir(), "landscape"),
+#'                      percentage = "^clay_pct$", transform = "log1p", n_cores = 1,
+#'                      overwrite = TRUE, verbose = FALSE)
+#' store
 #' @export
 dsm_prepare <- function(points, target, raster_dir, windows,
                         out_dir           = NULL,

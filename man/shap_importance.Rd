@@ -74,3 +74,7 @@ prediction (expected gradients) or less the prediction at the baseline
 if they do not. SHAP by deep-network rules (DeepSHAP) is not offered: it
 needs a propagation rule written for every layer of this architecture.
 }
+\examples{
+shap_importance()
+shap_importance("kernel", background = 8, max_points = 50)
+}

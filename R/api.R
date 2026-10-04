@@ -59,6 +59,13 @@
 #'   was built under -- name, forward and inverse -- or NULL when the store did
 #'   not record one.
 #' @param verbose      Print the loaded data.
+#' @examples
+#' ex <- example_landscape()
+#' store <- dsm_prepare(ex$profiles, target = "soc_stock", raster_dir = ex$raster_dir,
+#'                      windows = c(3, 7), out_dir = file.path(tempdir(), "landscape"),
+#'                      percentage = "^clay_pct$", transform = "log1p", n_cores = 1,
+#'                      overwrite = TRUE, verbose = FALSE)
+#' dsm_load(store, windows = integer(0))   # the table alone: loading windows needs torch
 #' @export
 dsm_load <- function(patch_dir, points = NULL, type_table = NULL, windows = NULL,
                      cell_size = NULL, raster_table = NULL, target_col = NULL,
@@ -285,6 +292,8 @@ print.dsm_data <- function(x, ...) {
 #' @inheritParams holdout
 #' @return A `resample_spec`. resolve_resampling() turns it into folds
 #'   against the points, and dsm_train() does that itself.
+#' @examples
+#' spatial_cv(k = 5, block_size = "auto", buffer = "auto")
 #' @export
 spatial_cv <- function(k = 5L, block_size = "auto", buffer = "auto",
                        test_frac = 0.15, max_share = 0.10,
@@ -318,6 +327,10 @@ spatial_cv <- function(k = 5L, block_size = "auto", buffer = "auto",
 #'
 #' @inheritParams knndm_folds
 #' @return A `resample_spec`, as spatial_cv() returns.
+#' @examples
+#' ex <- example_landscape()
+#' elevation <- terra::rast(file.path(ex$raster_dir, "elevation.tif"))
+#' knndm_cv(k = 5, predpoints = prediction_sample(elevation, size = 500))
 #' @export
 knndm_cv <- function(k = 5L, predpoints = NULL, hold_out_test = FALSE,
                      crs = 4326,
@@ -337,6 +350,8 @@ knndm_cv <- function(k = 5L, predpoints = NULL, hold_out_test = FALSE,
 #' @inheritParams random_folds
 #' @inheritParams holdout
 #' @return A `resample_spec`, as spatial_cv() returns.
+#' @examples
+#' random_cv(k = 10)
 #' @export
 random_cv <- function(k = 5L, test_frac = 0.15, group = "auto", seed = 42L) {
   .resample_spec(.kind = "random", k = .check_k(k, "random_cv"),
@@ -348,6 +363,8 @@ random_cv <- function(k = 5L, test_frac = 0.15, group = "auto", seed = 42L) {
 #'
 #' @inheritParams holdout
 #' @return A `resample_spec`, as spatial_cv() returns.
+#' @examples
+#' holdout_cv(validation_frac = 0.2)
 #' @export
 holdout_cv <- function(validation_frac = 0.15, test_frac = 0.15,
                        group = "auto", seed = 42L) {
@@ -366,6 +383,9 @@ holdout_cv <- function(validation_frac = 0.15, test_frac = 0.15,
 #' @inheritParams region_folds
 #' @inheritParams holdout
 #' @return A `resample_spec`, as spatial_cv() returns.
+#' @examples
+#' ex <- example_landscape()
+#' region_cv(group = ex$profiles$survey)
 #' @export
 region_cv <- function(group, k = NULL, test_frac = 0.15, seed = 42L) {
   .resample_spec(.kind = "region", group = group, k = .check_k(k, "region_cv", allow_null = TRUE),
@@ -407,6 +427,15 @@ print.resample_spec <- function(x, ...) {
 #' @param windows  Windows the grid will use, for `buffer = "auto"`.
 #' @param verbose  Print the block size that `block_size = "auto"` chose.
 #' @return A `fold_plan`, already checked with check_fold_plan().
+#' @examples
+#' ex <- example_landscape()
+#' store <- dsm_prepare(ex$profiles, target = "soc_stock", raster_dir = ex$raster_dir,
+#'                      windows = c(3, 7), out_dir = file.path(tempdir(), "landscape"),
+#'                      percentage = "^clay_pct$", transform = "log1p", n_cores = 1,
+#'                      overwrite = TRUE, verbose = FALSE)
+#' data <- dsm_load(store, windows = integer(0), verbose = FALSE)
+#' resolve_resampling(spatial_cv(k = 3, block_size = 0.05, test_frac = 0.2), data,
+#'                    windows = c(3, 7))
 #' @export
 resolve_resampling <- function(spec, data, test_ids = NULL, windows = NULL,
                                verbose = TRUE) {
@@ -550,6 +579,19 @@ resolve_resampling <- function(spec, data, test_ids = NULL, windows = NULL,
 #' @param verbose    Report progress.
 #' @param ...        Passed to the underlying runner (n_epochs, patience, ...).
 #' @return The runner's result, plus the plan and the data it used.
+#' @examplesIf torch::torch_is_installed()
+#' \donttest{
+#' ex <- example_landscape()
+#' store <- dsm_prepare(ex$profiles, target = "soc_stock", raster_dir = ex$raster_dir,
+#'                      windows = c(3, 7), out_dir = file.path(tempdir(), "landscape"),
+#'                      percentage = "^clay_pct$", transform = "log1p", n_cores = 1,
+#'                      overwrite = TRUE, verbose = FALSE)
+#' data <- dsm_load(store, verbose = FALSE)
+#' fit <- dsm_train(data, resampling = spatial_cv(k = 2, block_size = 0.05, test_frac = 0.2),
+#'                  tune_length = 2, n_seeds = 1, output_dir = tempdir(),
+#'                  in_session = TRUE, n_cores = 2, n_epochs = 5, verbose = FALSE)
+#' fit
+#' }
 #' @export
 dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
                       tune_grid = NULL, tune_length = 20L, n_seeds = 3L,

@@ -107,3 +107,13 @@ A \code{dsm_prediction}, printed.
 \description{
 Predict a map from a final model.
 }
+\examples{
+\dontshow{if (torch::torch_is_installed()) withAutoprint(\{ # examplesIf}
+\donttest{
+run <- example_run()    # a small fitted run, made once a session
+map <- dsm_predict(run$final, run$data, output_dir = tempdir(), run_id = "map_example",
+                   n_cores = 1, threads_per_worker = 1, verbose = FALSE)
+map
+}
+\dontshow{\}) # examplesIf}
+}

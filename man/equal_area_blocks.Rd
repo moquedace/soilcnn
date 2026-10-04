@@ -28,3 +28,9 @@ authalic radius), so every block covers the same ground wherever it lies --
 which a grid in degrees does not: a degree of longitude is 111 km at the
 equator and 71 km at 50 degrees.
 }
+\examples{
+ex <- example_landscape()
+blk <- equal_area_blocks(ex$profiles$x, ex$profiles$y, size_km = 2)
+length(unique(blk))    # blocks holding a profile
+table(table(blk))      # how many blocks hold 1, 2, ... profiles
+}

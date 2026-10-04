@@ -39,3 +39,9 @@ The fold constructor behind holdout_cv(). Whole groups are drawn, never
 single rows (see \code{group}), so the rows of one profile never straddle the
 split.
 }
+\examples{
+ex <- example_landscape()
+meta <- data.frame(sample_id = seq_len(nrow(ex$profiles)), x = ex$profiles$x,
+                   y = ex$profiles$y)
+holdout(meta, validation_frac = 0.2, test_frac = 0.2)
+}

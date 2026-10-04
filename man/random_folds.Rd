@@ -41,3 +41,9 @@ Offered anyway, for two reasons: it is the right answer when the rows really
 are independent, and running it against spatial_folds() on the same data is
 the cleanest way to MEASURE how much geography is worth here.
 }
+\examples{
+ex <- example_landscape()
+meta <- data.frame(sample_id = seq_len(nrow(ex$profiles)), x = ex$profiles$x,
+                   y = ex$profiles$y)
+random_folds(meta, k = 3, test_frac = 0.2)
+}

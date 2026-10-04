@@ -15,3 +15,8 @@ A single numeric, or NA when fewer than two finite pairs remain.
 \description{
 Lin's Concordance Correlation Coefficient.
 }
+\examples{
+obs <- c(10, 20, 30, 40)
+ccc(obs, obs)        # 1: perfect agreement
+ccc(obs, obs + 5)    # below 1: an offset is disagreement too, though r is 1
+}

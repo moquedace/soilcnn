@@ -350,6 +350,15 @@ resolve_cores <- function(n_cores = NULL, what = "this step") {
 #' @param n_threads NULL for the physical cores minus one (see
 #'   resolve_cores()), or a whole number >= 1.
 #' @return The number of threads, invisibly.
+#' @examplesIf torch::torch_is_installed()
+#' before <- Sys.getenv(c("OMP_NUM_THREADS", "MKL_NUM_THREADS"), unset = NA)
+#' n <- torch::torch_get_num_threads()
+#' set_torch_threads(2)
+#' torch::torch_get_num_threads()
+#' # the session as it was: torch's threads, and the two variables set here
+#' torch::torch_set_num_threads(n)
+#' Sys.unsetenv(names(before)[is.na(before)])
+#' if (any(!is.na(before))) do.call(Sys.setenv, as.list(before[!is.na(before)]))
 #' @export
 set_torch_threads <- function(n_threads = NULL) {
   n_threads <- resolve_cores(n_threads, what = "torch")
@@ -386,6 +395,15 @@ set_torch_threads <- function(n_threads = NULL) {
 #'   minus one (see resolve_cores()).
 #' @param use_cuda    Use GPU if available.
 #' @return A torch_device object.
+#' @examplesIf torch::torch_is_installed()
+#' before <- Sys.getenv(c("OMP_NUM_THREADS", "MKL_NUM_THREADS"), unset = NA)
+#' n <- torch::torch_get_num_threads()
+#' device <- setup_torch_device(n_threads = 2, use_cuda = FALSE)
+#' device
+#' # the session as it was: torch's threads, and the two variables set here
+#' torch::torch_set_num_threads(n)
+#' Sys.unsetenv(names(before)[is.na(before)])
+#' if (any(!is.na(before))) do.call(Sys.setenv, as.list(before[!is.na(before)]))
 #' @export
 setup_torch_device <- function(n_threads = NULL, use_cuda = TRUE) {
   # FROM THE MACHINE, NOT FROM A LITERAL. The default was 8 and every example
@@ -739,6 +757,16 @@ check_plan_unchanged <- function(plan, run_dir, resume = TRUE) {
 #'   only if the caller tests for it; every caller that passes "null" here
 #'   prints a line saying so.
 #' @return The run id (basename), or stop() / NULL when nothing qualifies.
+#' @examples
+#' base <- file.path(tempdir(), "runs")
+#' for (id in c("run_a", "run_b")) {
+#'   dir.create(file.path(base, id, "comparison"), recursive = TRUE, showWarnings = FALSE)
+#'   writeLines("done", file.path(base, id, "comparison", "comparison_ranked.csv"))
+#' }
+#' Sys.setFileTime(file.path(base, "run_a", "comparison", "comparison_ranked.csv"),
+#'                 Sys.time() - 3600)
+#' dir.create(file.path(base, "run_c"), showWarnings = FALSE)   # started, never finished
+#' latest_run_dir(base, "run_", require_file = "comparison/comparison_ranked.csv")
 #' @export
 latest_run_dir <- function(base, prefix, require_file = NULL,
                            require_pattern = NULL, label = "run",
@@ -905,6 +933,9 @@ env_csv <- function(name, default, as_int = FALSE) {
 #' @param summary the list read from comparison/final_run_summary.rds.
 #' @param label   what to call the run in messages.
 #' @return the config id, or stop() -- "auto" must never travel on unresolved.
+#' @examples
+#' summary <- list(selected_config_ids = c("cfg_004", "cfg_011"))
+#' selected_config_id(summary)   # the first chosen; the grid's order can differ
 #' @export
 selected_config_id <- function(summary, label = "this final run") {
   id <- if (!is.null(summary$selected_config_ids)) {

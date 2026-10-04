@@ -38,3 +38,10 @@ calibrated on three folds, the global factor won (+2.7\% against -3.9\% by
 level and -5.8\% for a total), because those folds saw half the points the
 deployed model saw; this measures it again for a run of yours.
 }
+\examples{
+set.seed(1)
+f <- runif(1000, 2, 5)
+z <- f + rnorm(1000, 0, 0.2 + 0.1 * (f - 2))   # the spread grows with the level
+cal <- smearing_factor(z[1:500], f[1:500])
+smearing_check(cal, z[501:1000], f[501:1000])  # on points it was not calibrated on
+}

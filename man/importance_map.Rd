@@ -29,3 +29,15 @@ the mean of the points in it. With the points' own grid (from
 \code{\link[=importance_points]{importance_points()}}) every point is its own cell; with a coarser
 \code{resolution}, each cell averages the points it holds.
 }
+\examples{
+\dontshow{if (torch::torch_is_installed()) withAutoprint(\{ # examplesIf}
+\donttest{
+run <- example_run()    # a small fitted run, made once a session
+pts <- importance_points(run$final, run$data, every = 4)
+imp <- dsm_importance(run$final, run$data, shap_importance(samples = 10, background = 20),
+                      at = pts, seeds = 42, verbose = FALSE)
+m <- importance_map(imp)
+plot(m)
+}
+\dontshow{\}) # examplesIf}
+}

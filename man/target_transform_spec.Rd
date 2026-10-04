@@ -15,3 +15,8 @@ list(name, forward, inverse).
 \description{
 The forward and inverse functions for a named target transform.
 }
+\examples{
+tr <- target_transform_spec("log1p")
+tr$forward(10)
+tr$inverse(tr$forward(10))
+}

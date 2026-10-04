@@ -39,3 +39,14 @@ A \code{conformal_scaled} (also a \code{conformal_cal}).
 \description{
 Calibrate an interval whose width is a fitted scale.
 }
+\examples{
+set.seed(1)
+level <- runif(300, 1, 4)
+di    <- runif(300)                      # a dissimilarity index
+obs   <- exp(level + rnorm(300, 0, 0.1 + 0.3 * di))
+pred  <- exp(level)
+covariates <- data.frame(level = pred, di = di)
+cal <- conformal_scaled_calibrate(obs[1:200], pred[1:200], covariates[1:200, ],
+                                  alpha = 0.1)
+cal
+}

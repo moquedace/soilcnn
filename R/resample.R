@@ -341,6 +341,11 @@ with_local_seed <- function(seed, expr) {
 #'   the table repeats profiles; NULL or "row" makes each row its own unit; a
 #'   column name, or a vector with one label per row, names the groups.
 #' @return A `fold_plan` with one fold.
+#' @examples
+#' ex <- example_landscape()
+#' meta <- data.frame(sample_id = seq_len(nrow(ex$profiles)), x = ex$profiles$x,
+#'                    y = ex$profiles$y)
+#' holdout(meta, validation_frac = 0.2, test_frac = 0.2)
 #' @export
 holdout <- function(meta, validation_frac = 0.15, test_frac = 0.15,
                     test_ids = NULL, seed = 42L, group = "auto") {
@@ -397,6 +402,11 @@ holdout <- function(meta, validation_frac = 0.15, test_frac = 0.15,
 #'   reproduces even when the training seeds change.
 #' @inheritParams holdout
 #' @return A `fold_plan` with `k` folds.
+#' @examples
+#' ex <- example_landscape()
+#' meta <- data.frame(sample_id = seq_len(nrow(ex$profiles)), x = ex$profiles$x,
+#'                    y = ex$profiles$y)
+#' random_folds(meta, k = 3, test_frac = 0.2)
 #' @export
 random_folds <- function(meta, k = 5L, test_frac = 0, test_ids = NULL,
                         seed = 42L, group = "auto") {
@@ -564,6 +574,12 @@ print_block_choice <- function(chosen) {
 #' @param blocks_per_fold Blocks per fold, for a `block_size` of NULL.
 #' @inheritParams holdout
 #' @return A `fold_plan` with `k` folds.
+#' @examples
+#' ex <- example_landscape()
+#' meta <- data.frame(sample_id = seq_len(nrow(ex$profiles)), x = ex$profiles$x,
+#'                    y = ex$profiles$y)
+#' # blocks of 0.05 degrees, and a buffer of the widest window (7 cells of 0.0025)
+#' spatial_folds(meta, k = 3, test_frac = 0.2, block_size = 0.05, buffer = 7 * 0.0025)
 #' @export
 spatial_folds <- function(meta, k = 5L, test_frac = 0, block_size = NULL,
                           buffer = NULL,
@@ -644,6 +660,11 @@ spatial_folds <- function(meta, k = 5L, test_frac = 0, block_size = NULL,
 #' @param k     Number of folds; defaults to one per group.
 #' @inheritParams holdout
 #' @return A `fold_plan`.
+#' @examples
+#' ex <- example_landscape()
+#' meta <- data.frame(sample_id = seq_len(nrow(ex$profiles)), x = ex$profiles$x,
+#'                    y = ex$profiles$y)
+#' region_folds(meta, group = ex$profiles$survey, k = 3)
 #' @export
 region_folds <- function(meta, group, k = NULL, test_frac = 0,
                         test_ids = NULL, seed = 42L) {
@@ -876,6 +897,14 @@ apply_buffer <- function(plan, meta, buffer,
 #' @param windows   Window sizes to report overlap for.
 #' @return A tibble with a `fold` column: the overlap shares per role and
 #'   window, fold by fold.
+#' @examples
+#' ex <- example_landscape()
+#' meta <- data.frame(sample_id = seq_len(nrow(ex$profiles)), x = ex$profiles$x,
+#'                    y = ex$profiles$y)
+#' blocks   <- spatial_folds(meta, k = 3, block_size = 0.05)
+#' buffered <- spatial_folds(meta, k = 3, block_size = 0.05, buffer = 7 * 0.0025)
+#' fold_leakage_report(blocks, meta, cell_size = 0.0025, windows = c(3, 7))
+#' fold_leakage_report(buffered, meta, cell_size = 0.0025, windows = c(3, 7))
 #' @export
 fold_leakage_report <- function(plan, meta, cell_size, windows = c(3L, 9L, 15L)) {
   stopifnot(inherits(plan, "fold_plan"))
@@ -1107,6 +1136,12 @@ refit_split <- function(plan, meta, validation_frac = 0.15, predpoints = NULL) {
 #'   proven against it: no group may be split across train and validation.
 #' @param group How the rows group, as in holdout().
 #' @return tibble, one row per fold.
+#' @examples
+#' ex <- example_landscape()
+#' meta <- data.frame(sample_id = seq_len(nrow(ex$profiles)), x = ex$profiles$x,
+#'                    y = ex$profiles$y)
+#' plan <- spatial_folds(meta, k = 3, test_frac = 0.2, block_size = 0.05)
+#' check_fold_plan(plan, meta)
 #' @export
 check_fold_plan <- function(plan, meta = NULL, group = "auto") {
   stopifnot(inherits(plan, "fold_plan"))
@@ -1267,6 +1302,16 @@ print.fold_plan <- function(x, ...) {
 #'   first metric. Failed units are excluded from the statistics but counted in
 #'   `n_failed`, because a config that crashes 2 runs in 3 is not the same as
 #'   one that completed all three.
+#' @examples
+#' # A tuning table: three configurations, each on three folds under two seeds
+#' set.seed(1)
+#' cfgs <- data.frame(config_id = c("cfg_001", "cfg_002", "cfg_003"),
+#'                    skill = c(0.615, 0.62, 0.55), n_params = c(2e5, 2e6, 5e4))
+#' cmp <- merge(expand.grid(config_id = cfgs$config_id, fold = 1:3, seed = 1:2,
+#'                          stringsAsFactors = FALSE), cfgs)
+#' cmp$status  <- "success"
+#' cmp$val_ccc <- cmp$skill + rnorm(nrow(cmp), 0, 0.02)
+#' summarise_resamples(cmp, metrics = "val_ccc")
 #' @export
 summarise_resamples <- function(comparison,
                                 metrics = c("val_ccc", "val_mae", "val_rmse",
@@ -1360,6 +1405,17 @@ na_to_zero <- function(x) {
 #'   under more than one seed, with the mean, sd and range over the seeds;
 #'   `n_comparable`, how many such rows; `median_sd`, the floor; and
 #'   `max_range`, the widest spread seen.
+#' @examples
+#' # A tuning table: three configurations, each on three folds under two seeds
+#' set.seed(1)
+#' cfgs <- data.frame(config_id = c("cfg_001", "cfg_002", "cfg_003"),
+#'                    skill = c(0.615, 0.62, 0.55), n_params = c(2e5, 2e6, 5e4))
+#' cmp <- merge(expand.grid(config_id = cfgs$config_id, fold = 1:3, seed = 1:2,
+#'                          stringsAsFactors = FALSE), cfgs)
+#' cmp$status  <- "success"
+#' cmp$val_ccc <- cmp$skill + rnorm(nrow(cmp), 0, 0.02)
+#' nf <- seed_noise_floor(cmp, metric = "val_ccc")
+#' nf$median_sd
 #' @export
 seed_noise_floor <- function(comparison, metric = "val_ccc") {
   if (!metric %in% names(comparison)) {
@@ -1439,6 +1495,17 @@ seed_noise_floor <- function(comparison, metric = "val_ccc") {
 #'   tied) and `simpler_than_best` (whether the rule actually moved the choice)
 #'   attached -- a selection rule that silently returns the same answer as the
 #'   default should say so.
+#' @examples
+#' # A tuning table: three configurations, each on three folds under two seeds
+#' set.seed(1)
+#' cfgs <- data.frame(config_id = c("cfg_001", "cfg_002", "cfg_003"),
+#'                    skill = c(0.615, 0.62, 0.55), n_params = c(2e5, 2e6, 5e4))
+#' cmp <- merge(expand.grid(config_id = cfgs$config_id, fold = 1:3, seed = 1:2,
+#'                          stringsAsFactors = FALSE), cfgs)
+#' cmp$status  <- "success"
+#' cmp$val_ccc <- cmp$skill + rnorm(nrow(cmp), 0, 0.02)
+#' pick <- one_se(summarise_resamples(cmp, metrics = "val_ccc"), metric = "val_ccc")
+#' pick$config_id
 #' @export
 one_se <- function(by_config, metric = "val_ccc", complexity = "n_params",
                    maximise = NULL) {
@@ -1499,6 +1566,16 @@ one_se <- function(by_config, metric = "val_ccc", complexity = "n_params",
 #' @param metric The metric it selected on, for the report.
 #' @param digits Digits of the threshold.
 #' @return `pick`, invisibly.
+#' @examples
+#' # A tuning table: three configurations, each on three folds under two seeds
+#' set.seed(1)
+#' cfgs <- data.frame(config_id = c("cfg_001", "cfg_002", "cfg_003"),
+#'                    skill = c(0.615, 0.62, 0.55), n_params = c(2e5, 2e6, 5e4))
+#' cmp <- merge(expand.grid(config_id = cfgs$config_id, fold = 1:3, seed = 1:2,
+#'                          stringsAsFactors = FALSE), cfgs)
+#' cmp$status  <- "success"
+#' cmp$val_ccc <- cmp$skill + rnorm(nrow(cmp), 0, 0.02)
+#' print_one_se(one_se(summarise_resamples(cmp, metrics = "val_ccc"), metric = "val_ccc"))
 #' @export
 print_one_se <- function(pick, metric = "val_ccc", digits = 4L) {
   n_tied <- attr(pick, "within_one_se")
@@ -1519,6 +1596,16 @@ print_one_se <- function(pick, metric = "val_ccc", digits = 4L) {
 #' @param nf     From seed_noise_floor().
 #' @param digits Digits of the numbers.
 #' @return `nf`, invisibly; NULL when no floor could be estimated.
+#' @examples
+#' # A tuning table: three configurations, each on three folds under two seeds
+#' set.seed(1)
+#' cfgs <- data.frame(config_id = c("cfg_001", "cfg_002", "cfg_003"),
+#'                    skill = c(0.615, 0.62, 0.55), n_params = c(2e5, 2e6, 5e4))
+#' cmp <- merge(expand.grid(config_id = cfgs$config_id, fold = 1:3, seed = 1:2,
+#'                          stringsAsFactors = FALSE), cfgs)
+#' cmp$status  <- "success"
+#' cmp$val_ccc <- cmp$skill + rnorm(nrow(cmp), 0, 0.02)
+#' print_noise_floor(seed_noise_floor(cmp, metric = "val_ccc"))
 #' @export
 print_noise_floor <- function(nf, digits = 4L) {
   if (nf$n_comparable == 0L) {
@@ -1574,6 +1661,21 @@ print_noise_floor <- function(nf, digits = 4L) {
 #' @param label_a,label_b Names for the report.
 #' @param conf      Interval level.
 #' @return An object of class "paired_comparison".
+#' @examples
+#' # A tuning table: three configurations, each on three folds under two seeds
+#' set.seed(1)
+#' cfgs <- data.frame(config_id = c("cfg_001", "cfg_002", "cfg_003"),
+#'                    skill = c(0.615, 0.62, 0.55), n_params = c(2e5, 2e6, 5e4))
+#' cmp <- merge(expand.grid(config_id = cfgs$config_id, fold = 1:3, seed = 1:2,
+#'                          stringsAsFactors = FALSE), cfgs)
+#' cmp$status  <- "success"
+#' cmp$val_ccc <- cmp$skill + rnorm(nrow(cmp), 0, 0.02)
+#' # a second family, trained on the same folds under the same seeds
+#' forest <- cmp
+#' forest$config_id <- sub("cfg", "rf", forest$config_id)
+#' forest$val_ccc <- forest$val_ccc - 0.03 + rnorm(nrow(forest), 0, 0.01)
+#' paired_family_test(cmp, forest, metric = "val_ccc", config_a = "cfg_002",
+#'                    config_b = "rf_002", label_a = "cnn", label_b = "forest")
 #' @export
 paired_family_test <- function(a, b, metric = "val_ccc",
                                config_a = NULL, config_b = NULL,

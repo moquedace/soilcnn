@@ -124,6 +124,12 @@
 #' @param bins Bins of the prediction for the factor by level (`smear(method =
 #'   "level")`), cut at its quantiles; each needs 50 residuals.
 #' @return An object of class "smearing_cal".
+#' @examples
+#' set.seed(1)
+#' f <- runif(500, 2, 5)                    # predictions, in log1p space
+#' z <- f + rnorm(500, 0, 0.4)              # what was observed, in log1p space
+#' cal <- smearing_factor(z, f)
+#' cal
 #' @export
 smearing_factor <- function(obs_transform, pred_transform,
                             transform = c("log1p", "log"), bins = 5L) {
@@ -236,6 +242,14 @@ smearing_factor <- function(obs_transform, pred_transform,
 #'   need a smearing_cal. [smearing_check()] measures them on held-out points.
 #' @return Numeric, in native units: an estimate of `E[y | x]` rather than of its
 #'   median.
+#' @examples
+#' set.seed(1)
+#' f <- runif(500, 2, 5)                    # predictions, in log1p space
+#' z <- f + rnorm(500, 0, 0.4)              # what was observed, in log1p space
+#' cal <- smearing_factor(z, f)
+#' expm1(c(2, 3, 4))                          # the median surface
+#' smear(c(2, 3, 4), cal)                     # the mean surface, by Duan's factor
+#' smear(c(2, 3, 4), cal, method = "level")   # by a factor that follows the level
 #' @export
 smear <- function(pred_transform, cal, lower_limit = 0,
                   method = c("global", "level", "total")) {
@@ -335,6 +349,12 @@ print.smearing_cal <- function(x, ...) {
 #'   (its total against the observed total, in %), `mae`, `rmse`, and
 #'   `bias_pct_q1` to `bias_pct_q5` (within quintiles of the prediction, low to
 #'   high).
+#' @examples
+#' set.seed(1)
+#' f <- runif(1000, 2, 5)
+#' z <- f + rnorm(1000, 0, 0.2 + 0.1 * (f - 2))   # the spread grows with the level
+#' cal <- smearing_factor(z[1:500], f[1:500])
+#' smearing_check(cal, z[501:1000], f[501:1000])  # on points it was not calibrated on
 #' @export
 smearing_check <- function(cal, obs_transform, pred_transform,
                            methods = c("global", "level", "total"), lower_limit = 0) {
@@ -410,6 +430,13 @@ print.smearing_check <- function(x, ...) {
 #' @param filename Where to write the map; "" keeps it in memory or in terra's
 #'   temporary files.
 #' @return A SpatRaster: the conditional mean, cell by cell.
+#' @examples
+#' set.seed(1)
+#' f <- runif(500, 2, 5)                    # predictions, in log1p space
+#' z <- f + rnorm(500, 0, 0.4)              # what was observed, in log1p space
+#' cal <- smearing_factor(z, f)
+#' median_map <- terra::rast(nrows = 10, ncols = 10, vals = expm1(runif(100, 2, 5)))
+#' smear_map(median_map, cal)
 #' @export
 smear_map <- function(median, cal, method = c("global", "level", "total"), lower_limit = 0,
                       filename = "") {
@@ -457,6 +484,11 @@ smear_map <- function(median, cal, method = c("global", "level", "total"), lower
 #' @param role      Which role. "validation" is the point.
 #' @inheritParams smearing_factor
 #' @return A smearing_cal, or NULL when the run wrote no usable predictions.
+#' @examplesIf torch::torch_is_installed()
+#' \donttest{
+#' run <- example_run()    # a small fitted run, made once a session
+#' smearing_from_run(run$fit$run_dir, run$final$selected_config_ids)
+#' }
 #' @export
 smearing_from_run <- function(run_dir, config_id, role = "validation",
                               transform = "log1p") {

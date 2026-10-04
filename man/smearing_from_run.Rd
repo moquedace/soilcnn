@@ -46,3 +46,11 @@ The 1\% is NOT why this was changed. The target is bracketed between 1.259 and
 choice inside that range is defensible as more accurate. It was changed
 because the claim in the docs was false and the printed n was wrong.
 }
+\examples{
+\dontshow{if (torch::torch_is_installed()) withAutoprint(\{ # examplesIf}
+\donttest{
+run <- example_run()    # a small fitted run, made once a session
+smearing_from_run(run$fit$run_dir, run$final$selected_config_ids)
+}
+\dontshow{\}) # examplesIf}
+}

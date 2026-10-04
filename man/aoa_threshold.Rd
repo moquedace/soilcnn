@@ -31,3 +31,11 @@ A row never held out -- the training side of a single split -- has fold
 \code{NA}: it is a neighbour to every fold, and has no cross-validated DI of its
 own, since no model predicted it.
 }
+\examples{
+set.seed(1)
+x_train <- matrix(rnorm(200), 100, 2)    # 100 training rows of 2 scaled predictors
+ref <- di_reference(x_train)
+th <- aoa_threshold(ref, folds = rep(1:5, 20))
+as.numeric(th)                 # the threshold
+summary(attr(th, "cv_di"))     # the cross-validated DI it was taken from
+}

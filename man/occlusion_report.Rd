@@ -51,3 +51,12 @@ whole context -- and measures what the unit loses for it. The caller names
 the unit and nothing more: the checkpoint is found, the architecture rebuilt
 from the grid and the fold's cache from the plan.
 }
+\examples{
+\dontshow{if (torch::torch_is_installed()) withAutoprint(\{ # examplesIf}
+\donttest{
+run <- example_run()    # a small fitted run, made once a session
+occlusion_report(run$fit$run_dir, run$data, config_id = run$final$selected_config_ids,
+                 device = torch::torch_device("cpu"))
+}
+\dontshow{\}) # examplesIf}
+}

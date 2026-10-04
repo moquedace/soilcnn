@@ -36,3 +36,12 @@ An object of class "test_optimism".
 \description{
 Score every trained unit of a tuning run on the held-out test set.
 }
+\examples{
+\dontshow{if (torch::torch_is_installed()) withAutoprint(\{ # examplesIf}
+\donttest{
+run <- example_run()    # a small fitted run, made once a session
+# every configuration on the test set, once the choice is frozen
+score_test_grid(run$fit$run_dir, run$data, device = torch::torch_device("cpu"))
+}
+\dontshow{\}) # examplesIf}
+}

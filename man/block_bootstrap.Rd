@@ -55,3 +55,12 @@ vote; "block", every block one vote, its points weighing 1/n each. They
 differ in the estimate as well as in the interval, and where they disagree
 the advantage rests on the densely sampled blocks.
 }
+\examples{
+ex <- example_landscape()
+obs <- ex$profiles$soc_stock
+set.seed(1)
+pred_a <- obs * exp(rnorm(length(obs), 0, 0.20))   # two models' predictions
+pred_b <- obs * exp(rnorm(length(obs), 0, 0.25))
+blk <- equal_area_blocks(ex$profiles$x, ex$profiles$y, size_km = 2)
+block_bootstrap(obs, pred_a, blk, against = pred_b, metric = "mae", n_boot = 500)
+}

@@ -43,3 +43,6 @@ against the points, and dsm_train() does that itself.
 \description{
 Spatially blocked k-fold: whole blocks of ground go to one fold.
 }
+\examples{
+spatial_cv(k = 5, block_size = "auto", buffer = "auto")
+}

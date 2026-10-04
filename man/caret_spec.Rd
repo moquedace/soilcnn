@@ -22,3 +22,8 @@ A model_spec with input == "table".
 \description{
 Turn a caret method into a model_spec.
 }
+\examples{
+\dontshow{if (requireNamespace("caret", quietly = TRUE)) withAutoprint(\{ # examplesIf}
+caret_spec("rf")
+\dontshow{\}) # examplesIf}
+}

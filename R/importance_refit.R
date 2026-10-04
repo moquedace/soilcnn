@@ -73,6 +73,8 @@
 #'   numbers -- so n_cores must be at least that.
 #' @param max_ram_gb RAM the workers may use in total, as in [dsm_final()].
 #' @return An `importance_spec`, for [dsm_importance()].
+#' @examples
+#' refit_importance(check_seeds = 1)
 #' @export
 refit_importance <- function(metric = c("ccc", "rmse", "rmse_transform"), check_seeds = 1L,
                              run_id = NULL, resume = TRUE, output_dir = NULL,

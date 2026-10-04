@@ -25,3 +25,9 @@ and it already exists. This walks the per-unit predictions a run wrote,
 calibrates on one fold and measures coverage on the others, so the reported
 PICP is always out-of-calibration.
 }
+\examples{
+set.seed(1)
+pred_obs <- data.frame(fold = rep(1:5, each = 60), obs = rlnorm(300, 3, 0.4))
+pred_obs$pred <- pred_obs$obs * exp(rnorm(300, 0, 0.25))
+conformal_cv(pred_obs, alpha = 0.1)
+}

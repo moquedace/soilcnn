@@ -49,3 +49,10 @@ The fold constructor behind spatial_cv(): the points are binned into square
 blocks, whole blocks go to one fold, and the buffer then drops the training
 points too close to a validation or test point.
 }
+\examples{
+ex <- example_landscape()
+meta <- data.frame(sample_id = seq_len(nrow(ex$profiles)), x = ex$profiles$x,
+                   y = ex$profiles$y)
+# blocks of 0.05 degrees, and a buffer of the widest window (7 cells of 0.0025)
+spatial_folds(meta, k = 3, test_frac = 0.2, block_size = 0.05, buffer = 7 * 0.0025)
+}

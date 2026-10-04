@@ -25,3 +25,13 @@ channel its variable's importance -- every channel of a one-hot set, or of a
 group of yours, its variable's -- and a negative importance, noise around
 zero, weight zero.
 }
+\examples{
+\dontshow{if (torch::torch_is_installed()) withAutoprint(\{ # examplesIf}
+\donttest{
+run <- example_run()    # a small fitted run, made once a session
+imp <- dsm_importance(run$final, run$data, shap_importance(samples = 20, background = 20),
+                      verbose = FALSE)
+importance_weights(imp)   # for dsm_predict(aoa_weights = ) or aoa_reference(weights = )
+}
+\dontshow{\}) # examplesIf}
+}

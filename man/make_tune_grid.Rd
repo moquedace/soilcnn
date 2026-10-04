@@ -49,3 +49,6 @@ window_sizes and conv_channels are stored as list-columns.
 \description{
 Generate a random hyperparameter grid (like caret's tuneLength).
 }
+\examples{
+make_tune_grid(tune_length = 3, seed = 1, windows = c(3, 7))
+}

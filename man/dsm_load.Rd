@@ -50,3 +50,11 @@ the store, read the points, read the predictor types, align the points to
 the store, read the raster resolution, and verify the store can serve this
 configuration.
 }
+\examples{
+ex <- example_landscape()
+store <- dsm_prepare(ex$profiles, target = "soc_stock", raster_dir = ex$raster_dir,
+                     windows = c(3, 7), out_dir = file.path(tempdir(), "landscape"),
+                     percentage = "^clay_pct$", transform = "log1p", n_cores = 1,
+                     overwrite = TRUE, verbose = FALSE)
+dsm_load(store, windows = integer(0))   # the table alone: loading windows needs torch
+}

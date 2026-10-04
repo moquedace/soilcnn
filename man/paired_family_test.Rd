@@ -57,3 +57,19 @@ is mostly a statement about 9, and the interval says how large an effect is
 still compatible with the data -- which is the actual question when the
 answer is "the convolution buys nothing".
 }
+\examples{
+# A tuning table: three configurations, each on three folds under two seeds
+set.seed(1)
+cfgs <- data.frame(config_id = c("cfg_001", "cfg_002", "cfg_003"),
+                   skill = c(0.615, 0.62, 0.55), n_params = c(2e5, 2e6, 5e4))
+cmp <- merge(expand.grid(config_id = cfgs$config_id, fold = 1:3, seed = 1:2,
+                         stringsAsFactors = FALSE), cfgs)
+cmp$status  <- "success"
+cmp$val_ccc <- cmp$skill + rnorm(nrow(cmp), 0, 0.02)
+# a second family, trained on the same folds under the same seeds
+forest <- cmp
+forest$config_id <- sub("cfg", "rf", forest$config_id)
+forest$val_ccc <- forest$val_ccc - 0.03 + rnorm(nrow(forest), 0, 0.01)
+paired_family_test(cmp, forest, metric = "val_ccc", config_a = "cfg_002",
+                   config_b = "rf_002", label_a = "cnn", label_b = "forest")
+}

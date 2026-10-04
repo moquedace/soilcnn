@@ -153,6 +153,9 @@
 #'   frequency, so `fill = "mean"` gives every point the average landscape,
 #'   flat. A large drop under it with a small one under permutation says the
 #'   model reacts to the input being unusual rather than to its content.
+#' @examples
+#' permutation_importance()
+#' permutation_importance(draws = 3, within = 0.05)   # donors from the same 0.05 block
 #' @export
 permutation_importance <- function(draws = 5L, within = NULL,
                                    fill = c("permute", "mean"),
@@ -237,6 +240,8 @@ print.importance_spec <- function(x, ...) {
 #' @param metric What the table is ranked by, as in [permutation_importance()].
 #' @param seed   Seed of the permutations, shared by every model.
 #' @return An `importance_spec`, for [dsm_importance()].
+#' @examples
+#' context_importance(by = "ring")
 #' @export
 context_importance <- function(by = c("ring", "window"), bands = NULL, per_variable = FALSE,
                                draws = 5L, metric = c("ccc", "rmse", "rmse_transform"),
@@ -327,6 +332,9 @@ context_importance <- function(by = c("ring", "window"), bands = NULL, per_varia
 #'   (integrated gradients); [dsm_importance()] checks that they do and stops
 #'   if they do not. SHAP by deep-network rules (DeepSHAP) is not offered: it
 #'   needs a propagation rule written for every layer of this architecture.
+#' @examples
+#' shap_importance()
+#' shap_importance("kernel", background = 8, max_points = 50)
 #' @export
 shap_importance <- function(estimator = c("expected_gradients", "integrated_gradients", "kernel"),
                             samples = 100L, background = NULL, steps = 50L,
@@ -383,6 +391,8 @@ shap_importance <- function(estimator = c("expected_gradients", "integrated_grad
 #' @param permutations Above 14 variables: permutations sampled, in pairs.
 #' @param seed Seed of the draws, shared by every model.
 #' @return An `importance_spec`, for [dsm_importance()].
+#' @examples
+#' sage_importance(background = 8, max_points = 100)
 #' @export
 sage_importance <- function(loss = c("mse", "mae"), background = 16L, max_points = 200L,
                             permutations = 64L, seed = 42L) {
@@ -431,6 +441,8 @@ sage_importance <- function(loss = c("mse", "mae"), background = 16L, max_points
 #'   spread of the curve over the points -- the standard deviation of the
 #'   effect at their values; flat is no effect (Greenwell et al. 2018 for the
 #'   idea, on partial dependence).
+#' @examples
+#' ale_effect(bins = 10)
 #' @export
 ale_effect <- function(variables = NULL, bins = 20L) {
   if (!is.null(variables) && (!is.character(variables) || length(variables) == 0L ||
@@ -516,6 +528,16 @@ ale_effect <- function(variables = NULL, bins = 20L) {
 #'   channel names). Channels it does not name keep the automatic rule.
 #' @return A tibble in channel order: `channel`, `variable`, and `rule`
 #'   ("alone", "one-hot set" or "yours").
+#' @examples
+#' ex <- example_landscape()
+#' store <- dsm_prepare(ex$profiles, target = "soc_stock", raster_dir = ex$raster_dir,
+#'                      windows = c(3, 7), out_dir = file.path(tempdir(), "landscape"),
+#'                      percentage = "^clay_pct$", transform = "log1p", n_cores = 1,
+#'                      overwrite = TRUE, verbose = FALSE)
+#' data <- dsm_load(store, windows = integer(0), verbose = FALSE)
+#' importance_groups(data)          # the geology dummies, found as one variable
+#' themes <- data.frame(channel = c("temperature", "precipitation"), variable = "climate")
+#' importance_groups(data, themes)  # and two channels made one by you
 #' @export
 importance_groups <- function(data, groups = "auto") {
   .importance_check_data(data)
@@ -753,6 +775,14 @@ importance_groups <- function(data, groups = "auto") {
 #'   `table`, `by_model`, `raw` (each unit's scores), `check` (the seeds
 #'   trained again with nothing left out, against the run), `noise` (what a
 #'   refit moves a score by with nothing to lose) and `refit_dir`.
+#' @examplesIf torch::torch_is_installed()
+#' \donttest{
+#' run <- example_run()    # a small fitted run, made once a session
+#' imp <- dsm_importance(run$final, run$data, permutation_importance(draws = 2),
+#'                       verbose = FALSE)
+#' imp
+#' plot(imp)
+#' }
 #' @export
 dsm_importance <- function(final, data, method = permutation_importance(),
                            rows = c("test", "folds"), groups = "auto", config = NULL,
@@ -1964,6 +1994,12 @@ dsm_importance <- function(final, data, method = permutation_importance(),
 #' @param rasters Where the rasters are, as in [dsm_predict()]; NULL for the
 #'   store's own raster table.
 #' @return A tibble of `x`, `y` (cell centres), with the grid as an attribute.
+#' @examplesIf torch::torch_is_installed()
+#' \donttest{
+#' run <- example_run()    # a small fitted run, made once a session
+#' pts <- importance_points(run$final, run$data, every = 4)   # every 4th cell
+#' nrow(pts)
+#' }
 #' @export
 importance_points <- function(final, data, extent = NULL, every = 1L, rasters = NULL) {
   if (!is.numeric(every) || length(every) != 1L || every < 1 || every != round(every)) {
@@ -2232,6 +2268,15 @@ importance_points <- function(final, data, extent = NULL, every = 1L, rasters = 
 #'   (in each cell, the variable with the largest mean |SHAP|, as the number in
 #'   `legend`), `legend`, `prediction` (the mean prediction, native units)
 #'   and `files`. `plot()` draws it.
+#' @examplesIf torch::torch_is_installed()
+#' \donttest{
+#' run <- example_run()    # a small fitted run, made once a session
+#' pts <- importance_points(run$final, run$data, every = 4)
+#' imp <- dsm_importance(run$final, run$data, shap_importance(samples = 10, background = 20),
+#'                       at = pts, seeds = 42, verbose = FALSE)
+#' m <- importance_map(imp)
+#' plot(m)
+#' }
 #' @export
 importance_map <- function(x, resolution = NULL, output_dir = NULL) {
   if (!inherits(x, "dsm_importance") || !identical(x$rows, "map")) {
@@ -2947,6 +2992,13 @@ print.dsm_importance <- function(x, n = 20L, ...) {
 #'   [refit_importance()] or [ale_effect()].
 #' @return A named numeric vector, one weight per channel in the store's order,
 #'   for `dsm_predict(aoa_weights = )` or `aoa_reference(weights = )`.
+#' @examplesIf torch::torch_is_installed()
+#' \donttest{
+#' run <- example_run()    # a small fitted run, made once a session
+#' imp <- dsm_importance(run$final, run$data, shap_importance(samples = 20, background = 20),
+#'                       verbose = FALSE)
+#' importance_weights(imp)   # for dsm_predict(aoa_weights = ) or aoa_reference(weights = )
+#' }
 #' @export
 importance_weights <- function(x) {
   if (!inherits(x, "dsm_importance")) {
@@ -2990,6 +3042,15 @@ importance_weights <- function(x) {
 #'   variables they share), `labels`, and for two SHAP importances of the same
 #'   points `points_agreement` (per variable, the correlation of their values
 #'   point by point and their mean difference against the second's size).
+#' @examplesIf torch::torch_is_installed()
+#' \donttest{
+#' run <- example_run()    # a small fitted run, made once a session
+#' perm <- dsm_importance(run$final, run$data, permutation_importance(draws = 2),
+#'                        verbose = FALSE)
+#' shap <- dsm_importance(run$final, run$data, shap_importance(samples = 20, background = 20),
+#'                        verbose = FALSE)
+#' compare_importance(permutation = perm, shap = shap)
+#' }
 #' @export
 compare_importance <- function(..., n = 20L) {
   xs <- list(...)

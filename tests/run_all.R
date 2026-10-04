@@ -79,7 +79,8 @@ slow_files <- c(
   "test_final.R",            # dsm_final(): N seeds side by side == one by one; the report
   "test_predict.R",          # dsm_predict(): every band at every pixel, by hand; 2 workers == 1
   "test_prepare.R",          # points + raster folder -> store; 2 cores == 1
-  "test_package_install.R"   # build, install to a temp library, library(); workers open the same code
+  "test_package_install.R",  # build, install to a temp library, library(); workers open the same code
+  "test_examples.R"          # every example of man/ runs, \donttest{} too; every failure at once
 )
 
 if (run_slow) test_files <- c(test_files, slow_files)

@@ -65,3 +65,11 @@ A model_spec.
 \description{
 Describe a model the framework can fit.
 }
+\examples{
+mean_only <- model_spec(
+  "mean_only", input = "table",
+  fit = function(x, y, cfg, ...) list(mu = mean(y)),
+  predict = function(object, x, ...) rep(object$mu, nrow(x)),
+  description = "the training mean: a floor every model must beat")
+mean_only
+}
