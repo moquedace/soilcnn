@@ -151,7 +151,7 @@ occlude_patch_array <- function(x, mask, method = c("permute", "zero"),
 #' @param clamp     Plausible range of the target, as in predict_loader().
 #'   The default floors at zero, which suits a stock and not a difference.
 #' @return An object of class "spatial_occlusion".
-#' @export
+#' @noRd
 spatial_occlusion <- function(model, cache, cfg, points_valid,
                               role = "validation", transform = identity,
                               device, method = c("permute", "zero"),
@@ -262,7 +262,7 @@ spatial_occlusion <- function(model, cache, cfg, points_valid,
 
 #' Say what the occlusion found, including when it found nothing.
 #'
-#' @param x   A `spatial_occlusion`, from [spatial_occlusion()].
+#' @param x   A `spatial_occlusion`, from [occlusion_report()].
 #' @param ... Ignored.
 #' @return `x`, invisibly.
 #' @keywords internal
@@ -347,22 +347,31 @@ print.spatial_occlusion <- function(x, ...) {
   invisible(x)
 }
 
-#' Run the occlusion for one trained unit of a tuning run.
+#' What each part of the patch is worth to one trained unit of a tuning run.
 #'
-#' A convenience over spatial_occlusion(): finds the checkpoint, rebuilds the
-#' architecture from the grid and the fold's cache from the plan, so the caller
-#' names a unit rather than assembling one.
+#' Hides a part of every patch -- the centre pixel, each ring around it, the
+#' whole context -- and measures what the unit loses for it. The caller names
+#' the unit and nothing more: the checkpoint is found, the architecture rebuilt
+#' from the grid and the fold's cache from the plan.
 #'
 #' @param run_dir   Tuning run directory.
 #' @param data      dsm_data, or a list with store, points, type_table.
 #' @param config_id Which config.
 #' @param fold,seed_i Which unit of it.
-#' @param ...       Passed to spatial_occlusion().
+#' @param role      Which split to measure on. Validation by default: the test
+#'   set is frozen, and occlusion is a diagnostic, not a result.
 #' @param transform NULL (the default) for the inverse of the transform the
 #'   store was built under, as in dsm_train(); a function to use instead,
 #'   refused if it disagrees with the store's.
-#' @inheritParams spatial_occlusion
-#' @return A `spatial_occlusion`, as spatial_occlusion() returns.
+#' @param device    torch device.
+#' @param ...       `method`: "permute" (the default), each hidden pixel takes
+#'   another point's value -- real terrain, somebody else's -- or "zero";
+#'   `seed`, of the permutation; `clamp`, the plausible range of the target,
+#'   c(0, Inf) by default.
+#' @return A `spatial_occlusion`: `table`, one row per part hidden, with the
+#'   pixels hidden, the CCC and MAE without them and the change in CCC, and
+#'   `baseline_ccc`, the unit's own. Printed with what it does and does not
+#'   mean.
 #' @export
 occlusion_report <- function(run_dir, data, config_id, fold = 1L, seed_i = 1L,
                              role = "validation", transform = NULL,

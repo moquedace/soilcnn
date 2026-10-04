@@ -53,7 +53,7 @@
 #'
 #' @param model A dual_branch_cnn.
 #' @return A logical per branch.
-#' @export
+#' @noRd
 fcn_supported <- function(model) {
   br <- if (model$n_branches == 1L) list(model$branch1) else list(model$branch1, model$branch2)
   vapply(br, function(b) {
@@ -301,9 +301,9 @@ fcn_predict_strip <- function(model, x_strip, centres, engine = c("fcn", "patch"
 #' @param bands   NULL for all, or some of: ensemble_median, ensemble_mean,
 #'   ensemble_sd, ensemble_mad, ensemble_min, ensemble_max, smeared_mean,
 #'   interval_constant, interval_level_di, di, aoa, valid_mask.
-#' @param engine  "auto": fully convolutional where exact (fcn_supported()),
-#'   patch by patch elsewhere. "patch": patch by patch everywhere -- slow, for
-#'   checks.
+#' @param engine  "auto": fully convolutional where that gives exactly the
+#'   patch-by-patch numbers for the network, patch by patch elsewhere.
+#'   "patch": patch by patch everywhere -- slow, for checks.
 #' @param output_dir Where maps go. NULL for <final run>/maps.
 #' @param run_id  NULL for map_<timestamp>. An existing one resumes.
 #' @param resume  Keep the units already finished.

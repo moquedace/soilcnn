@@ -7,7 +7,7 @@
 \method{print}{spatial_occlusion}(x, ...)
 }
 \arguments{
-\item{x}{A \code{spatial_occlusion}, from \code{\link[=spatial_occlusion]{spatial_occlusion()}}.}
+\item{x}{A \code{spatial_occlusion}, from \code{\link[=occlusion_report]{occlusion_report()}}.}
 
 \item{...}{Ignored.}
 }

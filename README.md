@@ -315,7 +315,7 @@ disagree, one of the measurements is wrong and that is worth knowing.
 
 *From the outside*, the baselines race the CNN against a forest fed the same
 neighbourhood with the arrangement thrown away. *From the inside*,
-`spatial_occlusion()` hides part of the patch of a trained network and
+`occlusion_report()` hides part of the patch of a trained network and
 re-predicts:
 
 ```r
@@ -585,7 +585,7 @@ What the interval bands come from instead is [calibrated uncertainty](#calibrate
 | [`R/api.R`](R/api.R) | **The front end**: `dsm_load()` · the resampling specs (`spatial_cv()` and the rest) · `dsm_train()` |
 | [`R/prepare.R`](R/prepare.R) | `dsm_prepare()` — a point table and a folder of aligned rasters become a patch store, with the target transform, the predictor types and the QC rules written into it as a recipe; `dsm_load(store)` then needs nothing else |
 | [`R/final.R`](R/final.R) | `dsm_final()`: the selected config refitted under N seeds, side by side with fixed threads per seed; the ensemble, the conformal interval, the smearing factor; and `final_report.md`, which declares every hyperparameter of the chosen CNN and whether the search chose it. A resume is held to the settings its run started with |
-| [`R/predict.R`](R/predict.R) | `dsm_predict()`: the map, for a grid as large as the world at 250 m -- row bands read once through a buffer that keeps its halo, the network fully convolutional where that is exact (`fcn_supported()`), workers side by side and resumable; the ensemble bands, the smeared mean, the constant and the level-and-DI conformal intervals and the AOA for every calibration source given (block, kNNDM), one VRT per band; and, first, a probe that must reproduce the final model's stored predictions at the profiles |
+| [`R/predict.R`](R/predict.R) | `dsm_predict()`: the map, for a grid as large as the world at 250 m -- row bands read once through a buffer that keeps its halo, the network fully convolutional where that is exact, workers side by side and resumable; the ensemble bands, the smeared mean, the constant and the level-and-DI conformal intervals and the AOA for every calibration source given (block, kNNDM), one VRT per band; and, first, a probe that must reproduce the final model's stored predictions at the profiles |
 | [`R/utils.R`](R/utils.R) | Safe I/O helpers, torch device setup, `env_*()` overrides, `latest_run_dir()` — the newest *finished* run, by time |
 | [`R/checks.R`](R/checks.R) | `check_ledger()` · `ledger_check()` · `ledger_verdict()` — a ledger whose verdict refuses to pass while a promised check is missing |
 | [`R/metrics.R`](R/metrics.R) | `ccc()` · R² · MAE · NSE · RMSE · MQI · **signed bias**, per split and per quantile group |
@@ -604,7 +604,7 @@ What the interval bands come from instead is [calibrated uncertainty](#calibrate
 | [`R/caret_adapter.R`](R/caret_adapter.R) | `caret_spec()` — borrow ~230 models, never caret's resampling |
 | [`R/aoa.R`](R/aoa.R) | Dissimilarity index · area of applicability |
 | [`R/conformal.R`](R/conformal.R) | `conformal_calibrate()` · `picp_report()` — intervals with a coverage guarantee, and the check that they keep it |
-| [`R/occlusion.R`](R/occlusion.R) | `spatial_occlusion()` — does the trained network use the neighbourhood, or only the centre pixel? |
+| [`R/occlusion.R`](R/occlusion.R) | `occlusion_report()` — does the trained network use the neighbourhood, or only the centre pixel? |
 | [`R/smearing.R`](R/smearing.R) | `smearing_factor()` · `smear()` — the back-transform of a log-trained median, and the one surface that may be summed; `smearing_check()` measures its factors on held-out points, and `smear_map()` applies one to a median map |
 | [`R/block_bootstrap.R`](R/block_bootstrap.R) | `block_bootstrap()` · `equal_area_blocks()` · `spatial_correlogram()` — intervals on clustered test points from whole blocks of equal area, per profile and per block |
 | [`R/test_optimism.R`](R/test_optimism.R) | `freeze_selection()` · `score_test_grid()` — the test set, scored only after the choice is locked |

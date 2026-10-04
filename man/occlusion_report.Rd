@@ -2,7 +2,7 @@
 % Please edit documentation in R/occlusion.R
 \name{occlusion_report}
 \alias{occlusion_report}
-\title{Run the occlusion for one trained unit of a tuning run.}
+\title{What each part of the patch is worth to one trained unit of a tuning run.}
 \usage{
 occlusion_report(
   run_dir,
@@ -34,13 +34,20 @@ refused if it disagrees with the store's.}
 
 \item{device}{torch device.}
 
-\item{...}{Passed to spatial_occlusion().}
+\item{...}{\code{method}: "permute" (the default), each hidden pixel takes
+another point's value -- real terrain, somebody else's -- or "zero";
+\code{seed}, of the permutation; \code{clamp}, the plausible range of the target,
+c(0, Inf) by default.}
 }
 \value{
-A \code{spatial_occlusion}, as spatial_occlusion() returns.
+A \code{spatial_occlusion}: \code{table}, one row per part hidden, with the
+pixels hidden, the CCC and MAE without them and the change in CCC, and
+\code{baseline_ccc}, the unit's own. Printed with what it does and does not
+mean.
 }
 \description{
-A convenience over spatial_occlusion(): finds the checkpoint, rebuilds the
-architecture from the grid and the fold's cache from the plan, so the caller
-names a unit rather than assembling one.
+Hides a part of every patch -- the centre pixel, each ring around it, the
+whole context -- and measures what the unit loses for it. The caller names
+the unit and nothing more: the checkpoint is found, the architecture rebuilt
+from the grid and the fold's cache from the plan.
 }

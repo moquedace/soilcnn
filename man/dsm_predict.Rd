@@ -74,9 +74,9 @@ refit's own (its evaluation clamps to c(0, Inf) by default).}
 ensemble_sd, ensemble_mad, ensemble_min, ensemble_max, smeared_mean,
 interval_constant, interval_level_di, di, aoa, valid_mask.}
 
-\item{engine}{"auto": fully convolutional where exact (fcn_supported()),
-patch by patch elsewhere. "patch": patch by patch everywhere -- slow, for
-checks.}
+\item{engine}{"auto": fully convolutional where that gives exactly the
+patch-by-patch numbers for the network, patch by patch elsewhere.
+"patch": patch by patch everywhere -- slow, for checks.}
 
 \item{output_dir}{Where maps go. NULL for \if{html}{\out{<final run>}}/maps.}
 
