@@ -37,6 +37,7 @@
 #      guarded by @examplesIf torch::torch_is_installed()
 #  13. no raw <placeholder> in the docs' text, which roxygen's markdown takes
 #      for an HTML tag
+#  14. no figure drawn from the smoke run is tracked or staged by git
 #
 # Run: source("<package root>/tests/test_package_metadata.R")
 
@@ -290,6 +291,28 @@ raw_tags <- unlist(lapply(r_files, function(f) {
 }))
 ok["no_raw_placeholder_in_the_docs"] <- length(raw_tags) == 0L
 if (length(raw_tags)) cat("  raw <placeholder> at    : ", paste(raw_tags, collapse = ", "), "\n", sep = "")
+
+# ── 14. no smoke figure in a commit ──────────────────────────────────────────
+# tools/vignette_results.R draws the result figures from the smoke run while
+# the real one runs -- layout only, its models never learned -- and records
+# each figure's source in tools/figure_inputs/<name>.source. A figure git
+# tracks or has staged must not come from the smoke; one that is only on disk
+# may, for the draft.
+in_git <- tryCatch(system2("git", c("-C", shQuote(root), "ls-files", "vignettes/figures"),
+                           stdout = TRUE, stderr = FALSE), error = function(e) NA_character_)
+smoke_in_git <- character(0)
+if (!anyNA(in_git)) {
+  for (f in in_git) {
+    rec <- file.path(root, "tools", "figure_inputs",
+                     paste0(tools::file_path_sans_ext(basename(f)), ".source"))
+    if (file.exists(rec) && any(readLines(rec, warn = FALSE) == "source: smoke")) {
+      smoke_in_git <- c(smoke_in_git, basename(f))
+    }
+  }
+}
+ok["git_answered_for_the_figures"] <- !anyNA(in_git)
+ok["no_smoke_figure_in_git"] <- length(smoke_in_git) == 0L
+if (length(smoke_in_git)) cat("  smoke figures in git     : ", paste(smoke_in_git, collapse = ", "), "\n", sep = "")
 
 cat("  imports declared/used    : ", length(imports), " / ", sum(imports %in% used), "\n", sep = "")
 cat("  exports, S3 methods      : ", length(exported), ", ", length(registered), "\n", sep = "")
