@@ -25,6 +25,10 @@
 #  10. the workers read the store one at a time: the lock gives back what it
 #      ran, lets go when that fails, and is taken over from a worker that died;
 #      the RAM budget counts every worker training and one at its peak
+#  11. the importance of this final model, on the files a real run wrote:
+#      every method on the test set and on the folds, at another thread count
+#      than the seeds trained at; every kind prints and draws its figure; a
+#      store that is not the run's is refused
 #
 # The fixture: 96 points in 8 sites two degrees apart, 3 channels, window 3 --
 # enough blocks that a spatial tuning plan and its refit split both have
@@ -486,6 +490,24 @@ ok["two_estimators_explain_the_same_points"] <-
   identical(sort(imp_k$points$sample_id), sort(imp_e10$points$sample_id))
 ok["and_are_compared_point_by_point"] <-
   !is.null(compare_importance(imp_e10, imp_k)$points_agreement)
+# SAGE, on the same files and the same draws: what each variable takes away
+# of the loss adds up, model by model, to what the model explains over the
+# background's mean (checked inside, or nothing comes back), and so on
+# average in the table; on the folds, each fold model on its own rows.
+imp_sage <- suppressMessages(dsm_importance(fin, data, sage_importance(background = 8L,
+                                                                       max_points = 10L),
+                                            verbose = FALSE))
+ok["sage_runs_on_the_final"] <- inherits(imp_sage, "dsm_importance") &&
+  setequal(imp_sage$table$variable, preds) && all(imp_sage$table$n_models == 3L) &&
+  isTRUE(all.equal(sum(imp_sage$table$importance),
+                   mean(imp_sage$losses$loss_mean_prediction - imp_sage$losses$loss_model)))
+imp_sagef <- suppressMessages(dsm_importance(rd, data, sage_importance(background = 8L,
+                                                                       max_points = 10L),
+                                             rows = "folds", verbose = FALSE))
+ok["sage_on_the_folds_scores_every_fold_model"] <- nrow(imp_sagef$units) == 4L &&
+  all(is.finite(imp_sagef$table$importance))
+ok["sage_compares_with_the_rest"] <-
+  inherits(compare_importance(imp_t, imp_eg, imp_sage), "importance_comparison")
 # ALE, on the same files: a curve per variable, its bins shared by every model
 # of the call -- the three seeds here, the four fold models below.
 imp_ale <- suppressMessages(dsm_importance(fin, data, ale_effect(bins = 5L), verbose = FALSE))
@@ -498,23 +520,24 @@ ok["ale_on_the_folds_runs_on_every_fold_model"] <- nrow(imp_alef$units) == 4L &&
   all(is.finite(imp_alef$curves$ale))
 ok["ale_compares_with_the_rest"] <-
   inherits(compare_importance(imp_t, imp_eg, imp_ale), "importance_comparison")
-ok["every_importance_prints"] <- all(vapply(list(imp_t, imp_ring, imp_pv, imp_win, imp_eg, imp_ale),
+ok["every_importance_prints"] <- all(vapply(list(imp_t, imp_ring, imp_pv, imp_win, imp_eg, imp_ale,
+                                                 imp_k, imp_sage),
                                             function(x) length(utils::capture.output(print(x))) > 5L,
                                             logical(1)))
 # EVERY KIND DRAWS ITS FIGURE, to files: a bar chart, the rings, the context
 # per variable, the windows, SHAP's summary plot, the ALE curves, the kernel's
-# bars, and two SHAP importances compared point by point.
+# summary plot, SAGE's bars, and two SHAP importances compared point by point.
 fig_dir <- file.path(base, "importance_figures")
 dir.create(fig_dir)
 grDevices::png(file.path(fig_dir, "fig_%02d.png"), width = 1100, height = 800)
 drawn <- tryCatch({
-  for (x in list(imp_t, imp_ring, imp_pv, imp_win, imp_eg, imp_ale, imp_k)) plot(x)
+  for (x in list(imp_t, imp_ring, imp_pv, imp_win, imp_eg, imp_ale, imp_k, imp_sage)) plot(x)
   plot(compare_importance(imp_e10, imp_k))
   TRUE
 }, error = function(e) conditionMessage(e))
 grDevices::dev.off()
 ok["every_importance_draws_its_figure"] <- isTRUE(drawn) &&
-  length(list.files(fig_dir, pattern = "^fig_.*png$")) == 8L
+  length(list.files(fig_dir, pattern = "^fig_.*png$")) == 9L
 if (!isTRUE(drawn)) cat("  figure failed: ", drawn, "\n", sep = "")
 # A STORE THAT IS NOT THE RUN'S. The same points with other targets: the
 # models' own scores no longer come back, and nothing is measured.

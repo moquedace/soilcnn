@@ -20,5 +20,6 @@
 The figure that answers the importance's own question: bars for a
 permutation, the cost per pixel by ring (or per variable, or per window)
 for a context, the summary plot for SHAP -- a point per profile at its SHAP
-value, coloured by the variable's value there -- and the curves for ALE.
+value, coloured by the variable's value there -- the curves for ALE, and
+for SAGE the loss each variable takes away.
 }

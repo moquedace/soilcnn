@@ -45,6 +45,10 @@
 #      model's, a product's interaction split; nothing for what is not read;
 #      exact sums; permutations exact for a linear model; one background point
 #      in every window; and two SHAP importances compared point by point
+#  13. SAGE, against Shapley values of the loss known in closed form: two
+#      variables that carry one signal split it; nothing for what is not read;
+#      exact sums; paired permutations exact for two variables; the loss asked
+#      for
 #
 # Run: source("<package root>/tests/test_importance.R")
 
@@ -675,6 +679,68 @@ ok["ale_wants_two_bins"] <- grepl("2 or more", err(ale_effect(bins = 1)))
 ok["ale_wants_distinct_names"] <- grepl("distinct", err(ale_effect(variables = c("a", "a"))))
 ok["ale_prints_its_bins"] <- grepl("ALE, 20 bin", paste(capture.output(print(ale_effect())), collapse = " "))
 
+# ── 13. SAGE: Shapley values of the loss, known in closed form ────────────────
+#
+# A model that reads two variables, f = x1 + m3 (channel 1's centre, channel
+# 3's patch mean), on points where channel 3 is a noisy copy of channel 1:
+# the two carry one signal. In the game a coalition's prediction is
+# K + [1 in S] a + [3 in S] c -- a and c each variable's distance to the
+# background's mean, K the background's mean prediction -- and its loss is
+# quadratic in them, so with r = y - K the Shapley values of the loss are
+#   phi_1 = 2 mean(a r) - mean(a^2) - mean(a c),   phi_3 alike:
+# the shared part, 2 mean(a c), split in halves. Left out one at a time, each
+# gets mean(a c) less -- the shared part credited to neither, which is what a
+# permutation sees. What the model does not read gets exactly nothing, and
+# the values add up exactly to the loss of the background's mean prediction
+# less the model's own. With two variables that matter, every permutation
+# paired with its reverse sees each order once, so sampled permutations are
+# exact too.
+pair_reader <- nn_module("pair_reader", forward = function(x) {
+  x[, 1, 3, 3] + x[, 3, , ]$mean(dim = c(2, 3))
+})
+copy_of_one <- function(a, seed) {
+  noise <- with_local_seed(seed, rnorm(length(a[, 3, , ]), 0, 0.3))
+  a[, 3, , ] <- a[, 1, 3, 3] + array(noise, dim(a[, 3, , ]))
+  a
+}
+a_sh  <- copy_of_one(a5, 31L)
+bg_sh <- copy_of_one(bg_arr[1:8, , , , drop = FALSE], 32L)
+x_sh  <- torch_tensor(a_sh, dtype = torch_float())
+xb_sh <- list(torch_tensor(bg_sh, dtype = torch_float()))
+m3_sh <- apply(a_sh[, 3, , , drop = FALSE], 1, mean)
+f_sh  <- a_sh[, 1, 3, 3] + m3_sh
+y_sh  <- f_sh + with_local_seed(33L, rnorm(nv, 0, 0.5))
+B1 <- mean(bg_sh[, 1, 3, 3])
+B3 <- mean(apply(bg_sh[, 3, , , drop = FALSE], 1, mean))
+a_c <- a_sh[, 1, 3, 3] - B1; c_c <- m3_sh - B3; r_c <- y_sh - (B1 + B3)
+phi1 <- 2 * mean(a_c * r_c) - mean(a_c^2) - mean(a_c * c_c)
+phi3 <- 2 * mean(c_c * r_c) - mean(c_c^2) - mean(a_c * c_c)
+r_s <- .importance_sage_unit(pair_reader(), list(x_sh), y_sh, G5, xb_sh, batch_size = 64L)
+ok["sage_is_the_shapley_value_of_the_loss"] <-
+  abs(r_s$phi[1] - phi1) < 1e-3 && abs(r_s$phi[3] - phi3) < 1e-3
+ok["the_two_copies_share_the_signal"] <- mean(a_c * c_c) > 0.5 &&
+  abs(r_s$phi[1] - r_s$phi[3]) < 0.25 * abs(r_s$phi[1])
+ok["sage_gives_what_the_model_ignores_exactly_nothing"] <- all(r_s$phi[c(2, 4, 5)] == 0)
+ok["sage_adds_up_to_the_loss_explained_exactly"] <-
+  abs(sum(r_s$phi) - (r_s$loss_empty - r_s$loss_model)) < 1e-8 && abs(r_s$gap) < 1e-8
+ok["sage_losses_are_the_models_and_the_mean_predictions"] <-
+  abs(r_s$loss_model - mean((f_sh - y_sh)^2)) < 1e-4 &&
+  abs(r_s$loss_empty - mean((B1 + B3 - y_sh)^2)) < 1e-4
+r_sp <- .importance_sage_unit(pair_reader(), list(x_sh), y_sh, G5, xb_sh, exact_max = 2L,
+                              permutations = 6L, batch_size = 64L)
+ok["paired_permutations_are_exact_for_two_variables_that_matter"] <-
+  max(abs(r_sp$phi - r_s$phi)) < 1e-6 && abs(r_sp$gap) < 1e-8
+r_sm <- .importance_sage_unit(pair_reader(), list(x_sh), y_sh, G5, xb_sh, loss = "mae",
+                              batch_size = 64L)
+ok["sage_takes_the_loss_asked_for"] <-
+  abs(r_sm$loss_model - mean(abs(f_sh - y_sh))) < 1e-4 && abs(r_sm$gap) < 1e-8
+ok["sage_wants_whole_numbers"] <- grepl("whole number", err(sage_importance(background = 1)))
+ok["sage_prints_its_loss_and_no_metric"] <- any(grepl(
+  "SAGE, mse, 16 background point\\(s\\), at most 200 point\\(s\\)$",
+  capture.output(print(sage_importance()))))
+ok["too_many_variables_for_sage_are_refused"] <-
+  grepl("SAGE takes up to 40", err(.importance_kernel_size(41L, sage = TRUE)))
+
 cat(sprintf("  one-hot sets found        : %s\n",
             paste(unique(g$variable[g$rule == "one-hot set"]), collapse = ", ")))
 cat(sprintf("  known model, v1 / v2 / v3 : %.3f / %.3f / %.3f (drop in CCC, mean of 3 draws)\n",
@@ -683,6 +749,10 @@ cat(sprintf("  regional gradient         : %.3f over all rows, %.3f within block
             mean(imp_of(r_all, "v1")), mean(imp_of(r_blk, "v1"))))
 cat(sprintf("  ring reader, by band      : centre %.3f | ring 1 %.3f | ring 2 %.3f\n",
             mean(imp_of(r_r, "centre")), mean(imp_of(r_r, "ring_01")), mean(imp_of(r_r, "ring_02"))))
+loo1 <- phi1 - mean(a_c * c_c); loo3 <- phi3 - mean(a_c * c_c)
+cat(sprintf("  one signal in two, SAGE   : v1 %.2f / v3 %.2f of the loss explained; left out one at a time %.2f / %.2f\n",
+            r_s$phi[1] / sum(r_s$phi), r_s$phi[3] / sum(r_s$phi), loo1 / sum(r_s$phi),
+            loo3 / sum(r_s$phi)))
 cat(sprintf("  SHAP adds up, real network: EG noise %.1f%%, IG off by %.2f%%\n",
             100 * .importance_check_completeness(r_real, "expected_gradients", "g")$rel_noise,
             100 * .importance_check_completeness(r_real_ig, "integrated_gradients", "g")$rel_noise))

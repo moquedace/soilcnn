@@ -16,7 +16,9 @@
 #                 colours, the spread from the width;
 #   ale           the curves, with the band between models, and the class
 #                 effects as bars;
-#   a map         importance_map()'s layers: SHAP per variable on a diverging
+#   sage          the loss each variable takes away, ranked, with the spread
+#                 between models -- below zero, it costs skill;
+#   a map        importance_map()'s layers: SHAP per variable on a diverging
 #                 scale centred on zero, the dominant variable, the prediction.
 #
 # BASE GRAPHICS, NOT A PLOTTING PACKAGE: the vignette's figures are drawn so,
@@ -27,7 +29,8 @@
 #' The figure that answers the importance's own question: bars for a
 #' permutation, the cost per pixel by ring (or per variable, or per window)
 #' for a context, the summary plot for SHAP -- a point per profile at its SHAP
-#' value, coloured by the variable's value there -- and the curves for ALE.
+#' value, coloured by the variable's value there -- the curves for ALE, and
+#' for SAGE the loss each variable takes away.
 #'
 #' @param x A `dsm_importance`, from [dsm_importance()].
 #' @param n How many variables to show.

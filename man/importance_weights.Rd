@@ -8,7 +8,8 @@ importance_weights(x)
 }
 \arguments{
 \item{x}{A \code{dsm_importance} with one value per variable: by
-\code{\link[=permutation_importance]{permutation_importance()}}, \code{\link[=shap_importance]{shap_importance()}} or \code{\link[=ale_effect]{ale_effect()}}.}
+\code{\link[=permutation_importance]{permutation_importance()}}, \code{\link[=shap_importance]{shap_importance()}}, \code{\link[=sage_importance]{sage_importance()}} or
+\code{\link[=ale_effect]{ale_effect()}}.}
 }
 \value{
 A named numeric vector, one weight per channel in the store's order,

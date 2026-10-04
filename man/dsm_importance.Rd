@@ -27,7 +27,8 @@ dsm_importance(
 windows need not be loaded: one that is not is read from the store.}
 
 \item{method}{An importance method: \code{\link[=permutation_importance]{permutation_importance()}},
-\code{\link[=context_importance]{context_importance()}}, \code{\link[=shap_importance]{shap_importance()}} or \code{\link[=ale_effect]{ale_effect()}}.}
+\code{\link[=context_importance]{context_importance()}}, \code{\link[=shap_importance]{shap_importance()}}, \code{\link[=sage_importance]{sage_importance()}} or
+\code{\link[=ale_effect]{ale_effect()}}.}
 
 \item{rows}{"test" (the default): the final run's seeds, on the test set
 the whole run held out -- the importance of the model that draws the map.
@@ -73,7 +74,9 @@ variable), \code{points} (every point's values), \code{patch} and \code{pixels} 
 in the patch they sit) and \code{completeness} (how well they add up). For
 ALE: \code{table} (the spread, trend and extremes of each effect), \code{curves}
 (each continuous variable's curve, with its spread between models) and
-\code{classes} (each categorical's class effects).
+\code{classes} (each categorical's class effects). For SAGE: \code{table} (the loss
+each variable takes away, and its share), \code{by_model} and \code{losses} (each
+model's loss, and the mean prediction's, which SAGE splits).
 }
 \description{
 The method is an argument, as the validation design is in \code{\link[=dsm_train]{dsm_train()}}:
@@ -81,6 +84,8 @@ The method is an argument, as the validation design is in \code{\link[=dsm_train
 variable, over all rows or within blocks or classes; \code{\link[=context_importance]{context_importance()}}
 how far from the point, and through which window, it reads;
 \code{\link[=shap_importance]{shap_importance()}} how each variable pushes each prediction, up or down;
+\code{\link[=sage_importance]{sage_importance()}} how much of the model's skill each variable carries,
+shared fairly among variables that carry the same information;
 \code{\link[=ale_effect]{ale_effect()}} how the prediction changes along each variable's range.
 Each variable is a channel, or the channels of one categorical (see
 \code{\link[=importance_groups]{importance_groups()}}), or a group of yours.

@@ -183,7 +183,10 @@ permutation_importance <- function(draws = 5L, within = NULL,
 #' @keywords internal
 #' @export
 print.importance_spec <- function(x, ...) {
-  cat("<importance_spec>", .importance_label(x), "| ranked by", x$metric, "\n")
+  # Only a permutation and a context are scored by a metric; the others carry
+  # one for the frame and rank by their own value.
+  ranked <- if (x$kind %in% c("permutation", "context")) paste(" | ranked by", x$metric) else ""
+  cat("<importance_spec> ", .importance_label(x), ranked, "\n", sep = "")
   invisible(x)
 }
 
@@ -339,6 +342,52 @@ shap_importance <- function(estimator = c("expected_gradients", "integrated_grad
             class = "importance_spec")
 }
 
+#' SAGE: how much of the model's skill each variable carries, shared fairly.
+#'
+#' Shapley Additive Global importancE (Covert, Lundberg & Lee 2020): the
+#' Shapley values of the loss the model explains. The value of a set of
+#' variables is the loss of the model's predictions when only they are known
+#' -- the others taken from background points of the model's own training
+#' data, the whole patch, the same point in every window, as in
+#' [shap_importance()]`("kernel")`. A variable's SAGE value is the loss it
+#' takes away; variables that carry the same information split it, where a
+#' permutation credits the shared part to neither and a refit without one
+#' gives each nothing (the other stands in). The values add up exactly to the
+#' loss of the mean prediction -- no variable known -- less the model's own.
+#'
+#' Exact over every coalition up to 14 variables, by sampled permutations up
+#' to 40: meant for a few variables -- give `groups` themes.
+#'
+#' @param loss "mse" (the default) or "mae", in the space the model was
+#'   trained in (log1p for a log1p target).
+#' @param background How many of the model's training points the absent
+#'   variables are drawn from; each coalition costs one pass per point each.
+#' @param max_points How many of the rows the loss is taken over, drawn by the
+#'   seed -- the kernel's default, so the two read the same points at the same
+#'   cost. More points, a steadier loss, and a longer run.
+#' @param permutations Above 14 variables: permutations sampled, in pairs.
+#' @param seed Seed of the draws, shared by every model.
+#' @return An `importance_spec`, for [dsm_importance()].
+#' @export
+sage_importance <- function(loss = c("mse", "mae"), background = 16L, max_points = 200L,
+                            permutations = 64L, seed = 42L) {
+  loss <- match.arg(loss)
+  whole <- function(v, what, min = 1) {
+    if (!is.numeric(v) || length(v) != 1L || !is.finite(v) || v < min || v != round(v)) {
+      stop(what, " must be one whole number of ", min, " or more.", call. = FALSE)
+    }
+    as.integer(v)
+  }
+  if (!is.numeric(seed) || length(seed) != 1L || !is.finite(seed)) {
+    stop("seed must be one number.", call. = FALSE)
+  }
+  structure(list(kind = "sage", loss = loss, background = whole(background, "background", 2),
+                 max_points = whole(max_points, "max_points", 2),
+                 permutations = whole(permutations, "permutations", 2), seed = as.integer(seed),
+                 draws = 1L, metric = "ccc", within = NULL, fill = "permute"),
+            class = "importance_spec")
+}
+
 #' ALE: how the prediction changes along each variable's range.
 #'
 #' Accumulated local effects (Apley & Zhu 2020). A variable's range is cut
@@ -385,6 +434,10 @@ ale_effect <- function(variables = NULL, bins = 20L) {
 
 # A method in a few words, for a print and for the column of a comparison.
 .importance_label <- function(spec) {
+  if (identical(spec$kind, "sage")) {
+    return(sprintf("SAGE, %s, %d background point(s), at most %d point(s)", spec$loss,
+                   spec$background, spec$max_points))
+  }
   if (identical(spec$kind, "ale")) {
     return(sprintf("ALE, %d bin(s)%s", spec$bins,
                    if (is.null(spec$variables)) "" else
@@ -626,6 +679,8 @@ importance_groups <- function(data, groups = "auto") {
 #' variable, over all rows or within blocks or classes; [context_importance()]
 #' how far from the point, and through which window, it reads;
 #' [shap_importance()] how each variable pushes each prediction, up or down;
+#' [sage_importance()] how much of the model's skill each variable carries,
+#' shared fairly among variables that carry the same information;
 #' [ale_effect()] how the prediction changes along each variable's range.
 #' Each variable is a channel, or the channels of one categorical (see
 #' [importance_groups()]), or a group of yours.
@@ -637,7 +692,8 @@ importance_groups <- function(data, groups = "auto") {
 #' @param data   The `dsm_data` the run was fitted on, from [dsm_load()]. Its
 #'   windows need not be loaded: one that is not is read from the store.
 #' @param method An importance method: [permutation_importance()],
-#'   [context_importance()], [shap_importance()] or [ale_effect()].
+#'   [context_importance()], [shap_importance()], [sage_importance()] or
+#'   [ale_effect()].
 #' @param rows   "test" (the default): the final run's seeds, on the test set
 #'   the whole run held out -- the importance of the model that draws the map.
 #'   "folds": the tuning run's models of the same configuration, each on its
@@ -671,7 +727,9 @@ importance_groups <- function(data, groups = "auto") {
 #'   in the patch they sit) and `completeness` (how well they add up). For
 #'   ALE: `table` (the spread, trend and extremes of each effect), `curves`
 #'   (each continuous variable's curve, with its spread between models) and
-#'   `classes` (each categorical's class effects).
+#'   `classes` (each categorical's class effects). For SAGE: `table` (the loss
+#'   each variable takes away, and its share), `by_model` and `losses` (each
+#'   model's loss, and the mean prediction's, which SAGE splits).
 #' @export
 dsm_importance <- function(final, data, method = permutation_importance(),
                            rows = c("test", "folds"), groups = "auto", config = NULL,
@@ -683,7 +741,7 @@ dsm_importance <- function(final, data, method = permutation_importance(),
     stop("method must be an importance method, such as permutation_importance().",
          call. = FALSE)
   }
-  if (!method$kind %in% c("permutation", "context", "shap", "ale")) {
+  if (!method$kind %in% c("permutation", "context", "shap", "ale", "sage")) {
     stop("Importance method '", method$kind, "' is not implemented yet.", call. = FALSE)
   }
   if (!is.numeric(batch_size) || length(batch_size) != 1L || batch_size < 1) {
@@ -722,6 +780,10 @@ dsm_importance <- function(final, data, method = permutation_importance(),
   if (identical(method$kind, "ale")) {
     return(.importance_ale_run(fr, data, units, groups, method, transform, clamp,
                                batch_size, say, rows))
+  }
+  if (identical(method$kind, "sage")) {
+    return(.importance_sage_run(fr, data, units, grp, vars, method, transform, clamp,
+                                batch_size, say, rows))
   }
 
   # WHAT IS PERTURBED: a variable, a band of rings, a variable at a band, or a
@@ -1543,10 +1605,11 @@ dsm_importance <- function(final, data, method = permutation_importance(),
 # How many variables the kernel can take: every coalition up to 14, sampled
 # permutations up to 40 -- beyond, a permutation is a pass per variable per
 # background point per point, and themes are what the method is for.
-.importance_kernel_size <- function(M) {
+.importance_kernel_size <- function(M, sage = FALSE) {
   if (M > 40L) {
-    stop("The kernel estimator takes up to 40 variables; this grouping has ", M, ". Give ",
-         "groups = a table of themes, or use expected gradients.", call. = FALSE)
+    stop(if (sage) "SAGE takes" else "The kernel estimator takes", " up to 40 variables; this ",
+         "grouping has ", M, ". Give groups = a table of themes", if (sage)
+           ", or use permutation_importance()." else ", or use expected gradients.", call. = FALSE)
   }
   invisible(M)
 }
@@ -1581,17 +1644,29 @@ dsm_importance <- function(final, data, method = permutation_importance(),
 # prediction and the empty one the background's mean.
 .importance_kernel_unit <- function(model, inputs, G, bg_inputs, exact_max = 14L,
                                     permutations = 64L, seed = 42L, batch_size = 512L) {
+  value <- .importance_coalition_value(model, inputs, G, bg_inputs, batch_size)
+  sh <- .importance_shapley(value, ncol(G), exact_max, permutations, seed)
+  delta <- sh$v_full - sh$v_empty
+  list(phi = sh$phi, f_x = sh$v_full, delta = delta, gap = rowSums(sh$phi) - delta,
+       ring_abs = NULL, pix_abs = NULL)
+}
+
+# The value of a coalition S of variables, for one model: at each point, the
+# mean prediction over the background points with every channel of a variable
+# outside S taken from the background point. A function of S, shared by the
+# kernel (its Shapley values at each point) and SAGE (the Shapley values of
+# the loss of these predictions).
+.importance_coalition_value <- function(model, inputs, G, bg_inputs, batch_size = 512L) {
   model$eval()
   n    <- as.integer(inputs[[1]]$shape[1])
   n_ch <- as.integer(inputs[[1]]$shape[2])
-  M    <- ncol(G)
   B    <- as.integer(bg_inputs[[1]]$shape[1])
   # Every (point, background point) pair is one row of the passes: in batches
   # of rows, the point's and the reference's patches picked by index -- no
   # stack of n x B patches is ever made.
   pt_idx <- rep(seq_len(n), times = B)
   bg_idx <- rep(seq_len(B), each = n)
-  value <- function(S) {
+  function(S) {
     keep <- torch::torch_tensor(as.vector(G %*% as.numeric(S)) > 0,
                                 dtype = torch::torch_bool())$view(c(1L, n_ch, 1L, 1L))
     out <- numeric(n * B)
@@ -1609,46 +1684,177 @@ dsm_importance <- function(final, data, method = permutation_importance(),
     })
     rowMeans(matrix(out, nrow = n, ncol = B))
   }
+}
 
+# The Shapley values of a game of M players whose payoff for a coalition S is
+# payoff(S) -- one number per point (the kernel) or one number (SAGE). Exact
+# over every coalition up to `exact_max` players; above, sampled permutations,
+# each with its reverse, which add up exactly too: along a permutation the
+# marginals telescope to the payoff of all less the payoff of none.
+.importance_shapley <- function(payoff, M, exact_max = 14L, permutations = 64L, seed = 42L) {
   if (M <= exact_max) {
     n_coal <- 2^M
     bits <- 2^(seq_len(M) - 1L)
     member <- function(m) bitwAnd(m, bits) > 0
-    V <- matrix(NA_real_, n, n_coal)
-    for (m in 0:(n_coal - 1)) V[, m + 1] <- value(member(m))
+    first <- payoff(member(0))
+    V <- matrix(NA_real_, length(first), n_coal)
+    V[, 1] <- first
+    for (m in seq_len(n_coal - 1)) V[, m + 1] <- payoff(member(m))
     size <- vapply(0:(n_coal - 1), function(m) sum(member(m)), numeric(1))
     w <- factorial(0:(M - 1)) * factorial((M - 1):0) / factorial(M)
-    phi <- matrix(0, n, M)
+    phi <- matrix(0, nrow(V), M)
     for (i in seq_len(M)) {
       without <- which(bitwAnd(0:(n_coal - 1), bits[i]) == 0) - 1
       for (m in without) {
         phi[, i] <- phi[, i] + w[size[m + 1] + 1] * (V[, m + bits[i] + 1] - V[, m + 1])
       }
     }
-    v_empty <- V[, 1]
-    v_full  <- V[, n_coal]
-  } else {
-    half  <- max(1L, permutations %/% 2L)
-    perms <- with_local_seed(seed + 101L, lapply(seq_len(half), function(p) sample.int(M)))
-    perms <- c(perms, lapply(perms, rev))
-    v_empty <- value(rep(FALSE, M))
-    v_full  <- value(rep(TRUE, M))
-    phi <- matrix(0, n, M)
-    for (pm in perms) {
-      S <- rep(FALSE, M)
-      prev <- v_empty
-      for (k in seq_len(M)) {
-        S[pm[k]] <- TRUE
-        cur <- if (k == M) v_full else value(S)
-        phi[, pm[k]] <- phi[, pm[k]] + (cur - prev)
-        prev <- cur
-      }
-    }
-    phi <- phi / length(perms)
+    return(list(phi = phi, v_empty = V[, 1], v_full = V[, n_coal]))
   }
-  delta <- v_full - v_empty
-  list(phi = phi, f_x = v_full, delta = delta, gap = rowSums(phi) - delta,
-       ring_abs = NULL, pix_abs = NULL)
+  half  <- max(1L, permutations %/% 2L)
+  perms <- with_local_seed(seed + 101L, lapply(seq_len(half), function(p) sample.int(M)))
+  perms <- c(perms, lapply(perms, rev))
+  v_empty <- payoff(rep(FALSE, M))
+  v_full  <- payoff(rep(TRUE, M))
+  phi <- matrix(0, length(v_empty), M)
+  for (pm in perms) {
+    S <- rep(FALSE, M)
+    prev <- v_empty
+    for (k in seq_len(M)) {
+      S[pm[k]] <- TRUE
+      cur <- if (k == M) v_full else payoff(S)
+      phi[, pm[k]] <- phi[, pm[k]] + (cur - prev)
+      prev <- cur
+    }
+  }
+  list(phi = phi / length(perms), v_empty = v_empty, v_full = v_full)
+}
+
+# SAGE for one model (Covert, Lundberg & Lee 2020): the Shapley values of the
+# loss the model's predictions make, in the game the kernel plays -- the value
+# of a coalition the loss, over the points, of the coalition's predictions. A
+# variable's value is the loss it takes away, shared fairly among variables
+# that carry the same information; they add up to the loss of the mean
+# prediction (no variable known) less the model's own.
+.importance_sage_unit <- function(model, inputs, y, G, bg_inputs, loss = "mse",
+                                  exact_max = 14L, permutations = 64L, seed = 42L,
+                                  batch_size = 512L) {
+  value <- .importance_coalition_value(model, inputs, G, bg_inputs, batch_size)
+  lossf <- if (identical(loss, "mae")) function(p) mean(abs(p - y)) else
+    function(p) mean((p - y)^2)
+  sh <- .importance_shapley(function(S) -lossf(value(S)), ncol(G), exact_max, permutations,
+                            seed)
+  phi <- as.vector(sh$phi)
+  list(phi = phi, loss_model = -sh$v_full, loss_empty = -sh$v_empty,
+       gap = sum(phi) - (sh$v_full - sh$v_empty))
+}
+
+# sage_importance() through every model of the call: the same units, rows,
+# background and checks as the kernel, the loss of the coalitions instead of
+# their predictions.
+.importance_sage_run <- function(fr, data, units, grp, vars, method, transform, clamp,
+                                 batch_size, say, rows) {
+  ch   <- as.character(data$store$predictors)
+  n_ch <- length(ch)
+  G <- matrix(0, n_ch, length(vars), dimnames = list(ch, names(vars)))
+  for (v in seq_along(vars)) G[vars[[v]], v] <- 1
+  M <- ncol(G)
+  .importance_kernel_size(M, sage = TRUE)
+  ws_model <- as.integer(units$cfg[[1]]$window_sizes[[1]])
+  keys <- patch_window_key(ws_model)
+  say(sprintf("Importance -- %s | %s of final run '%s' (%s)", .importance_label(method),
+              if (rows == "test") "test set" else "fold validation rows",
+              basename(fr$run_dir), fr$config_id))
+  say("  ", .importance_groups_line(grp))
+  say("  ", .importance_shap_cost_line(utils::modifyList(method, list(estimator = "kernel")),
+                                       M, nrow(units)))
+
+  device <- torch::torch_device("cpu")
+  baseline <- list(); per_model <- list(); losses <- list()
+  cache <- NULL; cache_key <- NULL; bg <- NULL; sel <- NULL
+  t0 <- Sys.time()
+  for (u in seq_len(nrow(units))) {
+    un <- units[u, , drop = FALSE]
+    rows_u <- un$rows[[1]]
+    if (!identical(cache_key, un$cache_key)) {
+      cache <- NULL; bg <- NULL; invisible(gc(verbose = FALSE))
+      ws_all <- sort(unique(unlist(un$cfg[[1]]$window_sizes)))
+      cache <- build_fold_cache(data$store, data$points, data$type_table,
+                                stats::setNames(list(rows_u), un$role), ws_all,
+                                scaling = un$scaling[[1]], verbose = FALSE)$cache[[un$role]]
+      cache_key <- un$cache_key
+      n_all <- length(rows_u)
+      # The same draw of rows as shap_importance()'s for one seed: SAGE and
+      # SHAP of one call can be read on the same points.
+      sel <- if (method$max_points >= n_all) seq_len(n_all) else
+        with_local_seed(method$seed + 31L, sort(sample.int(n_all, method$max_points)))
+      train <- un$train_rows[[1]]
+      bg_rows <- with_local_seed(method$seed + 7919L, {
+        if (length(train) > method$background) sort(sample(train, method$background)) else train
+      })
+      bg <- build_fold_cache(data$store, data$points, data$type_table, list(background = bg_rows),
+                             ws_all, scaling = un$scaling[[1]], verbose = FALSE)$cache$background
+    }
+    inputs <- lapply(keys, function(k) cache[[k]])
+    meta_u <- data$store$meta[rows_u, , drop = FALSE]
+    model <- build_cnn_from_config(un$cfg[[1]], data$store$n_channels)
+    model$load_state_dict(torch::torch_load(un$model_file))
+    model$to(device = device)
+
+    f_full <- .importance_forward(model, inputs, batch_size)
+    base <- tibble::as_tibble(.importance_scores(
+      f_full, as.numeric(meta_u$target_native), as.numeric(meta_u$target_transform),
+      transform, clamp))
+    .importance_check_baseline(base, un, pred_t = f_full, sample_id = meta_u$sample_id,
+                               obs = as.numeric(meta_u$target_native))
+    sub <- if (length(sel) == n_all) inputs else {
+      st <- torch::torch_tensor(as.integer(sel), dtype = torch::torch_long())
+      lapply(inputs, function(t) torch::torch_index_select(t, 1L, st))
+    }
+    res <- .importance_sage_unit(model, sub, as.numeric(meta_u$target_transform)[sel], G,
+                                 lapply(keys, function(k) bg[[k]]), loss = method$loss,
+                                 permutations = method$permutations, seed = method$seed,
+                                 batch_size = max(batch_size, 512L))
+    # EXACT BY CONSTRUCTION, and checked: off by more than rounding is wiring.
+    if (abs(res$gap) > 1e-8 * max(1, abs(res$loss_empty))) {
+      stop(sprintf("Model %s: its SAGE values do not add up to the loss explained (off by %.3g).",
+                   un$unit, res$gap), call. = FALSE)
+    }
+    baseline[[u]] <- dplyr::mutate(base, unit = un$unit, .before = 1)
+    per_model[[u]] <- tibble::tibble(unit = un$unit, variable = names(vars), importance = res$phi)
+    losses[[u]] <- tibble::tibble(unit = un$unit, loss_model = res$loss_model,
+                                  loss_mean_prediction = res$loss_empty)
+    rm(model, sub); invisible(gc(verbose = FALSE))
+    el <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
+    say(sprintf("  [%d/%d] %s: CCC %.4f, as its run wrote | %s %.4g explained of %.4g | %.1f min%s",
+                u, nrow(units), un$unit, base$ccc, method$loss, res$loss_empty - res$loss_model,
+                res$loss_empty, el, .importance_eta(el / u * (nrow(units) - u))))
+  }
+  rm(cache, bg); invisible(gc(verbose = FALSE))
+
+  by_model <- dplyr::bind_rows(per_model)
+  tab <- by_model %>%
+    dplyr::rename(imp_model = "importance") %>%
+    dplyr::group_by(.data$variable) %>%
+    dplyr::summarise(importance = mean(.data$imp_model),
+                     sd_models = if (dplyr::n() > 1L) stats::sd(.data$imp_model) else NA_real_,
+                     n_models = dplyr::n(),
+                     n_models_positive = sum(.data$imp_model > 0), .groups = "drop")
+  tab$share <- tab$importance / sum(tab$importance)
+  tab$n_channels <- as.integer(lengths(vars)[tab$variable])
+  tab <- tab[order(-tab$importance, tab$variable), , drop = FALSE]
+  tab$rank <- seq_len(nrow(tab))
+  tab$target <- tab$variable
+  tab <- dplyr::relocate(tab, "rank", "target", "variable", "n_channels")
+  out <- structure(list(
+    table = tab, by_model = by_model, baseline = dplyr::bind_rows(baseline),
+    losses = dplyr::bind_rows(losses), groups = grp, method = method, rows = rows,
+    units = units[, c("unit", "kind", "fold", "seed", "role", "n_rows", "model_file")],
+    run_dir = fr$run_dir, config_id = fr$config_id, window_sizes = ws_model,
+    transform_name = data$transform$name %||% "none", rows_alone_share = 0, label = NULL),
+    class = "dsm_importance")
+  out$label <- .importance_object_label(out)
+  out
 }
 
 # THE CHECK THAT STOPS, for attributions: they must add up. Each point's values
@@ -2439,6 +2645,10 @@ print.dsm_importance <- function(x, n = 20L, ...) {
     .importance_print_ale(x, n)
     return(invisible(x))
   }
+  if (identical(m$kind, "sage")) {
+    .importance_print_sage(x, n)
+    return(invisible(x))
+  }
   cat(sprintf("  ranked by %s; the models' own %s: %.4f (%.4f to %.4f)\n", what, shown,
               mean(b), min(b), max(b)))
   if (identical(m$kind, "context")) {
@@ -2476,6 +2686,31 @@ print.dsm_importance <- function(x, n = 20L, ...) {
   } else {
     paste0(name, ", as the network predicts")
   }
+}
+
+# The body of a SAGE print.
+.importance_print_sage <- function(x, n) {
+  b <- x$baseline$ccc
+  l <- x$losses
+  tn <- x$transform_name %||% "none"
+  space <- if (tn %in% c("none", "identity")) "the target's own units" else
+    paste0(tn, ", the space the models were trained in")
+  cat(sprintf("  the models' own CCC: %.4f (%.4f to %.4f), each as its run wrote\n",
+              mean(b), min(b), max(b)))
+  cat(sprintf("  loss (%s, %s): the models' %.4g; the mean prediction's, no variable known, %.4g\n",
+              x$method$loss, space, mean(l$loss_model), mean(l$loss_mean_prediction)))
+  cat(sprintf("  SAGE shares the %.4g between: %s\n",
+              mean(l$loss_mean_prediction - l$loss_model), .importance_groups_line(x$groups)))
+  cat(strrep("-", 72), "\n")
+  show <- utils::head(x$table, n)
+  print(tibble::tibble(rank = show$rank, variable = show$variable, channels = show$n_channels,
+                       sage = signif(show$importance, 3), sd_models = signif(show$sd_models, 3),
+                       in_models = sprintf("%d/%d", show$n_models_positive, show$n_models),
+                       share = round(100 * show$share, 1)), n = Inf)
+  if (nrow(x$table) > n) cat(sprintf("  ... %d more in $table\n", nrow(x$table) - n))
+  cat("  sage: the loss a variable takes away, shared fairly among variables that carry\n")
+  cat("  the same information. Below zero: it costs skill. share: of all explained, in %.\n")
+  invisible(NULL)
 }
 
 # The body of an ALE's print.
@@ -2668,7 +2903,8 @@ print.dsm_importance <- function(x, n = 20L, ...) {
 #' zero, weight zero.
 #'
 #' @param x A `dsm_importance` with one value per variable: by
-#'   [permutation_importance()], [shap_importance()] or [ale_effect()].
+#'   [permutation_importance()], [shap_importance()], [sage_importance()] or
+#'   [ale_effect()].
 #' @return A named numeric vector, one weight per channel in the store's order,
 #'   for `dsm_predict(aoa_weights = )` or `aoa_reference(weights = )`.
 #' @export
@@ -2678,7 +2914,7 @@ importance_weights <- function(x) {
   }
   if (identical(x$method$kind, "context")) {
     stop("A context importance has one value per ring or window, not per variable: ",
-         "take the weights from a permutation, SHAP or ALE importance.", call. = FALSE)
+         "take the weights from a permutation, SHAP, SAGE or ALE importance.", call. = FALSE)
   }
   g <- x$groups
   w <- x$table$importance[match(g$variable, x$table$variable)]
@@ -2750,7 +2986,7 @@ compare_importance <- function(..., n = 20L) {
   # the score its frame carries for the models' own check.
   metrics <- vapply(xs, function(x) {
     switch(x$method$kind %||% "permutation", shap = "mean |SHAP|", ale = "ALE spread",
-           x$method$metric)
+           sage = "SAGE (loss explained)", x$method$metric)
   }, character(1))
   # POINT BY POINT, for two SHAP importances of the same points: per variable,
   # the correlation of their values over the points both explain, and how far
