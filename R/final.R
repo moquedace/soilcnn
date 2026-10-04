@@ -121,7 +121,7 @@
 #' @param conformal_alpha Miscoverage levels of the intervals: 0.1 is 90%.
 #' @param output_dir Where runs go. NULL for final_model/ beside the tuning
 #'   run's directory.
-#' @param run_id     NULL for final_<timestamp>. Give an existing one with
+#' @param run_id     NULL for `final_<timestamp>`. Give an existing one with
 #'   resume = TRUE to finish an interrupted fit.
 #' @param resume     Skip seeds whose checkpoint and record are already there.
 #'   A resumed run is held to the settings it started with (run_spec.rds):

@@ -35,6 +35,8 @@
 #      package and its testthat subset in
 #  12. every export has an example, and an example that needs torch is
 #      guarded by @examplesIf torch::torch_is_installed()
+#  13. no raw <placeholder> in the docs' text, which roxygen's markdown takes
+#      for an HTML tag
 #
 # Run: source("<package root>/tests/test_package_metadata.R")
 
@@ -264,6 +266,30 @@ ok["every_export_has_an_example"]    <- length(no_example) == 0L
 ok["every_torch_example_is_guarded"] <- length(unguarded) == 0L
 if (length(no_example)) cat("  without an example       : ", paste(no_example, collapse = ", "), "\n", sep = "")
 if (length(unguarded))  cat("  torch, unguarded         : ", paste(unguarded, collapse = ", "), "\n", sep = "")
+
+# ── 13. no raw <placeholder> in the docs' text ───────────────────────────────
+# roxygen's markdown reads final_<timestamp> as an HTML tag: the HTML help
+# shows a broken one (R CMD check: "HTML validation problems", 2026-10-04) and
+# the PDF manual drops it -- "NULL for final_." Written as code,
+# `final_<timestamp>`, both show it. Code spans and examples are not text;
+# <https://...> and <doi:...> are links.
+raw_tags <- unlist(lapply(r_files, function(f) {
+  ln <- readLines(f, warn = FALSE)
+  in_example <- FALSE
+  hits <- character(0)
+  for (i in seq_along(ln)) {
+    if (!startsWith(ln[i], "#'")) { in_example <- FALSE; next }
+    if (startsWith(ln[i], "#' @examples")) { in_example <- TRUE; next }
+    if (startsWith(ln[i], "#' @")) in_example <- FALSE
+    if (in_example) next
+    if (grepl("<[A-Za-z][^<>:]*>", gsub("`[^`]*`", "", ln[i]))) {
+      hits <- c(hits, sprintf("%s:%d", basename(f), i))
+    }
+  }
+  hits
+}))
+ok["no_raw_placeholder_in_the_docs"] <- length(raw_tags) == 0L
+if (length(raw_tags)) cat("  raw <placeholder> at    : ", paste(raw_tags, collapse = ", "), "\n", sep = "")
 
 cat("  imports declared/used    : ", length(imports), " / ", sum(imports %in% used), "\n", sep = "")
 cat("  exports, S3 methods      : ", length(exported), ", ", length(registered), "\n", sep = "")

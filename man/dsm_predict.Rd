@@ -54,9 +54,10 @@ a part of the map is the same numbers as that part of the whole.}
 
 \item{calibration}{Where the intervals, the smearing factor and the AOA come
 from: a named vector of tuning-run directories whose cross-validated
-residuals calibrate them, e.g. c(block = "\if{html}{\out{<spatial CV run>}}", knndm =
-"\if{html}{\out{<kNNDM run>}}"). Each source gets its own bands. NULL for the final run's
-own tuning run; character(0) for none (then no interval, DI or AOA).}
+residuals calibrate them, e.g.
+\code{c(block = "<spatial CV run>", knndm = "<kNNDM run>")}. Each source gets
+its own bands. NULL for the final run's own tuning run; character(0) for
+none (then no interval, DI or AOA).}
 
 \item{aoa_weights}{NULL: every channel weighs alike in the dissimilarity
 index. Or a \code{dsm_importance} (see \code{\link[=importance_weights]{importance_weights()}}), or one
@@ -78,9 +79,9 @@ interval_constant, interval_level_di, di, aoa, valid_mask.}
 patch-by-patch numbers for the network, patch by patch elsewhere.
 "patch": patch by patch everywhere -- slow, for checks.}
 
-\item{output_dir}{Where maps go. NULL for \if{html}{\out{<final run>}}/maps.}
+\item{output_dir}{Where maps go. NULL for \verb{<final run>/maps}.}
 
-\item{run_id}{NULL for map_\if{html}{\out{<timestamp>}}. An existing one resumes.}
+\item{run_id}{NULL for \verb{map_<timestamp>}. An existing one resumes.}
 
 \item{resume}{Keep the units already finished.}
 

@@ -70,7 +70,7 @@ available at the start (read with the ps package).}
 \item{output_dir}{Where runs go. NULL for final_model/ beside the tuning
 run's directory.}
 
-\item{run_id}{NULL for final_\if{html}{\out{<timestamp>}}. Give an existing one with
+\item{run_id}{NULL for \verb{final_<timestamp>}. Give an existing one with
 resume = TRUE to finish an interrupted fit.}
 
 \item{resume}{Skip seeds whose checkpoint and record are already there.

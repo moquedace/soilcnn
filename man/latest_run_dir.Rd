@@ -54,7 +54,7 @@ final model against it without a word.
 
 It also never asked whether the run FINISHED. Stage 04 creates its output
 directory before its own validations run, so a failure leaves a
-final_\if{html}{\out{<timestamp>}} behind that "latest" would then deploy -- which is what
+\verb{final_<timestamp>} behind that "latest" would then deploy -- which is what
 B2's review found from the other direction.
 }
 \examples{

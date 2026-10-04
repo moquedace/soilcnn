@@ -286,9 +286,10 @@ fcn_predict_strip <- function(model, x_strip, centres, engine = c("fcn", "patch"
 #' @param config  NULL for the final run's selected configuration.
 #' @param calibration Where the intervals, the smearing factor and the AOA come
 #'   from: a named vector of tuning-run directories whose cross-validated
-#'   residuals calibrate them, e.g. c(block = "<spatial CV run>", knndm =
-#'   "<kNNDM run>"). Each source gets its own bands. NULL for the final run's
-#'   own tuning run; character(0) for none (then no interval, DI or AOA).
+#'   residuals calibrate them, e.g.
+#'   `c(block = "<spatial CV run>", knndm = "<kNNDM run>")`. Each source gets
+#'   its own bands. NULL for the final run's own tuning run; character(0) for
+#'   none (then no interval, DI or AOA).
 #' @param aoa_weights NULL: every channel weighs alike in the dissimilarity
 #'   index. Or a `dsm_importance` (see [importance_weights()]), or one
 #'   non-negative weight per channel, named or in the model's order: the DI,
@@ -304,8 +305,8 @@ fcn_predict_strip <- function(model, x_strip, centres, engine = c("fcn", "patch"
 #' @param engine  "auto": fully convolutional where that gives exactly the
 #'   patch-by-patch numbers for the network, patch by patch elsewhere.
 #'   "patch": patch by patch everywhere -- slow, for checks.
-#' @param output_dir Where maps go. NULL for <final run>/maps.
-#' @param run_id  NULL for map_<timestamp>. An existing one resumes.
+#' @param output_dir Where maps go. NULL for `<final run>/maps`.
+#' @param run_id  NULL for `map_<timestamp>`. An existing one resumes.
 #' @param resume  Keep the units already finished.
 #' @param n_cores Cores for the whole map. NULL for the physical cores minus one.
 #' @param threads_per_worker Torch threads each worker runs with.

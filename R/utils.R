@@ -735,7 +735,7 @@ check_plan_unchanged <- function(plan, run_dir, resume = TRUE) {
 #'
 #' It also never asked whether the run FINISHED. Stage 04 creates its output
 #' directory before its own validations run, so a failure leaves a
-#' final_<timestamp> behind that "latest" would then deploy -- which is what
+#' `final_<timestamp>` behind that "latest" would then deploy -- which is what
 #' B2's review found from the other direction.
 #'
 #' @param base            directory holding the run directories.
