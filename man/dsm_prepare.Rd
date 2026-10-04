@@ -84,9 +84,12 @@ interpolated surface instead of turning it into NA.}
 \item{target_min}{Rows with target <= target_min are dropped. NULL keeps any
 finite target the transform accepts.}
 
-\item{subsample}{NULL, or list(frac, block_size, seed): keep a fraction of
-the points in whole spatial blocks, for a run that finishes in minutes.
-Recorded, so a subsampled result is never mistaken for a full one.}
+\item{subsample}{NULL, or list(frac, block_size, seed, strata): keep a
+fraction of the points in whole spatial blocks, for a run that finishes
+sooner. \code{strata}, optional, is the side of square strata, a whole
+multiple of \code{block_size}: each keeps its points up to one common quota,
+so the cut falls on the densest regions and no region is lost. Recorded,
+so a subsampled result is never mistaken for a full one.}
 
 \item{target_label}{Name of the target in reports. NULL uses \code{target}.}
 

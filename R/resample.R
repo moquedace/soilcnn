@@ -940,6 +940,20 @@ fold_leakage_report <- function(plan, meta, cell_size, windows = c(3L, 9L, 15L))
 # It is also faster for a reason that has nothing to do with statistics:
 # extraction reads raster strips covering the points, so points concentrated in
 # fewer regions mean fewer strips.
+#
+# STRATA: WHERE THE CUT FALLS (2026-10-04). Blocks drawn over the whole area
+# take them wherever they fall, so the cut lands on every region in proportion
+# to its blocks -- and a region of few profiles, a handful of blocks, is as
+# likely to vanish as any. Measured on the SOC 0-30 cm trial's 26,226 profiles
+# at a quarter, in blocks of half a degree: a quarter of the 5-degree cells that
+# hold fewer than 50 profiles lost every one, while 47% of the data sat in five
+# cells and one held 29%. With `strata`, the area is cut into square cells and
+# every cell keeps its points up to one quota, the same for all, found so the
+# total reaches the fraction: a cell with fewer than the quota keeps them all,
+# a denser one is cut -- in whole blocks still, so the local clustering the
+# validation must face is kept. At a quarter on that trial: every cell kept,
+# the largest block 3.3% of the sample instead of 6.5%. What changes is the
+# regional balance -- the densest regions weigh less -- and that is the point.
 
 #' Keep roughly `frac` of the points, by whole spatial blocks.
 #'
@@ -948,21 +962,66 @@ fold_leakage_report <- function(plan, meta, cell_size, windows = c(3L, 9L, 15L))
 #' @param block_size Block side, same units as x/y.
 #' @param seed       Seed for the block draw; independent of every other
 #'   stream (see with_local_seed).
+#' @param strata     NULL: blocks are drawn over the whole area. A number: the
+#'   side of square strata, a whole multiple of `block_size` so that every
+#'   block lies in one stratum; each stratum keeps its points up to one common
+#'   quota, in whole blocks (see above).
 #' @return Integer row positions to keep, with attributes describing what was
 #'   drawn -- a subsample whose composition cannot be reported is a subsample
 #'   whose results cannot be interpreted.
 #' @noRd
-block_subsample <- function(x, y, frac, block_size, seed = 42L) {
+block_subsample <- function(x, y, frac, block_size, seed = 42L, strata = NULL) {
   stopifnot(length(x) == length(y), frac > 0, frac <= 1, block_size > 0)
   n <- length(x)
   if (frac >= 1) return(seq_len(n))
 
-  blk <- paste(floor((x - min(x)) / block_size),
-               floor((y - min(y)) / block_size), sep = "_")
+  bx  <- floor((x - min(x)) / block_size)
+  by  <- floor((y - min(y)) / block_size)
+  blk <- paste(bx, by, sep = "_")
 
-  # Same primitive the test set is carved with -- one implementation, so the
-  # subsample and the split cannot drift apart in how they treat a block.
-  keep <- .draw_groups_for_frac(blk, frac, seed)
+  quota <- NA_integer_
+  strata_total <- strata_cut <- NA_integer_
+  if (is.null(strata)) {
+    # Same primitive the test set is carved with -- one implementation, so the
+    # subsample and the split cannot drift apart in how they treat a block.
+    keep <- .draw_groups_for_frac(blk, frac, seed)
+  } else {
+    ratio <- if (is.numeric(strata) && length(strata) == 1L && is.finite(strata)) {
+      strata / block_size
+    } else NA_real_
+    if (is.na(ratio) || ratio < 1 || abs(ratio - round(ratio)) > 1e-8) {
+      stop("subsample strata must be one whole multiple of block_size (", format(block_size),
+           "), so that every block lies in one stratum; got ", format(strata), ".",
+           call. = FALSE)
+    }
+    # Strata from the blocks' own indices: a block can only fall in one.
+    ratio <- round(ratio)
+    st    <- paste(bx %/% ratio, by %/% ratio, sep = "_")
+    n_st  <- as.integer(table(st))
+    # The quota: the smallest whole number for which the strata, each keeping
+    # min(its points, quota), reach the target.
+    target <- ceiling(frac * n)
+    lo <- 1L
+    hi <- max(n_st)
+    while (lo < hi) {
+      q <- (lo + hi) %/% 2L
+      if (sum(pmin(n_st, q)) < target) lo <- q + 1L else hi <- q
+    }
+    quota <- lo
+    strata_total <- length(n_st)
+    strata_cut   <- sum(n_st > quota)
+    keep <- with_local_seed(seed, unlist(lapply(split(seq_len(n), st), function(rows) {
+      if (length(rows) <= quota) return(rows)
+      by_block <- split(rows, blk[rows])
+      got <- integer(0)
+      for (b in sample(names(by_block))) {
+        got <- c(got, by_block[[b]])
+        if (length(got) >= quota) break
+      }
+      got
+    }), use.names = FALSE))
+    keep <- sort(keep)
+  }
   used <- unique(blk[keep])
 
   structure(
@@ -974,14 +1033,18 @@ block_subsample <- function(x, y, frac, block_size, seed = 42L) {
     blocks_total   = dplyr::n_distinct(blk),
     blocks_kept    = length(used),
     block_size     = block_size,
-    seed           = seed
+    seed           = seed,
+    strata         = strata,
+    quota          = quota,
+    strata_total   = strata_total,
+    strata_cut     = strata_cut
   )
 }
 
 #' One line describing a block_subsample() result, for logs and metadata.
 #' @noRd
 describe_subsample <- function(idx) {
-  sprintf(
+  out <- sprintf(
     "%s of %s points (%.1f%%, requested %.1f%%) from %s of %s blocks of %s",
     format(attr(idx, "n_kept"), big.mark = ","),
     format(attr(idx, "n_total"), big.mark = ","),
@@ -990,6 +1053,14 @@ describe_subsample <- function(idx) {
     format(attr(idx, "blocks_total"), big.mark = ","),
     format(attr(idx, "block_size"))
   )
+  if (!is.null(attr(idx, "strata"))) {
+    out <- paste0(out, sprintf(
+      "; stratified in squares of %s: every one keeps up to %s points, %s of %s cut",
+      format(attr(idx, "strata")), format(attr(idx, "quota"), big.mark = ","),
+      format(attr(idx, "strata_cut"), big.mark = ","),
+      format(attr(idx, "strata_total"), big.mark = ",")))
+  }
+  out
 }
 
 # -- refitting after selection ------------------------------------------------

@@ -111,9 +111,12 @@ target_transform_spec <- function(name) {
 #' @param transform  "none" or "log1p" -- the space the model trains in.
 #' @param target_min Rows with target <= target_min are dropped. NULL keeps any
 #'   finite target the transform accepts.
-#' @param subsample  NULL, or list(frac, block_size, seed): keep a fraction of
-#'   the points in whole spatial blocks, for a run that finishes in minutes.
-#'   Recorded, so a subsampled result is never mistaken for a full one.
+#' @param subsample  NULL, or list(frac, block_size, seed, strata): keep a
+#'   fraction of the points in whole spatial blocks, for a run that finishes
+#'   sooner. `strata`, optional, is the side of square strata, a whole
+#'   multiple of `block_size`: each keeps its points up to one common quota,
+#'   so the cut falls on the densest regions and no region is lost. Recorded,
+#'   so a subsampled result is never mistaken for a full one.
 #' @param n_cores    Cores for the extraction, one band per core. NULL uses the
 #'   physical cores minus one, fewer if `max_ram_gb` cannot hold them. The
 #'   result does not depend on it.
@@ -215,7 +218,7 @@ dsm_prepare <- function(points, target, raster_dir, windows,
   }
   if (!is.null(subsample) &&
       (!is.list(subsample) || !all(c("frac", "block_size") %in% names(subsample)))) {
-    stop("subsample must be NULL or list(frac = , block_size = , seed = ).",
+    stop("subsample must be NULL or list(frac = , block_size = , seed = , strata = ).",
          call. = FALSE)
   }
   chunk_nrows   <- as.integer(chunk_nrows)
@@ -281,7 +284,7 @@ dsm_prepare <- function(points, target, raster_dir, windows,
       as.matrix(pts[, coords])
     keep <- block_subsample(xy0[, 1], xy0[, 2], frac = subsample$frac,
                             block_size = subsample$block_size,
-                            seed = subsample$seed %||% 42L)
+                            seed = subsample$seed %||% 42L, strata = subsample$strata)
     subsample_note <- describe_subsample(keep)
     pts <- pts[keep, , drop = FALSE]
     run_profile <- "dev"

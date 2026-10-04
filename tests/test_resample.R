@@ -35,6 +35,8 @@
 #      single best run is NOT the config with the best mean
 #  14. block_subsample(): keeps WHOLE blocks and therefore preserves local
 #      density, where a random subsample of the same size destroys it
+#  14b. with strata, every stratum keeps its points up to one quota: the
+#      sparse ones whole, the dense one cut in whole blocks
 #  15. one_se(): on a fixture where the two rules DISAGREE -- the best mean and
 #      the simplest model within one standard error of it are different
 #      configs, which is the only case where the rule earns its existence
@@ -637,6 +639,44 @@ ok["subsample_describes_itself"] <- grepl("blocks of", describe_subsample(sub))
 set.seed(7); b1 <- runif(3)
 set.seed(7); invisible(block_subsample(meta$x, meta$y, 0.3, 25000, seed = 99L))
 ok["subsample_leaves_rng_alone"] <- identical(b1, runif(3))
+
+# -- 14b. block_subsample(strata =): every region keeps its points up to a quota
+#
+# One dense region -- 600 points over 100 x 100 km, sixteen blocks of 25 km, in
+# one 500 km stratum -- and ten sparse strata of 6 points each, one block each.
+# At a quarter the quota is 105: the sparse strata keep everything, and only
+# the dense one is cut, in whole blocks. A draw over the whole area has no such
+# promise: it takes blocks wherever they fall, sparse ones included.
+st_x <- c(runif(600, 0, 100000), rep(600000 + 500000 * (0:9), each = 6) + runif(60, 0, 1000))
+st_y <- c(runif(600, 0, 100000), runif(60, 0, 1000))
+dense <- seq_len(600)
+st_of <- paste(floor((st_x - min(st_x)) / 500000), floor((st_y - min(st_y)) / 500000))
+blk_of <- paste(floor((st_x - min(st_x)) / 25000), floor((st_y - min(st_y)) / 25000))
+strat <- block_subsample(st_x, st_y, frac = 0.25, block_size = 25000, seed = 5L,
+                         strata = 500000)
+flat  <- block_subsample(st_x, st_y, frac = 0.25, block_size = 25000, seed = 5L)
+ok["strata_quota_is_the_water_level"] <- identical(attr(strat, "quota"), 105L) &&
+  identical(attr(strat, "strata_total"), 11L) && identical(attr(strat, "strata_cut"), 1L)
+ok["strata_keep_every_stratum"] <- length(unique(st_of[strat])) == 11L
+ok["strata_keep_the_sparse_ones_whole"] <- all(601:660 %in% strat)
+ok["strata_cut_only_the_dense_one"] <- sum(strat %in% dense) >= 105L &&
+  sum(strat %in% dense) < 600L
+ok["strata_keep_whole_blocks"] <- all(which(blk_of %in% blk_of[strat]) %in% strat)
+ok["strata_reach_the_fraction"] <- attr(strat, "frac_actual") >= 0.25
+ok["strata_are_reproducible"] <- identical(as.integer(strat), as.integer(
+  block_subsample(st_x, st_y, frac = 0.25, block_size = 25000, seed = 5L, strata = 500000)))
+set.seed(7); b2 <- runif(3)
+set.seed(7); invisible(block_subsample(st_x, st_y, 0.25, 25000, seed = 9L, strata = 500000))
+ok["strata_leave_rng_alone"] <- identical(b2, runif(3))
+e_strata <- tryCatch({ block_subsample(st_x, st_y, 0.25, 25000, strata = 30000); "" },
+                     error = function(e) conditionMessage(e))
+ok["strata_must_be_a_multiple_of_the_block"] <- grepl("whole multiple of block_size", e_strata)
+ok["strata_describe_themselves"] <- grepl("stratified in squares of", describe_subsample(strat)) &&
+  grepl("1 of 11 cut", describe_subsample(strat))
+cat("  strata at a quarter      : ", length(unique(st_of[strat])), " of 11 strata kept, ",
+    sum(601:660 %in% strat), " of 60 sparse points | over the whole area: ",
+    length(unique(st_of[flat])), " strata, ", sum(601:660 %in% flat), " sparse points\n",
+    sep = "")
 
 # -- 15. one_se(): the rule that exists because the ranking does not separate -
 #

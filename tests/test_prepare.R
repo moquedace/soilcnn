@@ -317,6 +317,16 @@ st_s <- suppressMessages(dsm_prepare(
   out_dir = file.path(base, "sub"), drop = "drop_me", n_cores = 1L,
   subsample = list(frac = 0.99, block_size = 10, seed = 1L), verbose = FALSE))
 ok["a_subsample_is_recorded_as_one"] <- identical(st_s$recipe$run_profile, "dev")
+# Stratified, the strata reach the draw, and the record says so.
+st_t <- suppressMessages(dsm_prepare(
+  points = pts, target = "soc", raster_dir = rdir, windows = c(3, 5),
+  out_dir = file.path(base, "sub_strata"), drop = "drop_me", n_cores = 1L,
+  subsample = list(frac = 0.99, block_size = 10, seed = 1L, strata = 20), verbose = FALSE))
+# The note a reader sees is metadata/target_config.csv's `subsample`.
+cfg_t <- safe_read_csv2(file.path(st_t$metadata_dir, "target_config.csv"))
+ok["a_stratified_subsample_is_recorded_with_its_strata"] <-
+  identical(st_t$recipe$subsample$strata, 20) &&
+  isTRUE(grepl("stratified", cfg_t$subsample[1]))
 
 # ── 10. what it refuses, and says why ────────────────────────────────────────
 err <- function(expr) {
