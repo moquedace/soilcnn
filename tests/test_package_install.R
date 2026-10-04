@@ -102,7 +102,7 @@ pkg   <- unname(read.dcf(file.path(root, "DESCRIPTION"), fields = "Package")[1, 
 stage <- file.path(work, "stage", pkg)
 dir.create(stage, recursive = TRUE)
 parts <- c("DESCRIPTION", "NAMESPACE", "LICENSE", ".Rbuildignore", "R", "man", "vignettes",
-           "inst")
+           "inst", "tests")
 parts <- parts[file.exists(file.path(root, parts))]
 copied <- vapply(parts, function(p) file.copy(file.path(root, p), stage, recursive = TRUE),
                  logical(1))
@@ -113,7 +113,13 @@ listed <- utils::untar(tgz, list = TRUE)
 top <- unique(sub("^[^/]+/([^/]+).*$", "\\1", listed))
 ok["tarball_was_built"] <- file.exists(tgz)
 ok["tarball_leaves_out_the_user_data"] <-
-  !any(c("data", "outputs", "examples", "tests", "docs") %in% top)
+  !any(c("data", "outputs", "examples", "docs") %in% top)
+# tests/ goes in for the testthat subset only: R CMD check runs every
+# tests/*.R it finds, and this suite trains networks for minutes.
+suite_files <- grepl("^[^/]+/tests/[^/]+\\.R$", listed) & !grepl("/tests/testthat\\.R$", listed)
+ok["tarball_holds_the_testthat_subset_and_not_this_suite"] <-
+  any(grepl("^[^/]+/tests/testthat\\.R$", listed)) &&
+  any(grepl("^[^/]+/tests/testthat/test-[^/]+\\.R$", listed)) && !any(suite_files)
 ok["tarball_holds_the_package"] <- all(c("DESCRIPTION", "NAMESPACE", "R", "man") %in% top)
 ok["tarball_holds_the_citation"] <- any(grepl("^[^/]+/inst/CITATION$", listed))
 

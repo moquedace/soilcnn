@@ -52,10 +52,11 @@ root <- (function() {
 source(file.path(root, "tests", "helper.R"))
 
 # Every directory of the repository that holds R code someone will source:
-# the package, its tests and the check runner. Until 2026-09-28 the SOC
-# project's scripts lived here too, under examples/, and were parsed with
-# them; since then the repository is the package alone.
-dirs <- c("R", "tests", "tools")
+# the package, its tests -- this suite and the testthat subset R CMD check
+# runs -- and the check runner. Until 2026-09-28 the SOC project's scripts
+# lived here too, under examples/, and were parsed with them; since then the
+# repository is the package alone.
+dirs <- c("R", "tests", "tests/testthat", "tools")
 
 files <- unlist(lapply(dirs, function(d) {
   p <- file.path(root, d)

@@ -5,7 +5,7 @@
 ^docs$
 ^tools$
 ^utils$
-^tests$
+^tests/(?!testthat(\.R)?$)[^/]+$
 ^README\.md$
 ^LICENSE\.md$
 ^\.Rhistory$

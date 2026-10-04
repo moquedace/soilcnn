@@ -3,14 +3,15 @@
 #   source("<package root>/tools/check_package.R")
 #
 # WHAT IT DOES. Copies DESCRIPTION, NAMESPACE, LICENSE, .Rbuildignore, R/,
-# man/, vignettes/ and inst/ into a staging folder -- R CMD build lists every file
-# under a directory before it applies .Rbuildignore, and outputs/ made that
-# minutes here -- builds the tarball with its vignette, and runs
+# man/, vignettes/, inst/ and tests/ into a staging folder -- R CMD build lists
+# every file under a directory before it applies .Rbuildignore, and outputs/
+# made that minutes here -- builds the tarball with its vignette, and runs
 # `R CMD check --no-manual` on it. Every NOTE, WARNING and ERROR is printed
 # with its detail; the full log goes to outputs/package_check/.
 #
-# WHAT IT DOES NOT. No manual (that needs LaTeX), and no tests: tests/ is not
-# in the tarball, and tests/run_all.R is where the tests run.
+# WHAT IT DOES NOT. No manual (that needs LaTeX). Of tests/, the tarball holds
+# the testthat subset only, which the check runs; tests/run_all.R is where the
+# full suite runs.
 #
 # AS CRAN WILL. options(soilcnn.check_as_cran = TRUE) before source() adds
 # --as-cran: CRAN's own checks (its incoming checks ask the internet) and the
@@ -60,7 +61,7 @@ stage <- file.path(work, "stage", pkg)
 dir.create(stage, recursive = TRUE)
 
 parts <- c("DESCRIPTION", "NAMESPACE", "LICENSE", ".Rbuildignore", "R", "man", "vignettes",
-           "inst")
+           "inst", "tests")
 parts <- parts[file.exists(file.path(root, parts))]
 copied <- vapply(parts, function(p) file.copy(file.path(root, p), stage, recursive = TRUE),
                  logical(1))

@@ -31,7 +31,8 @@
 #      function of the user's own with the same name is not
 #  10. every exported function that scores a store's predictions defaults to
 #      the store's own inverse transform
-#  11. .Rbuildignore keeps the user's directories out and the package in
+#  11. .Rbuildignore keeps the user's directories and this suite out, and the
+#      package and its testthat subset in
 #  12. every export has an example, and an example that needs torch is
 #      guarded by @examplesIf torch::torch_is_installed()
 #
@@ -213,9 +214,15 @@ ign <- ign[nzchar(trimws(ign))]
 kept_out <- function(path) {
   any(vapply(ign, function(p) grepl(p, path, perl = TRUE, ignore.case = TRUE), logical(1)))
 }
-user_parts <- c("data", "outputs", "examples", "tests", "docs", "tools", "utils",
-                "README.md", "LICENSE.md")
-package_parts <- c("DESCRIPTION", "NAMESPACE", "LICENSE", "R", "man", "vignettes", "inst")
+# tests/ goes in for its testthat subset only, which R CMD check runs, CRAN's
+# too; this suite stays out -- it trains networks for minutes, and R CMD
+# check would run every tests/*.R it found.
+own_tests <- setdiff(list.files(file.path(root, "tests"), pattern = "\\.R$"), "testthat.R")
+user_parts <- c("data", "outputs", "examples", "docs", "tools", "utils",
+                "README.md", "LICENSE.md", file.path("tests", own_tests))
+package_parts <- c("DESCRIPTION", "NAMESPACE", "LICENSE", "R", "man", "vignettes", "inst",
+                   "tests", "tests/testthat.R", "tests/testthat",
+                   file.path("tests/testthat", list.files(file.path(root, "tests", "testthat"))))
 ok["buildignore_keeps_the_user_parts_out"] <- all(vapply(user_parts, kept_out, logical(1)))
 ok["buildignore_keeps_the_package_in"] <- !any(vapply(package_parts, kept_out, logical(1)))
 
