@@ -453,10 +453,19 @@ importance_groups <- function(data, groups = "auto") {
     v <- unique(user$variable[user$channel %in% sets[[nm]]])
     named <- sum(sets[[nm]] %in% user$channel)
     if (length(v) > 1L || (named > 0L && named < length(sets[[nm]]))) {
-      warning("Your grouping splits the one-hot set '", nm, "' (",
-              paste(sets[[nm]], collapse = ", "), "): permuting part of a ",
-              "categorical makes points in two classes or none. Put its channels ",
-              "in one variable, unless they are not one categorical.", call. = FALSE)
+      # SAID IN COUNTS. The first version listed every channel of the set, and
+      # a soil-class set is 33 of them: a warning nobody could read. What it
+      # means is how the set was cut, and which channels fell out of it.
+      left <- setdiff(sets[[nm]], user$channel)
+      warning(sprintf(paste0(
+        "Your grouping splits the one-hot set '%s' (%d channels): %d in %d variable(s) of yours",
+        "%s. Permuting part of a categorical makes points in two classes or none -- put ",
+        "the whole set in one variable, unless it is not one categorical."),
+        nm, length(sets[[nm]]), named, length(v),
+        if (length(left)) sprintf(", %d left out (%s%s), which stay a variable of their own",
+                                  length(left), paste(utils::head(left, 3L), collapse = ", "),
+                                  if (length(left) > 3L) ", ..." else "") else ""),
+        call. = FALSE)
     }
   }
   i <- match(user$channel, ch)

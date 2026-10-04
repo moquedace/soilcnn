@@ -155,6 +155,11 @@ ok["a_name_that_is_also_a_lone_channel_is_refused"] <-
   grepl("both a group of yours", err(importance_groups(fake, list(flood = c("wet_inland", "wet_coastal")))))
 ok["a_set_cut_in_two_is_said"] <-
   grepl("splits the one-hot set", warned(importance_groups(fake, list(a = "lith_acid"))))
+# In counts, not a list of every channel: a 33-class set made the first
+# version's warning unreadable on the smoke (2026-10-03).
+ok["the_split_is_said_in_counts"] <-
+  grepl("1 in 1 variable\\(s\\) of yours, 2 left out \\(lith_basic, lith_carbonate\\)",
+        warned(importance_groups(fake, list(a = "lith_acid"))))
 ok["a_word_that_is_not_a_rule_is_refused"] <-
   grepl("must be", err(importance_groups(fake, "themes")))
 
