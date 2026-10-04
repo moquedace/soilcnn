@@ -1,19 +1,29 @@
 Package: soilcnn
 Title: Convolutional Neural Networks for Digital Soil Mapping
-Version: 0.0.0.9000
+Version: 0.1.0
 Authors@R: c(
     person(c("Cássio", "Marques"), "Moquedace", , "cassiomoquedace@gmail.com",
            role = c("aut", "cre", "cph")),
     person(c("Clara", "Glória", "Oliveira"), "Baldi", role = c("aut", "cph")))
 Description: A framework, built on 'torch', for mapping a soil property from
     point observations and a stack of aligned rasters with a convolutional
-    network that reads each point's neighbourhood. It extracts the patches,
+    network that reads each point's neighbourhood. It extracts the patches;
     resamples by spatial blocks or by k-fold nearest neighbour distance
-    matching, tunes and selects under a noise floor and the one-standard-error
-    rule, refits the selected configuration under several seeds, and predicts
-    median, mean and interval maps over rasters of any extent, with the area
-    of applicability beside them. Random forest and multilayer perceptron
-    baselines run under the same folds.
+    matching, after Linnenbrink et al. (2024) <doi:10.5194/gmd-17-5897-2024>;
+    tunes and selects under a noise floor and the one-standard-error rule;
+    refits the selected configuration under several seeds; and predicts
+    median, mean and interval maps over rasters of any extent. The mean is the
+    median smeared after Duan (1983) <doi:10.1080/01621459.1983.10478017>, the
+    intervals are split conformal, after Lei et al. (2018)
+    <doi:10.1080/01621459.2017.1307116>, and the area of applicability of
+    Meyer and Pebesma (2021) <doi:10.1111/2041-210X.13650> is mapped beside
+    them. What a model learned is read by permutation, by SHAP values from
+    expected gradients, after Erion et al. (2021)
+    <doi:10.1038/s42256-021-00343-w>, by SAGE, after Covert et al. (2020)
+    <doi:10.48550/arXiv.2004.00668>, by accumulated local effects, after Apley
+    and Zhu (2020) <doi:10.1111/rssb.12377>, and by refits without each
+    variable. Random forest and multilayer perceptron baselines run under the
+    same folds.
 License: MIT + file LICENSE
 URL: https://github.com/moquedace/soilcnn
 BugReports: https://github.com/moquedace/soilcnn/issues
