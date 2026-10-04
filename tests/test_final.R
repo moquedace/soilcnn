@@ -405,6 +405,88 @@ ok["one_worker_at_its_peak_the_rest_training"] <-
   .final_workers_that_fit(c(steady = 10, peak = 20), 20) == 1L &&
   .final_workers_that_fit(c(steady = 10, peak = 20), 5) == 1L
 
+# ── 11. the importance of this final model ───────────────────────────────────
+#
+# dsm_importance() on files a real run wrote: the seeds, the split and the
+# scaling of the final run; the fold models and plan of its tuning run. Each
+# model must reproduce the score its run wrote before anything is permuted, so
+# getting a table back at all says the checkpoint, rows, scaling, windows and
+# inverse are the run's. tests/test_importance.R checks what the numbers mean,
+# against models whose answer is known; this checks the wiring to the files.
+imp_t <- suppressMessages(dsm_importance(fin, data, permutation_importance(draws = 2L),
+                                         verbose = FALSE))
+ok["importance_scores_every_seed_on_the_test_set"] <-
+  inherits(imp_t, "dsm_importance") && identical(imp_t$units$seed, c(1L, 2L, 3L)) &&
+  all(imp_t$units$role == "test")
+ok["importance_has_one_row_per_variable"] <- setequal(imp_t$table$variable, preds) &&
+  all(imp_t$table$n_models == 3L)
+imp_f <- suppressMessages(dsm_importance(rd, data, permutation_importance(draws = 2L),
+                                         rows = "folds", verbose = FALSE))
+ok["importance_on_the_folds_scores_every_fold_model"] <-
+  nrow(imp_f$units) == 4L && setequal(imp_f$units$fold, 1:2) && all(imp_f$units$role == "validation")
+# The fixture's sites are 2 apart and 0.05 wide, so a block of 1 is one site.
+imp_w <- suppressMessages(dsm_importance(fin, data, permutation_importance(draws = 2L, within = 1),
+                                         verbose = FALSE))
+ok["importance_within_blocks_runs_on_the_same_models"] <-
+  identical(imp_w$baseline$ccc, imp_t$baseline$ccc) && all(is.finite(imp_w$table$importance))
+imp_m <- suppressMessages(dsm_importance(fin, data, permutation_importance(fill = "mean"),
+                                         verbose = FALSE))
+ok["importance_by_mean_fill_runs_once_per_model"] <- all(imp_m$raw$draw == 1L)
+ok["importances_compare"] <-
+  inherits(compare_importance(imp_t, imp_w, imp_m), "importance_comparison")
+# The context, on the same files: the fixture reads one 3x3 window, so its
+# rings are the centre and ring 1, and it has no gate.
+imp_ring <- suppressMessages(dsm_importance(fin, data, context_importance(draws = 2L),
+                                            verbose = FALSE))
+ok["context_by_ring_runs_on_the_final"] <-
+  setequal(imp_ring$table$target, c("centre", "ring_01", "context")) &&
+  all(is.finite(imp_ring$table$per_pixel))
+imp_pv <- suppressMessages(dsm_importance(fin, data, context_importance(per_variable = TRUE, draws = 2L),
+                                          verbose = FALSE))
+ok["context_per_variable_has_every_variable_and_band"] <- nrow(imp_pv$table) == 2L * length(preds)
+imp_win <- suppressMessages(dsm_importance(fin, data, context_importance(by = "window", draws = 2L),
+                                           verbose = FALSE))
+ok["context_by_window_has_one_row_per_window"] <-
+  identical(imp_win$table$target, "w03") && is.null(imp_win$gate)
+# SHAP, on the same files: the background is the final run's training rows,
+# every value adds up (checked inside, or nothing comes back), and a fold's
+# validation points are each explained once, by their own fold's models.
+imp_eg <- suppressMessages(dsm_importance(fin, data, shap_importance(samples = 30L, background = 30L),
+                                          verbose = FALSE))
+ok["shap_runs_on_the_final"] <- inherits(imp_eg, "dsm_importance") &&
+  setequal(imp_eg$table$variable, preds) && nrow(imp_eg$points) == imp_t$units$n_rows[1] &&
+  all(preds %in% names(imp_eg$points)) && all(abs(imp_eg$table$direction) <= 1, na.rm = TRUE)
+imp_ig <- suppressMessages(dsm_importance(fin, data, shap_importance("integrated_gradients", steps = 64L),
+                                          verbose = FALSE))
+ok["integrated_gradients_add_up_on_the_final"] <- all(imp_ig$completeness$rel_noise < 0.05)
+imp_sf <- suppressMessages(dsm_importance(rd, data, shap_importance(samples = 20L, background = 30L),
+                                          rows = "folds", verbose = FALSE))
+ok["shap_on_the_folds_explains_each_point_once"] <-
+  !anyDuplicated(imp_sf$points$sample_id) && all(!is.na(imp_sf$points$fold))
+ok["shap_compares_with_permutation"] <-
+  inherits(compare_importance(imp_t, imp_eg), "importance_comparison")
+# ALE, on the same files: a curve per variable, its bins shared by every model
+# of the call -- the three seeds here, the four fold models below.
+imp_ale <- suppressMessages(dsm_importance(fin, data, ale_effect(bins = 5L), verbose = FALSE))
+ok["ale_runs_on_the_final"] <- inherits(imp_ale, "dsm_importance") &&
+  setequal(unique(imp_ale$curves$variable), preds) && all(is.finite(imp_ale$curves$ale)) &&
+  all(imp_ale$table$kind == "continuous") && all(!is.na(imp_ale$curves$ale_sd))
+imp_alef <- suppressMessages(dsm_importance(rd, data, ale_effect(bins = 5L), rows = "folds",
+                                            verbose = FALSE))
+ok["ale_on_the_folds_runs_on_every_fold_model"] <- nrow(imp_alef$units) == 4L &&
+  all(is.finite(imp_alef$curves$ale))
+ok["ale_compares_with_the_rest"] <-
+  inherits(compare_importance(imp_t, imp_eg, imp_ale), "importance_comparison")
+ok["every_importance_prints"] <- all(vapply(list(imp_t, imp_ring, imp_pv, imp_win, imp_eg, imp_ale),
+                                            function(x) length(utils::capture.output(print(x))) > 5L,
+                                            logical(1)))
+# A STORE THAT IS NOT THE RUN'S. The same points with other targets: the
+# models' own scores no longer come back, and nothing is measured.
+bad <- data
+bad$store$meta$target_native <- rev(bad$store$meta$target_native)
+ok["importance_refuses_a_store_that_is_not_the_runs"] <-
+  grepl("does not reproduce", err(dsm_importance(fin, bad, verbose = FALSE)))
+
 unlink(base, recursive = TRUE)
 
 cat(sprintf("  fixture                  : %d points in %d sites | %d configs tuned\n",

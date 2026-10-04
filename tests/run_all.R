@@ -52,6 +52,7 @@ test_files <- c(
   "test_train_defaults.R",   # what dsm_train() reads from the store: windows, batches, inverse, cores
   "test_selection_order.R",  # the test set is scored only after the choice
   "test_occlusion.R",        # does the model use the neighbourhood?
+  "test_importance.R",       # which variables a model relies on, against known models
   "test_conformal.R",        # the interval covers what it promises
   "test_smearing.R",         # the mean surface beside the median surface
   "test_architecture.R",     # embed_pool wiring
