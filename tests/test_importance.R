@@ -52,7 +52,9 @@
 #  14. the refit: a unit's channels left out in place in every window and
 #      role, and put back bit for bit; nothing left out touches nothing; the
 #      refit's record refuses a resume for other variables or threads; the
-#      check compares every row and stops on a difference
+#      check compares every row and stops on a difference; and what its smoke
+#      run showed -- a bar with no spread draws without a warning, a duration
+#      under a minute reads in seconds
 #
 # Run: source("<package root>/tests/test_importance.R")
 
@@ -832,6 +834,18 @@ ok["a_refit_checks_one_seed_at_least"] <- grepl("not skipped", err(refit_importa
 ok["a_refit_prints_its_check_and_its_metric"] <- any(grepl(
   "Refit without each variable \\(LOCO\\), 1 seed\\(s\\) checked first \\| ranked by ccc$",
   capture.output(print(refit_importance()))))
+# WHAT THE SMOKE RUN'S REFIT SHOWED (2026-10-04). A variable left out that was
+# already constant at its mean gives every seed's score back to the bit: its
+# bar has no spread, and drawing one of length zero was a warning from
+# graphics. And a seed of 2 s read "0.0 min" in the estimate.
+grDevices::pdf(NULL)
+bar_warnings <- warned(.importance_plot_bars(
+  tibble::tibble(variable = c("a", "b"), importance = c(0.2, 0), sd_models = c(0.05, 0)),
+  20L, "bars", "importance"))
+grDevices::dev.off()
+ok["a_bar_with_no_spread_draws_without_a_warning"] <- identical(bar_warnings, "")
+ok["a_duration_under_a_minute_is_in_seconds"] <- identical(.train_duration(0.05), "3 s") &&
+  identical(.train_duration(5), "5 min") && identical(.train_duration(180), "3.0 h")
 
 cat(sprintf("  one-hot sets found        : %s\n",
             paste(unique(g$variable[g$rule == "one-hot set"]), collapse = ", ")))

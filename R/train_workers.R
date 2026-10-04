@@ -99,9 +99,11 @@
   cmp
 }
 
-# A duration as a person reads it: minutes, then hours, then days.
+# A duration as a person reads it: seconds, minutes, then hours, then days.
+# Below a minute in seconds: a smoke run's seed took 2 s and read "0.0 min".
 .train_duration <- function(minutes) {
   if (length(minutes) != 1L || !is.finite(minutes)) return("?")
+  if (minutes < 1) return(sprintf("%.0f s", 60 * minutes))
   if (minutes < 120) return(sprintf("%.0f min", minutes))
   if (minutes < 48 * 60) return(sprintf("%.1f h", minutes / 60))
   sprintf("%.1f d", minutes / 1440)

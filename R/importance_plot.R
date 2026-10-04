@@ -82,9 +82,13 @@ plot.dsm_importance <- function(x, n = 20L, ...) {
   col <- ifelse(show$importance >= 0, .importance_col[["blue"]], .importance_col[["earth"]])
   y <- graphics::barplot(show$importance, horiz = TRUE, names.arg = lab, las = 1, col = col,
                          border = NA, xlim = lim, main = main, xlab = xlab, cex.names = 0.8)
-  if (any(sdv > 0)) {
-    graphics::arrows(show$importance - sdv, y, show$importance + sdv, y, angle = 90,
-                     code = 3, length = 0.03, col = .importance_col[["ink"]])
+  # The spread only where there is one: a bar the models agree on to the bit
+  # -- a refit that left out a channel already at its mean -- has none, and
+  # an arrow of length zero is a warning from graphics, not a mark.
+  spread <- sdv > 0
+  if (any(spread)) {
+    graphics::arrows((show$importance - sdv)[spread], y[spread], (show$importance + sdv)[spread],
+                     y[spread], angle = 90, code = 3, length = 0.03, col = .importance_col[["ink"]])
   }
   graphics::abline(v = 0, col = .importance_col[["muted"]])
   invisible(NULL)

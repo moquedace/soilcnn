@@ -337,9 +337,9 @@ refit_importance <- function(metric = c("ccc", "rmse", "rmse_transform"), check_
   say(sprintf(paste0("  %d unit(s) to train of %d: %d seed(s) with nothing left out first, the ",
                      "check, then %d variable(s) x %d seed(s), %d thread(s) each%s"),
               n_todo, nrow(check) + nrow(left), n_check, length(vars), length(seeds), tpu,
-              if (any(is.finite(runtime))) {
-                sprintf(" -- the run's seeds took %.1f min each, so about %s with %d worker(s)",
-                        mean(runtime, na.rm = TRUE),
+              if (n_todo > 0L && any(is.finite(runtime))) {
+                sprintf(" -- the run's seeds took %s each, so about %s with %d worker(s)",
+                        .train_duration(mean(runtime, na.rm = TRUE)),
                         .train_duration(mean(runtime, na.rm = TRUE) * n_todo / n_work), n_work)
               } else ""))
   say("  refit run: ", run_dir)
