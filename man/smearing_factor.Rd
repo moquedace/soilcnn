@@ -4,7 +4,12 @@
 \alias{smearing_factor}
 \title{The smearing factor, from held-out residuals in transform space.}
 \usage{
-smearing_factor(obs_transform, pred_transform, transform = c("log1p", "log"))
+smearing_factor(
+  obs_transform,
+  pred_transform,
+  transform = c("log1p", "log"),
+  bins = 5L
+)
 }
 \arguments{
 \item{obs_transform, pred_transform}{Observed and predicted values IN
@@ -18,6 +23,8 @@ first.}
 supported, and an unknown one is refused rather than assumed: the algebra
 above is specific to an exponential back-transform, and applying it to a
 square root or an identity would scale a number that needs no scaling.}
+
+\item{bins}{Bins of the prediction for the factor by level (\code{smear(method = "level")}), cut at its quantiles; each needs 50 residuals.}
 }
 \value{
 An object of class "smearing_cal".

@@ -4,7 +4,12 @@
 \alias{smear}
 \title{The conditional MEAN surface, from transform-space predictions.}
 \usage{
-smear(pred_transform, cal, lower_limit = 0)
+smear(
+  pred_transform,
+  cal,
+  lower_limit = 0,
+  method = c("global", "level", "total")
+)
 }
 \arguments{
 \item{pred_transform}{Predictions in transform space.}
@@ -12,6 +17,11 @@ smear(pred_transform, cal, lower_limit = 0)
 \item{cal}{A smearing_cal, or a bare positive number to use as the factor.}
 
 \item{lower_limit}{Floor, e.g. 0 for a stock. Applied after the correction.}
+
+\item{method}{Which factor: "global" (the default; Duan's scalar), "level"
+(S as a function of the prediction, from bins of it, interpolated) or
+"total" (the exp(f)-weighted scalar, which unbiases a sum). The last two
+need a smearing_cal. \code{\link[=smearing_check]{smearing_check()}} measures them on held-out points.}
 }
 \value{
 Numeric, in native units: an estimate of \code{E[y | x]} rather than of its

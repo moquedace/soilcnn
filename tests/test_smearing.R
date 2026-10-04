@@ -268,8 +268,64 @@ ok["a_small_set_reports_no_profile"] <- {
                          small_p)$s_by_bin) == 0L
 }
 
+# ── 9. THE FACTOR BY LEVEL AND FOR A TOTAL, AND THE CHECK THAT CHOOSES ───────
+#
+# Residuals whose spread grows with the prediction: z = f + e, e ~ N(0, s(f)),
+# s(f) = 0.2 + 0.2 (f - 1) for f in [1, 4]. The factor a point needs is
+# exp(s(f)^2 / 2), 1.02 at the low end and 1.38 at the high one, so one scalar
+# over-corrects the low predictions and under-corrects the high, and its total
+# -- carried by the high -- falls short. The factor by level must recover each
+# bin's mean of exp(s^2/2); on fresh points from the same process,
+# smearing_check() must show the scalar's opposite biases at the two ends, the
+# factor by level without them, and the factor for a total unbiased in total.
+sd_at <- function(f) 0.2 + 0.2 * (f - 1)
+set.seed(910)
+f_cal <- stats::runif(50000, 1, 4)
+cal_lv <- smearing_factor(f_cal + stats::rnorm(50000, 0, sd_at(f_cal)), f_cal)
+idx_lv <- cut(f_cal, breaks = stats::quantile(f_cal, seq(0, 1, 0.2)), include.lowest = TRUE,
+              labels = FALSE)
+truth_lv <- as.numeric(tapply(exp(sd_at(f_cal)^2 / 2), idx_lv, mean))
+ok["the_factor_by_level_recovers_each_bins_factor"] <-
+  nrow(cal_lv$level) == 5L && all(abs(cal_lv$level$s / truth_lv - 1) < 0.03) &&
+  isTRUE(all.equal(cal_lv$level$s, unname(cal_lv$s_by_bin)))
+lv <- cal_lv$level
+mid12 <- mean(lv$centre[1:2])
+ok["between_bins_it_is_interpolated_and_beyond_them_held"] <-
+  abs(smear(mid12, cal_lv, lower_limit = -Inf, method = "level") -
+        (exp(mid12) * mean(lv$s[1:2]) - 1)) < 1e-9 &&
+  abs(smear(0, cal_lv, lower_limit = -Inf, method = "level") - (lv$s[1] - 1)) < 1e-12
+
+set.seed(911)
+f_new <- stats::runif(50000, 1, 4)
+chk <- smearing_check(cal_lv, f_new + stats::rnorm(50000, 0, sd_at(f_new)), f_new)
+row_of <- function(s) chk[chk$surface == s, , drop = FALSE]
+g_chk <- row_of("global"); l_chk <- row_of("level"); t_chk <- row_of("total")
+ok["one_scalar_overcorrects_the_low_and_undercorrects_the_high"] <-
+  g_chk$bias_pct_q1 > 5 && g_chk$bias_pct_q5 < -3
+ok["the_factor_by_level_removes_both"] <-
+  all(abs(unlist(l_chk[, paste0("bias_pct_q", 1:5)])) < 4)
+ok["the_factor_for_a_total_unbiases_the_total_the_scalar_does_not"] <-
+  abs(t_chk$bias_pct) < 2.5 && g_chk$bias_pct < -2
+ok["the_median_surface_falls_short"] <- row_of("median")$bias_pct < -10
+ok["the_check_prints"] <- any(grepl("what a total", capture.output(print(chk))))
+ok["a_bare_number_has_no_factor_by_level"] <- grepl("needs a smearing_cal",
+  tryCatch(smear(1, 1.2, method = "level"), error = conditionMessage))
+ok["a_small_calibration_has_no_factor_by_level"] <- grepl("no factor by level",
+  tryCatch(smear(1, smearing_factor(small_p + stats::rnorm(100, 0, 0.4), small_p),
+                 method = "level"), error = conditionMessage))
+
+# A MEAN MAP FROM A MEDIAN MAP: cell by cell, what smear() gives the median.
+z_grid <- seq(1, 4, length.out = 20)
+m_map <- smear_map(terra::rast(nrows = 4, ncols = 5, vals = expm1(z_grid)), cal_lv,
+                   method = "level")
+ok["a_mean_map_is_the_median_map_smeared_cell_by_cell"] <-
+  max(abs(terra::values(m_map)[, 1] - smear(z_grid, cal_lv, method = "level"))) < 1e-6
+
 cat(sprintf("  closed form              : S = %.4f, exp(sigma^2/2) = %.4f\n",
             cal$s, expected_s))
+cat(sprintf("  by level, held out       : global q1 %+.1f%% q5 %+.1f%% total %+.1f%% | level q1 %+.1f%% q5 %+.1f%% | for a total %+.1f%%\n",
+            g_chk$bias_pct_q1, g_chk$bias_pct_q5, g_chk$bias_pct, l_chk$bias_pct_q1,
+            l_chk$bias_pct_q5, t_chk$bias_pct))
 cat(sprintf("  ensemble vs pooled rows  : n %d vs %d | S %.4f vs %.4f\n",
             cal_run$n, cal_pooled$n, cal_run$s, cal_pooled$s))
 cat(sprintf("  independence check       : flat %.2fx | dependent %.2fx (fires above 1.25x)\n",

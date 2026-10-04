@@ -84,6 +84,30 @@
 # does not transfer. That transfer gap dominates both refinements, which is why
 # the plain scalar stays and the diagnostic below exists to keep the violation
 # visible instead of assumed away.
+#
+# ── THE REFINEMENTS AS OPTIONS, AND THE CHECK THAT CHOOSES (2026-10-04) ──────
+#
+# The gap was the design's, not the method's: three folds leave each fold model
+# half the points. The SOC 0-30 cm trial tunes with ten folds and a 15% test
+# set, so a fold model trains on ~76% of the points and the deployed one on
+# ~72% -- the gap is gone, and whether a factor by level transfers becomes a
+# question its common test set can answer. So both refinements are options of
+# smear(), the global scalar staying the default:
+#
+#   method = "global"  Duan's scalar, as above.
+#   method = "level"   S as a function of the prediction (subgroup smearing:
+#                      Duan 1983's own suggestion for a residual that depends
+#                      on x; Manning 1998): the mean of exp(e) within bins of
+#                      the prediction, interpolated linearly between the bins'
+#                      medians and held at the ends.
+#   method = "total"   the exp(f)-weighted scalar, the one that unbiases a SUM
+#                      of the calibration points' predictions.
+#
+# smearing_check() measures the three on held-out points -- the bias of the
+# total and within quintiles of the prediction -- which is the measurement that
+# turned the refinements down here, made available rather than done by hand.
+# smear_map() applies the chosen one to a median map already made: the mean
+# surface is exp(z) S(z) - 1 of the median, so the network is not run again.
 
 #' The smearing factor, from held-out residuals in transform space.
 #'
@@ -97,11 +121,17 @@
 #'   supported, and an unknown one is refused rather than assumed: the algebra
 #'   above is specific to an exponential back-transform, and applying it to a
 #'   square root or an identity would scale a number that needs no scaling.
+#' @param bins Bins of the prediction for the factor by level (`smear(method =
+#'   "level")`), cut at its quantiles; each needs 50 residuals.
 #' @return An object of class "smearing_cal".
 #' @export
 smearing_factor <- function(obs_transform, pred_transform,
-                            transform = c("log1p", "log")) {
+                            transform = c("log1p", "log"), bins = 5L) {
   transform <- match.arg(transform)
+  if (!is.numeric(bins) || length(bins) != 1L || !is.finite(bins) || bins < 2 ||
+      bins != round(bins)) {
+    stop("bins must be one whole number of 2 or more.", call. = FALSE)
+  }
   stopifnot(length(obs_transform) == length(pred_transform))
   keep <- is.finite(obs_transform) & is.finite(pred_transform)
   o <- as.numeric(obs_transform)[keep]
@@ -146,7 +176,7 @@ smearing_factor <- function(obs_transform, pred_transform,
   #
   # exp(f)-weighted S is carried alongside because it is the functional that
   # unbiases a SUM, and the mean surface is the one the docs say may be summed.
-  bins <- if (n >= 250L) {
+  by_bin <- if (n >= 250L) {
     q <- stats::quantile(p, probs = seq(0, 1, length.out = 6), na.rm = TRUE)
     idx <- cut(p, breaks = unique(q), include.lowest = TRUE, labels = FALSE)
     vapply(split(e, idx), function(z) mean(exp(z)), numeric(1))
@@ -159,9 +189,40 @@ smearing_factor <- function(obs_transform, pred_transform,
                  mean_residual = mean(e), sd_residual = stats::sd(e),
                  s_lognormal = s_lnorm,
                  agreement = s / s_lnorm,
-                 s_by_bin = bins,
-                 s_weighted = s_weighted),
+                 s_by_bin = by_bin,
+                 s_weighted = s_weighted,
+                 level = .smearing_levels(p, e, as.integer(bins))),
             class = "smearing_cal")
+}
+
+# The factor by level: the mean of exp(e) within `bins` bins of the prediction
+# cut at its quantiles, each with the bin's median prediction. NULL below 50
+# residuals a bin: exp(e) has a heavy right tail, and a bin's mean of it from
+# fewer is too loose to multiply a map by.
+.smearing_levels <- function(p, e, bins) {
+  if (length(p) < 50L * bins) return(NULL)
+  q <- unique(stats::quantile(p, probs = seq(0, 1, length.out = bins + 1L), names = FALSE))
+  if (length(q) < 3L) return(NULL)
+  idx <- cut(p, breaks = q, include.lowest = TRUE, labels = FALSE)
+  k <- sort(unique(idx))
+  tibble::tibble(centre = vapply(k, function(j) stats::median(p[idx == j]), numeric(1)),
+                 s = vapply(k, function(j) mean(exp(e[idx == j])), numeric(1)),
+                 n = vapply(k, function(j) sum(idx == j), integer(1)))
+}
+
+# S at each prediction, from the bins: linear between the bins' medians, held
+# at the first and last beyond them.
+.smearing_at_level <- function(z, level) {
+  if (is.null(level) || nrow(level) == 0L) {
+    stop("This smearing_cal has no factor by level: it came from fewer than 50 residuals a ",
+         "bin, or from before smear(method = \"level\") existed (2026-10-04). Make it again ",
+         "with smearing_factor() or smearing_from_run().", call. = FALSE)
+  }
+  out <- rep(NA_real_, length(z))
+  ok <- is.finite(z)
+  out[ok] <- if (nrow(level) == 1L) level$s else
+    stats::approx(level$centre, level$s, xout = z[ok], rule = 2, ties = mean)$y
+  out
 }
 
 #' The conditional MEAN surface, from transform-space predictions.
@@ -169,14 +230,32 @@ smearing_factor <- function(obs_transform, pred_transform,
 #' @param pred_transform Predictions in transform space.
 #' @param cal A smearing_cal, or a bare positive number to use as the factor.
 #' @param lower_limit Floor, e.g. 0 for a stock. Applied after the correction.
+#' @param method Which factor: "global" (the default; Duan's scalar), "level"
+#'   (S as a function of the prediction, from bins of it, interpolated) or
+#'   "total" (the exp(f)-weighted scalar, which unbiases a sum). The last two
+#'   need a smearing_cal. [smearing_check()] measures them on held-out points.
 #' @return Numeric, in native units: an estimate of `E[y | x]` rather than of its
 #'   median.
 #' @export
-smear <- function(pred_transform, cal, lower_limit = 0) {
-  s <- if (inherits(cal, "smearing_cal")) cal$s else as.numeric(cal)
-  tr <- if (inherits(cal, "smearing_cal")) cal$transform else "log1p"
-  stopifnot(length(s) == 1L, is.finite(s), s > 0)
+smear <- function(pred_transform, cal, lower_limit = 0,
+                  method = c("global", "level", "total")) {
+  method <- match.arg(method)
+  is_cal <- inherits(cal, "smearing_cal")
+  if (!is_cal && !identical(method, "global")) {
+    stop("A factor by level or for a total needs a smearing_cal, from smearing_factor(); a ",
+         "bare number is one global factor.", call. = FALSE)
+  }
+  tr <- if (is_cal) cal$transform else "log1p"
   z <- as.numeric(pred_transform)
+  s <- switch(method,
+    global = if (is_cal) cal$s else as.numeric(cal),
+    total  = cal$s_weighted,
+    level  = .smearing_at_level(z, cal$level))
+  if (identical(method, "level")) {
+    stopifnot(all(is.finite(s[is.finite(z)]) & s[is.finite(z)] > 0))
+  } else {
+    stopifnot(length(s) == 1L, is.finite(s), s > 0)
+  }
   out <- switch(tr,
     # exp(z) * S - 1, NOT expm1(z) * S. The -1 comes out of the expectation
     # after the scaling, and folding it in the other order scales the offset
@@ -223,9 +302,10 @@ print.smearing_cal <- function(x, ...) {
       cat("     stock, this falls mainly on any TOTAL taken from the map.\n")
       cat(sprintf("     For reference, the factor that unbiases a sum is %.4f.\n",
                   x$s_weighted))
-      cat("     Both obvious repairs were measured here and BOTH made the\n")
-      cat("     held-out bias worse -- see the note at the top of R/smearing.R\n")
-      cat("     before reaching for one.\n")
+      cat("     On the global SOC model, tuned on three folds, both repairs --\n")
+      cat("     smear(method = \"level\") and \"total\" -- made the held-out bias\n")
+      cat("     worse: its folds saw half the points the deployed model saw.\n")
+      cat("     smearing_check() measures all three on a test set of yours.\n")
     }
   }
 
@@ -233,6 +313,118 @@ print.smearing_cal <- function(x, ...) {
               1.5, expm1(1.5)))
   cat(sprintf("%.2f (mean).\n", exp(1.5) * x$s - 1))
   invisible(x)
+}
+
+#' The smearing factors on held-out points: which one unbiases the mean surface.
+#'
+#' Each factor of [smear()] applied to held-out predictions -- points none of
+#' them was calibrated on, a test set -- against what was observed there: the
+#' bias of the total, which a total taken from the map inherits, and the bias
+#' within quintiles of the prediction, where a factor by level should help. The
+#' median surface, with no factor, is the first row. On the global SOC model,
+#' calibrated on three folds, the global factor won (+2.7% against -3.9% by
+#' level and -5.8% for a total), because those folds saw half the points the
+#' deployed model saw; this measures it again for a run of yours.
+#'
+#' @param cal A smearing_cal, from [smearing_factor()] or [smearing_from_run()].
+#' @param obs_transform,pred_transform Observed and predicted at held-out
+#'   points, in transform space.
+#' @param methods The factors to compare.
+#' @param lower_limit As in [smear()].
+#' @return A `smearing_check`: a tibble, one row per surface, with `bias_pct`
+#'   (its total against the observed total, in %), `mae`, `rmse`, and
+#'   `bias_pct_q1` to `bias_pct_q5` (within quintiles of the prediction, low to
+#'   high).
+#' @export
+smearing_check <- function(cal, obs_transform, pred_transform,
+                           methods = c("global", "level", "total"), lower_limit = 0) {
+  if (!inherits(cal, "smearing_cal")) {
+    stop("cal must be a smearing_cal, from smearing_factor() or smearing_from_run().",
+         call. = FALSE)
+  }
+  methods <- match.arg(methods, several.ok = TRUE)
+  if (length(obs_transform) != length(pred_transform)) {
+    stop("obs_transform and pred_transform must have one value per point.", call. = FALSE)
+  }
+  keep <- is.finite(obs_transform) & is.finite(pred_transform)
+  o <- as.numeric(obs_transform)[keep]
+  p <- as.numeric(pred_transform)[keep]
+  if (length(o) < 30L) {
+    stop("Fewer than 30 held-out points: the bias of a total from so few is noise.",
+         call. = FALSE)
+  }
+  inv <- switch(cal$transform, log1p = expm1, log = exp)
+  y <- inv(o)
+  q <- unique(stats::quantile(p, probs = seq(0, 1, by = 0.2), names = FALSE))
+  bin <- cut(p, breaks = q, include.lowest = TRUE, labels = FALSE)
+  med <- inv(p)
+  if (is.finite(lower_limit)) med <- pmax(med, lower_limit)
+  surfaces <- c(list(median = med),
+                stats::setNames(lapply(methods, function(m) {
+                  smear(p, cal, lower_limit = lower_limit, method = m)
+                }), methods))
+  pct <- function(a, b) 100 * (sum(a) - sum(b)) / sum(b)
+  rows <- lapply(names(surfaces), function(nm) {
+    yh <- surfaces[[nm]]
+    by_q <- vapply(sort(unique(bin)), function(k) pct(yh[bin == k], y[bin == k]), numeric(1))
+    dplyr::bind_cols(
+      tibble::tibble(surface = nm, bias_pct = pct(yh, y), mae = mean(abs(yh - y)),
+                     rmse = sqrt(mean((yh - y)^2))),
+      tibble::as_tibble(stats::setNames(as.list(by_q), paste0("bias_pct_q", seq_along(by_q)))))
+  })
+  structure(dplyr::bind_rows(rows), n = length(o),
+            class = c("smearing_check", "tbl_df", "tbl", "data.frame"))
+}
+
+#' Print a `smearing_check`
+#'
+#' @param x   A `smearing_check`, from [smearing_check()].
+#' @param ... Ignored.
+#' @return `x`, invisibly.
+#' @keywords internal
+#' @export
+print.smearing_check <- function(x, ...) {
+  tab <- tibble::as_tibble(unclass(x))
+  cat(sprintf("\n<smearing_check> %d held-out point(s): each surface against what was observed\n",
+              attr(x, "n")))
+  num <- vapply(tab, is.numeric, logical(1))
+  tab[num] <- lapply(tab[num], function(v) round(v, 2))
+  print(tab, n = Inf)
+  cat("  bias_pct: the surface's total against the observed total, in % -- what a total\n")
+  cat("  taken from the map inherits. bias_pct_q1..: the same within quintiles of the\n")
+  cat("  prediction, low to high, where a factor by level should help. median: no factor.\n")
+  invisible(x)
+}
+
+#' The mean surface of a median map already made.
+#'
+#' The conditional mean is `exp(z) S(z) - 1` of the median `z` in transform
+#' space, so a mean map by any of [smear()]'s factors comes from the median
+#' map alone, cell by cell, without running the network again.
+#'
+#' @param median The ensemble median, in native units: a SpatRaster, or the
+#'   path of one -- [dsm_predict()]'s `ensemble_median` band.
+#' @param cal A smearing_cal, from [smearing_factor()] or [smearing_from_run()].
+#' @param method As in [smear()].
+#' @param lower_limit As in [smear()].
+#' @param filename Where to write the map; "" keeps it in memory or in terra's
+#'   temporary files.
+#' @return A SpatRaster: the conditional mean, cell by cell.
+#' @export
+smear_map <- function(median, cal, method = c("global", "level", "total"), lower_limit = 0,
+                      filename = "") {
+  method <- match.arg(method)
+  if (!inherits(cal, "smearing_cal")) {
+    stop("cal must be a smearing_cal, from smearing_factor() or smearing_from_run().",
+         call. = FALSE)
+  }
+  r <- if (inherits(median, "SpatRaster")) median else terra::rast(median)
+  if (terra::nlyr(r) != 1L) stop("median must be one band: the ensemble median.", call. = FALSE)
+  fwd <- switch(cal$transform, log1p = log1p, log = log)
+  # lapp() hands the function a block of cells at a time, as one vector: the
+  # factor is applied vectorised, not cell by cell.
+  terra::lapp(r, fun = function(v) smear(fwd(v), cal, lower_limit = lower_limit, method = method),
+              filename = filename)
 }
 
 #' The smearing factor from a tuning run's out-of-fold predictions.

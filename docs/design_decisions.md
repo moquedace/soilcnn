@@ -651,6 +651,7 @@ and each is written where the code that implements it lives:
 | the frozen test set, and the optimism measured after the choice | `R/test_optimism.R` |
 | conformal intervals, and the residuals that calibrate them | `R/conformal.R`; README, "Calibrated uncertainty" |
 | the smeared mean beside the median | `R/smearing.R` (and section 11 above) |
+| the mean surface's factor by level and for a total as options of `smear()`, the global scalar the default, and the check on held-out points that chooses between them | `R/smearing.R`; README, "A median surface and a mean surface" |
 | the dissimilarity index and the area of applicability | `R/aoa.R` |
 | the map: the network run fully convolutionally where that is exact | `R/predict.R`; `architecture.md` |
 | the package: one way to load, and workers that load what their session loaded | `R/utils.R` (`.pkg_loader()`), `R/zzz.R`; README, "Loading it" |

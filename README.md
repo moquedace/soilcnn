@@ -402,6 +402,15 @@ Duan's derivation assumes the residual is independent of the prediction and that
 is checkable — in the SOC model it runs 1.80 at the low end to 1.15 at the
 high end, which the print warns about rather than silently averaging away.
 
+Two refinements are options of `smear()`, not its default: `method = "level"`,
+a factor by the prediction's level from bins of it, and `method = "total"`, the
+exp(f)-weighted scalar that unbiases a sum. On the SOC model both made the
+held-out bias worse (−3.9% and −5.8%, against +2.7%), because its three folds
+saw half the points the deployed model saw. A run whose folds see about as many
+may find otherwise, so `smearing_check()` measures all three on its test set,
+and `smear_map()` makes the mean map by the factor chosen from a median map
+already made, without running the network again.
+
 ### Two models compared on clustered test points
 
 ```r
@@ -594,7 +603,7 @@ What the interval bands come from instead is [calibrated uncertainty](#calibrate
 | [`R/aoa.R`](R/aoa.R) | Dissimilarity index · area of applicability |
 | [`R/conformal.R`](R/conformal.R) | `conformal_calibrate()` · `picp_report()` — intervals with a coverage guarantee, and the check that they keep it |
 | [`R/occlusion.R`](R/occlusion.R) | `spatial_occlusion()` — does the trained network use the neighbourhood, or only the centre pixel? |
-| [`R/smearing.R`](R/smearing.R) | `smearing_factor()` · `smear()` — the back-transform of a log-trained median, and the one surface that may be summed |
+| [`R/smearing.R`](R/smearing.R) | `smearing_factor()` · `smear()` — the back-transform of a log-trained median, and the one surface that may be summed; `smearing_check()` measures its factors on held-out points, and `smear_map()` applies one to a median map |
 | [`R/block_bootstrap.R`](R/block_bootstrap.R) | `block_bootstrap()` · `equal_area_blocks()` · `spatial_correlogram()` — intervals on clustered test points from whole blocks of equal area, per profile and per block |
 | [`R/test_optimism.R`](R/test_optimism.R) | `freeze_selection()` · `score_test_grid()` — the test set, scored only after the choice is locked |
 | [`R/importance.R`](R/importance.R) | `dsm_importance()` and its methods — permutation, context, SHAP (expected and integrated gradients, the kernel), SAGE, ALE; the groups and the one-hot sets; SHAP at points of the map (`importance_points()`, `importance_map()`); `compare_importance()`; `importance_weights()` for the AOA. Every model is held to its run's predictions first |
@@ -607,7 +616,7 @@ Beside `R/`:
 
 | Where | What |
 |------|---------|
-| [`DESCRIPTION`](DESCRIPTION) · [`NAMESPACE`](NAMESPACE) | The package, `soilcnn`: what it imports, and the 80 functions it exports — the `dsm_*()` front end, the resampling specs and fold constructors, the model registry, the importance methods, and the tools applied to results (AOA, conformal intervals, smearing, metrics, noise floor, occlusion, intervals by blocks). The runners underneath `dsm_train()`, the patch store's plumbing and the helpers are internal (`soilcnn:::`); `pkgload::load_all()` on the source tree makes every function visible. NAMESPACE is what roxygen2 writes from the `@export` tags, and `tests/test_package_metadata.R` checks that it still is |
+| [`DESCRIPTION`](DESCRIPTION) · [`NAMESPACE`](NAMESPACE) | The package, `soilcnn`: what it imports, and the 82 functions it exports — the `dsm_*()` front end, the resampling specs and fold constructors, the model registry, the importance methods, and the tools applied to results (AOA, conformal intervals, smearing, metrics, noise floor, occlusion, intervals by blocks). The runners underneath `dsm_train()`, the patch store's plumbing and the helpers are internal (`soilcnn:::`); `pkgload::load_all()` on the source tree makes every function visible. NAMESPACE is what roxygen2 writes from the `@export` tags, and `tests/test_package_metadata.R` checks that it still is |
 | [`tests/run_all.R`](tests/run_all.R) | 34 files: 27 fast, then 7 slow ones that train, map, prepare a store, and build and install the package. The package is loaded once for the suite. Every accumulator is named and `.report()` refuses an empty, unnamed, NA-bearing or non-logical one. `test_sources_parse.R` runs first and is the authority on syntax. |
 | [`tools/check_package.R`](tools/check_package.R) | Runs `R CMD check` on a staged copy of the package's own files |
 | [`docs/`](docs/) | [`architecture.md`](docs/architecture.md) (the network), [`design_decisions.md`](docs/design_decisions.md) (the reason for each choice), [`tuning_guide.md`](docs/tuning_guide.md) (the search space) |
