@@ -136,7 +136,12 @@ mp <- function(...) suppressMessages(do.call(dsm_predict, utils::modifyList(map_
 rd <- function(m, b) terra::as.matrix(terra::rast(m$vrt[[b]]), wide = TRUE)
 
 # ── 1. the map, two workers, the probe first ──────────────────────────────────
-map2 <- mp(n_cores = 2L, run_id = "map_two")
+# THE BUDGET IS GIVEN. Left to itself it is 70% of the RAM free at that moment,
+# and with another job on the machine (the full SOC run, 2026-10-03) it held one
+# worker of the ~6 GB the estimate floors every map worker at, not two -- and
+# "three units on two workers" failed for the machine's reason, not the
+# code's. 13 GB holds two by the estimate; the fixture uses a fraction of it.
+map2 <- mp(n_cores = 2L, run_id = "map_two", max_ram_gb = 13)
 bands_all <- c("ensemble_median", "ensemble_mean", "ensemble_sd", "ensemble_mad",
                "ensemble_min", "ensemble_max", "smeared_mean_block",
                "pi90_constant_lower_block", "pi90_constant_upper_block",
