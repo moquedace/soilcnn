@@ -153,6 +153,21 @@ ok["cv_di_has_one_entry_per_training_row"] <- length(cv_di) == nrow(clu)
 ok["threshold_uses_the_other_fold"] <- all(cv_di > 0.5 * 10 / ref_c$avg_dist)
 ok["threshold_is_not_the_within_fold_distance"] <- min(cv_di) > 0.1
 
+# A WEIGHT OF ZERO. aoa_threshold() took the rows back unweighted by dividing
+# by sqrt(weight): 0/0 made every cross-validated DI NaN and the threshold NA,
+# with no error (2026-10-03). Weighted on axis 1 alone, the clusters keep a
+# finite threshold, and each cv DI is the gap along that axis -- sqrt(P) times
+# it, the one weight being P once the weights are brought to mean 1.
+ref_c0 <- di_reference(clu, weights = c(1, rep(0, P - 1L)))
+th_c0  <- aoa_threshold(ref_c0, fold2)
+ok["a_zero_weight_keeps_the_threshold_finite"] <- is.finite(as.numeric(th_c0)) &&
+  all(is.finite(attr(th_c0, "cv_di")))
+ok["and_measures_along_the_weighted_axis_alone"] <- {
+  x1 <- clu[, 1]
+  nn <- vapply(seq_along(x1), function(i) min(abs(x1[i] - x1[fold2 != fold2[i]])), numeric(1))
+  isTRUE(all.equal(attr(th_c0, "cv_di"), sqrt(P) * nn / ref_c0$avg_dist, tolerance = 1e-8))
+}
+
 ok["threshold_needs_more_than_one_fold"] <- inherits(
   tryCatch(aoa_threshold(ref_c, rep(1L, nrow(clu))), error = function(e) e),
   "error")

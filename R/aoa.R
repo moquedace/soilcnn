@@ -240,11 +240,25 @@ aoa_threshold <- function(ref, folds, k_iqr = 1.5) {
          "for the rows a single split never held out.", call. = FALSE)
   }
 
-  x  <- ref$x / rep(sqrt(ref$weights), each = ref$n)
+  # The rows go back unweighted, because .di_nn_dist() weights what it is
+  # given. A channel of weight ZERO cannot be divided back -- 0 / 0 -- and that
+  # NaN made every cross-validated DI NaN: the first map given an importance
+  # with a zero in it (tests/test_predict.R, section 8) had no calibration
+  # point left. Its value is multiplied by zero again, so any finite one will
+  # do; dividing by 1 leaves the zero it holds.
+  sw <- sqrt(ref$weights)
+  x  <- ref$x / rep(ifelse(sw > 0, sw, 1), each = ref$n)
   cv <- rep(NA_real_, ref$n)
   cv[held] <- .di_nn_dist(ref, x[held, , drop = FALSE], exclude = folds[held],
                           folds_train = folds) / ref$avg_dist
 
+  # A THRESHOLD THAT IS NOT A NUMBER STOPS HERE. The zero-weight NaN above went
+  # through quantile(na.rm = TRUE) as an empty set and came out NA: an AOA that
+  # admits nothing, built without an error.
+  if (!any(is.finite(cv[held]))) {
+    stop("No held-out row has a finite cross-validated DI, so the AOA threshold ",
+         "cannot be derived.", call. = FALSE)
+  }
   q  <- stats::quantile(cv, probs = c(0.25, 0.75), na.rm = TRUE)
   th <- as.numeric(q[2] + k_iqr * (q[2] - q[1]))
   attr(th, "cv_di") <- cv
