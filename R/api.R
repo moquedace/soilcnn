@@ -385,6 +385,9 @@ print.resample_spec <- function(x, ...) {
   for (nm in setdiff(names(x), "kind")) {
     v <- x[[nm]]
     if (is.null(v)) v <- "NULL"
+    # A table -- knndm_cv()'s prediction points -- by its size: format() of a
+    # data frame is its printed lines, and they ran together on one line.
+    if (is.data.frame(v)) v <- sprintf("<%d rows of %s>", nrow(v), paste(names(v), collapse = ", "))
     if (length(v) > 4L) v <- sprintf("<%d values>", length(v))
     cat(sprintf("  %-15s %s\n", nm, paste(format(v), collapse = ", ")))
   }
