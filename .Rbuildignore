@@ -18,3 +18,4 @@
 ^Meta$
 ^vignettes/\.gitignore$
 ^docs/pilot_reports$
+^data-raw$

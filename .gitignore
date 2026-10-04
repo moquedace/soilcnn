@@ -44,3 +44,8 @@ docs/pilot_reports/
 
 # Figure inputs (28 m rasters) and the records of where each figure came from.
 tools/figure_inputs/
+
+# The example landscape the package ships (data-raw/make_example_landscape.R):
+# small, made by code, and needed by the examples, the tests and the vignette.
+!inst/extdata/**/*.tif
+!inst/extdata/**/*.csv
