@@ -124,8 +124,14 @@ final_args <- list(
   output_dir = file.path(out_root, "final_model"), verbose = FALSE)
 
 # ── 1-2. two workers side by side ────────────────────────────────────────────
-fin <- suppressMessages(do.call(dsm_final, c(list(fit, n_cores = 2L, run_id = "par"),
-                                             final_args)))
+# THE BUDGET IS GIVEN. Left to itself it is 70% of the RAM free at that moment,
+# and with another job on the machine (the full SOC run, 2026-10-03) it held one
+# fixture worker of ~5.8 GB by the estimate, not two -- so the record below
+# read 1 and failed for a reason that is the machine's, not the code's. What
+# this section checks is the record and the two workers' seeds, and 12 GB holds
+# two by the estimate; the fixture's real workers use a fraction of it.
+fin <- suppressMessages(do.call(dsm_final, c(list(fit, n_cores = 2L, run_id = "par",
+                                                  max_ram_gb = 12), final_args)))
 rd  <- fin$run_dir
 cid <- fin$selected_config_ids[1]
 sm  <- readRDS(file.path(rd, "comparison", "final_run_summary.rds"))
