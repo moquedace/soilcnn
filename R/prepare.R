@@ -1037,8 +1037,8 @@ print.dsm_store <- function(x, ...) {
 # cells around its point however they were fetched. The test suite checks both
 # -- two cores against one, and one read per point against the defaults.
 #
-# The workers get the plan once (.prep_worker_setup) and a band index per
-# call. Both functions are top-level on purpose: a closure defined inside
+# The workers get the plan once (clusterExport(), as .prep_job) and a band
+# index per call. Their functions are top-level on purpose: a closure defined inside
 # dsm_prepare() would be serialised together with dsm_prepare()'s frame --
 # which holds the patch arrays -- and sent to every worker.
 .prep_extract_patches <- function(files, qc_table, xy, windows, chunk_nrows,
@@ -1191,7 +1191,14 @@ print.dsm_store <- function(x, ...) {
     on.exit(parallel::stopCluster(cl), add = TRUE)
     fns <- .prep_worker_functions()
     parallel::clusterExport(cl, names(fns), envir = list2env(fns))
-    got <- parallel::clusterCall(cl, fns$.prep_worker_setup, job)
+    # THE PLAN GOES TO EACH WORKER ONCE, where the band function finds it, and
+    # clusterExport() puts it there -- not an assign() in this package's code,
+    # which must never write into a global environment (CRAN's rule). R CMD
+    # check --as-cran found the assign() the worker setup used to make and
+    # cannot see that it ran only in a worker's own session; the workers'
+    # global environments are theirs, and parallel's to fill.
+    parallel::clusterExport(cl, ".prep_job", envir = list2env(list(.prep_job = job)))
+    got <- parallel::clusterCall(cl, fns$.prep_worker_setup, job$gdal_cache_mb)
     say("  GDAL cache per worker: ", format(got[[1]]), " (asked ", gdal_cache_mb,
         " MB) -- read back, not assumed")
     batches <- split(seq_len(n_ch), ceiling(seq_len(n_ch) / n_workers))
@@ -1274,12 +1281,12 @@ print.dsm_store <- function(x, ...) {
   list(arrays = arrays, invalid = which(invalid), centre = centre)
 }
 
-# In each worker, once: the plan, and a GDAL cache sized to hold a chunk's
-# rows. Without it every worker gets GDAL's default -- 5% of the machine's
-# RAM, each -- and fifteen of them would claim three quarters of it for cache.
-.prep_worker_setup <- function(job) {
-  assign(".prep_job", job, envir = globalenv())
-  tryCatch(terra::gdalCache(job$gdal_cache_mb), error = function(e) NULL)
+# In each worker, once: a GDAL cache sized to hold a chunk's rows. Without it
+# every worker gets GDAL's default -- 5% of the machine's RAM, each -- and
+# fifteen of them would claim three quarters of it for cache. (The plan
+# arrives beside it by clusterExport(), as .prep_job.)
+.prep_worker_setup <- function(gdal_cache_mb) {
+  tryCatch(terra::gdalCache(gdal_cache_mb), error = function(e) NULL)
   .prep_gdal_cache()
 }
 
