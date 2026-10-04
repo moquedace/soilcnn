@@ -13,7 +13,11 @@ dsm_importance(
   config = NULL,
   threads = NULL,
   batch_size = 512L,
-  verbose = TRUE
+  verbose = TRUE,
+  at = NULL,
+  rasters = NULL,
+  seeds = NULL,
+  chunk_points = 5000L
 )
 }
 \arguments{
@@ -42,6 +46,21 @@ than one. NULL: the selected one.}
 \item{batch_size}{Points per forward pass.}
 
 \item{verbose}{Say what is done, model by model.}
+
+\item{at}{Points of the map instead of rows of the store: a data frame
+of \code{x}, \code{y}, from \code{\link[=importance_points]{importance_points()}} or of your own. Their patches are
+cut from the rasters as the profiles' were, and only \code{\link[=shap_importance]{shap_importance()}}
+runs there -- a map point has no observation to score against. The
+values become maps with \code{\link[=importance_map]{importance_map()}}.}
+
+\item{rasters}{With \code{at}: where the rasters are, as in \code{\link[=dsm_predict]{dsm_predict()}}; NULL
+for the store's own raster table.}
+
+\item{seeds}{Which of the final run's seeds to use; NULL for all. A map of
+many points may take a few: each seed is one model explained.}
+
+\item{chunk_points}{With \code{at}: points cut and explained at a time. Their
+patches are held in memory together.}
 }
 \value{
 A \code{dsm_importance}: \code{table} (one row per target -- a variable, a

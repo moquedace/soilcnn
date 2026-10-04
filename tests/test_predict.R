@@ -396,6 +396,51 @@ ok["a_map_resumed_with_other_weights_is_refused"] <- grepl("different settings",
 ok["a_map_resumed_without_its_weights_is_refused"] <- grepl("aoa_weights", err(
   mp(run_id = "map_w_first", probe = FALSE, bands = sub_bands, extent = sub_ext)))
 
+# ── 9. SHAP at points of the map ──────────────────────────────────────────────
+#
+# A map point has no observation, so what is checked is the reading. The probe
+# cuts some of the store's own profiles again and must find the store's
+# patches; at every point explained, the models' mean prediction must be the
+# map's own ensemble mean -- read there by the map's other engine, from the
+# same rasters; points without a whole patch (the fixture's NA and -9999 cells
+# are within reach) are left out, as the map leaves them; and the values laid
+# back on the grid are the points' own, cell by cell.
+ext9 <- c(x0 + 0.5, x0 + 5.0, y1 - 3.5, y1 - 0.5)
+pts9 <- importance_points(fin, data, extent = ext9, every = 2L)
+ok["map_points_are_cell_centres_every_second_cell"] <- nrow(pts9) > 100L &&
+  all(abs(((pts9$x - x0) / cs) %% 1 - 0.5) < 1e-6) &&
+  isTRUE(all.equal(attr(pts9, "grid")$res, c(2 * cs, 2 * cs)))
+imp9 <- suppressMessages(dsm_importance(fin, data, shap_importance(samples = 16L, background = 30L),
+                                        at = pts9, chunk_points = 100L, verbose = FALSE))
+ok["map_points_are_explained_after_the_probe"] <- identical(imp9$rows, "map") &&
+  imp9$probe_worst < 1e-5 && nrow(imp9$units) == 2L
+ok["points_without_a_whole_patch_are_left_out"] <- imp9$n_dropped > 0L &&
+  nrow(imp9$points) + imp9$n_dropped == nrow(pts9)
+ok["the_explained_prediction_is_the_maps"] <- {
+  v <- terra::extract(terra::rast(map2$vrt[["ensemble_mean"]]),
+                      as.matrix(imp9$points[, c("x", "y")]))[, 1]
+  isTRUE(all.equal(as.numeric(v), imp9$points$prediction_native, tolerance = 1e-4))
+}
+ok["each_point_keeps_its_values_for_dependence"] <- nrow(imp9$values) == nrow(imp9$points) &&
+  all(c("band_a", "temp_c") %in% colnames(imp9$values))
+map9 <- importance_map(imp9, output_dir = file.path(base, "shap_map"))
+ok["the_map_lays_each_point_on_its_cell"] <- all(file.exists(map9$files)) && {
+  v <- terra::extract(map9$shap[["band_a"]], as.matrix(imp9$points[, c("x", "y")]))[, 1]
+  isTRUE(all.equal(as.numeric(v), imp9$points$band_a, tolerance = 1e-6))
+}
+ok["the_dominant_layer_names_a_variable"] <- {
+  d <- terra::values(map9$dominant)[, 1]
+  any(!is.na(d)) && all(d[!is.na(d)] %in% map9$legend$value)
+}
+ok["a_map_read_from_other_rasters_is_refused"] <- grepl("not the store's", err(
+  dsm_importance(fin, data, shap_importance(samples = 4L, background = 10L), at = pts9[1:5, ],
+                 rasters = rt_sw, verbose = FALSE)))
+ok["only_shap_runs_at_map_points"] <-
+  grepl("only shap_importance", err(dsm_importance(fin, data, permutation_importance(), at = pts9)))
+ok["seeds_pick_the_models_explained"] <- nrow(suppressMessages(dsm_importance(
+  fin, data, shap_importance(samples = 4L, background = 10L), at = pts9[1:20, ], seeds = 42L,
+  verbose = FALSE))$units) == 1L
+
 cat(sprintf("  fixture                  : %d x %d grid, %d channels, %d profiles, %d valid pixel(s)\n",
             n_r, n_c, C, nrow(data$store$meta), sum(valid_ref)))
 cat(sprintf("  probe                    : %d profile(s), max relative difference %.2e\n",

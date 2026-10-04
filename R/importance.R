@@ -617,6 +617,17 @@ importance_groups <- function(data, groups = "auto") {
 #' @param threads torch threads for this session; NULL leaves them as set.
 #' @param batch_size Points per forward pass.
 #' @param verbose Say what is done, model by model.
+#' @param at     Points of the map instead of rows of the store: a data frame
+#'   of `x`, `y`, from [importance_points()] or of your own. Their patches are
+#'   cut from the rasters as the profiles' were, and only [shap_importance()]
+#'   runs there -- a map point has no observation to score against. The
+#'   values become maps with [importance_map()].
+#' @param rasters With `at`: where the rasters are, as in [dsm_predict()]; NULL
+#'   for the store's own raster table.
+#' @param seeds  Which of the final run's seeds to use; NULL for all. A map of
+#'   many points may take a few: each seed is one model explained.
+#' @param chunk_points With `at`: points cut and explained at a time. Their
+#'   patches are held in memory together.
 #' @return A `dsm_importance`: `table` (one row per target -- a variable, a
 #'   band, a variable at a band or a window -- ranked), `by_model` (one row per
 #'   target and model), `baseline` (each model's unperturbed score), `groups`,
@@ -631,7 +642,8 @@ importance_groups <- function(data, groups = "auto") {
 #' @export
 dsm_importance <- function(final, data, method = permutation_importance(),
                            rows = c("test", "folds"), groups = "auto", config = NULL,
-                           threads = NULL, batch_size = 512L, verbose = TRUE) {
+                           threads = NULL, batch_size = 512L, verbose = TRUE,
+                           at = NULL, rasters = NULL, seeds = NULL, chunk_points = 5000L) {
   rows <- match.arg(rows)
   say  <- function(...) if (verbose) message(...)
   if (!inherits(method, "importance_spec")) {
@@ -659,8 +671,17 @@ dsm_importance <- function(final, data, method = permutation_importance(),
   grp  <- importance_groups(data, groups)
   vars <- lapply(split(seq_along(ch), factor(grp$variable, levels = unique(grp$variable))),
                  as.integer)
-  units <- .importance_units(fr, data, rows)
   if (!is.null(threads)) set_torch_threads(threads)
+  if (!is.null(at)) {
+    if (!identical(method$kind, "shap")) {
+      stop("At map points there is no observation to score a perturbation against: ",
+           "only shap_importance() runs there.", call. = FALSE)
+    }
+    return(.importance_shap_map_run(fr, data, at, grp, vars, method, transform, clamp,
+                                    batch_size, say, rasters, seeds, chunk_points))
+  }
+  units <- .importance_units(fr, data, rows)
+  units <- .importance_pick_seeds(units, seeds)
   if (identical(method$kind, "shap")) {
     return(.importance_shap_run(fr, data, units, grp, vars, method, transform, clamp,
                                 batch_size, say, rows))
@@ -1427,6 +1448,339 @@ dsm_importance <- function(final, data, method = permutation_importance(),
   out
 }
 
+# ── SHAP at points of the map ─────────────────────────────────────────────────
+
+# The models of a call kept to the seeds asked for.
+.importance_pick_seeds <- function(units, seeds) {
+  if (is.null(seeds)) return(units)
+  keep <- units$seed %in% as.integer(seeds)
+  if (!any(keep)) {
+    stop("None of the seeds asked for (", paste(seeds, collapse = ", "), ") is the run's: ",
+         paste(unique(units$seed), collapse = ", "), ".", call. = FALSE)
+  }
+  units[keep, , drop = FALSE]
+}
+
+#' Points of the map to explain: a regular grid of the model's raster cells.
+#'
+#' The cells of the rasters the model was fitted on, every `every` rows and
+#' columns, inside `extent`, where the first channel has a value. With
+#' `every = 1` every cell -- the map at full resolution, for a tile; with 40 at
+#' 250 m, one point every 10 km, for a region. The points carry their grid, so
+#' [importance_map()] can lay the values back on it.
+#'
+#' @param final   A `dsm_final`, or the directory of a final run.
+#' @param data    The `dsm_data` it was fitted on.
+#' @param extent  c(xmin, xmax, ymin, ymax) in the rasters' coordinates; NULL
+#'   for the whole raster.
+#' @param every   Take every `every`-th cell, in rows and in columns.
+#' @param rasters Where the rasters are, as in [dsm_predict()]; NULL for the
+#'   store's own raster table.
+#' @return A tibble of `x`, `y` (cell centres), with the grid as an attribute.
+#' @export
+importance_points <- function(final, data, extent = NULL, every = 1L, rasters = NULL) {
+  if (!is.numeric(every) || length(every) != 1L || every < 1 || every != round(every)) {
+    stop("every must be one whole number of 1 or more.", call. = FALSE)
+  }
+  fr  <- .predict_final(final)
+  inp <- .predict_inputs(data, rasters, NULL, fr$scaling)
+  ref <- terra::rast(inp$files[1])
+  if (!is.null(extent)) {
+    if (!is.numeric(extent) || length(extent) != 4L || extent[1] >= extent[2] ||
+        extent[3] >= extent[4]) {
+      stop("extent must be c(xmin, xmax, ymin, ymax).", call. = FALSE)
+    }
+    ref <- terra::crop(ref, terra::ext(extent))
+  }
+  every <- as.integer(every)
+  rr <- seq.int(1L, terra::nrow(ref), by = every)
+  cc <- seq.int(1L, terra::ncol(ref), by = every)
+  cells <- as.vector(outer(cc, (rr - 1L) * terra::ncol(ref), "+"))
+  xy  <- terra::xyFromCell(ref, cells)
+  val <- terra::extract(ref, xy)[, 1]
+  keep <- is.finite(val)
+  if (!any(keep)) stop("Every cell taken is empty in the first channel.", call. = FALSE)
+  out <- tibble::tibble(x = xy[keep, 1], y = xy[keep, 2])
+  attr(out, "grid") <- list(every = every, res = terra::res(ref) * every,
+                            crs = terra::crs(ref), extent = as.vector(terra::ext(ref)))
+  out
+}
+
+# shap_importance() at points of the map: their patches cut from the rasters in
+# chunks, checked first against the store's own patches, then explained by the
+# final run's seeds.
+#
+# THE CHECK THAT STOPS, where nothing was observed. A map point has no score to
+# reproduce, so the reading itself is checked: patches cut by this very path at
+# some of the store's own profiles must be the patches the store holds. That
+# covers the raster files, their order, the QC and the windows' geometry --
+# every way a map point's patch could be another place's -- and stops if any
+# differs.
+.importance_shap_map_run <- function(fr, data, at, grp, vars, method, transform, clamp,
+                                     batch_size, say, rasters, seeds, chunk_points) {
+  if (!is.data.frame(at) || !all(c("x", "y") %in% names(at))) {
+    stop("at must be a data frame with columns x and y, e.g. from importance_points().",
+         call. = FALSE)
+  }
+  if (!is.numeric(chunk_points) || length(chunk_points) != 1L || chunk_points < 1) {
+    stop("chunk_points must be one positive whole number.", call. = FALSE)
+  }
+  chunk_points <- as.integer(chunk_points)
+  grid <- attr(at, "grid")               # before the reordering below drops it
+  inp  <- .predict_inputs(data, rasters, NULL, fr$scaling)
+  ch   <- as.character(data$store$predictors)
+  n_ch <- length(ch)
+  ws   <- as.integer(fr$cfg$window_sizes[[1]])
+  keys <- patch_window_key(ws)
+  G <- matrix(0, n_ch, length(vars), dimnames = list(ch, names(vars)))
+  for (v in seq_along(vars)) G[vars[[v]], v] <- 1
+  # The final run's seeds, straight from it: a map needs no test set.
+  units <- .importance_pick_seeds(tibble::tibble(
+    unit = sprintf("seed%04d", fr$seeds), kind = "final seed", fold = NA_integer_,
+    seed = fr$seeds, role = "map", n_rows = NA_integer_, cfg = rep(list(fr$cfg), length(fr$seeds)),
+    model_file = fr$model_files), seeds)
+  # The variables of one channel, whose value at a point can be read: kept at
+  # every point, for the direction and for plots of SHAP against the value.
+  single <- names(vars)[lengths(vars) == 1L]
+  w_small <- min(ws)
+  c0 <- (w_small + 1L) %/% 2L
+  is_eg <- identical(method$estimator, "expected_gradients")
+  K <- if (is_eg) method$samples else method$steps
+  b_size <- min(batch_size, 128L)
+  quiet <- function(...) invisible(NULL)
+  extract <- function(xy) {
+    .prep_extract_patches(files = inp$files, qc_table = inp$qc_table, xy = as.matrix(xy),
+                          windows = sort(unique(ws)), chunk_nrows = 1000L, n_cores = 1L,
+                          max_ram_gb = NULL, read_gap = 256L, read_max_cols = 4096L,
+                          cell_bytes = 8, say = quiet)
+  }
+
+  # ── the probe: the store's own profiles, cut again by this path
+  n_probe <- min(12L, nrow(data$store$meta))
+  probe_rows <- with_local_seed(method$seed + 4243L, sort(sample.int(nrow(data$store$meta), n_probe)))
+  ex_p <- extract(cbind(data$store$meta$x[probe_rows], data$store$meta$y[probe_rows]))
+  worst <- 0
+  for (w in sort(unique(ws))) {
+    k  <- patch_window_key(w)
+    st <- data$store$windows[[k]]
+    if (is.null(st)) {
+      st <- .read_patch_array(data$store$patch_dir, w, expect_points = nrow(data$store$meta),
+                              expect_channels = n_ch)
+    }
+    stored <- as.array(.rows_to_float(st, probe_rows))
+    cut    <- ex_p$patch_list[[k]]
+    worst  <- max(worst, max(abs(cut - stored) / pmax(1, abs(stored)), na.rm = TRUE))
+    if (anyNA(cut) != anyNA(stored) || worst > 1e-5) {
+      stop(sprintf(paste0("The map's patches are not the store's: cut again at %d of the store's ",
+                          "own profiles, window %s differs by %.3g (relative). Another raster, ",
+                          "another channel order, other QC rules or another grid -- every map ",
+                          "point would be read wrongly. Pass the rasters the store was cut from."),
+                   n_probe, k, worst), call. = FALSE)
+    }
+  }
+
+  # ── the background, for expected gradients: the final run's training rows
+  split <- readRDS(file.path(fr$run_dir, "run_spec.rds"))$split
+  train <- as.integer(split$train)
+  bg <- NULL; fill <- NULL
+  if (is_eg) {
+    bg_rows <- with_local_seed(method$seed + 7919L, {
+      if (length(train) > method$background) sort(sample(train, method$background)) else train
+    })
+    bg <- build_fold_cache(data$store, data$points, data$type_table, list(background = bg_rows),
+                           sort(unique(ws)), scaling = fr$scaling, verbose = FALSE)$cache$background
+  } else {
+    fill <- .importance_fill_values(data, fr$scaling, train)
+  }
+  models <- lapply(seq_len(nrow(units)), function(u) {
+    m <- build_cnn_from_config(units$cfg[[u]], n_ch)
+    m$load_state_dict(torch::torch_load(units$model_file[[u]]))
+    m$to(device = torch::torch_device("cpu"))
+    m
+  })
+
+  # Read in rows, so a chunk's points share the rows their patches span.
+  at <- at[order(-at$y, at$x), c("x", "y"), drop = FALSE]
+  n_at <- nrow(at)
+  say(sprintf("Importance -- %s | %s map point(s) of final run '%s' (%s)",
+              .importance_label(method), format(n_at, big.mark = ","), basename(fr$run_dir),
+              fr$config_id))
+  say(sprintf("  the probe: %d of the store's profiles cut again by this path, as the store holds them (worst %.1e)",
+              n_probe, worst))
+  say("  ", .importance_groups_line(grp))
+  say(sprintf("  %d model(s) x %d %s, in chunks of %s point(s)", nrow(units), K,
+              if (is_eg) "sample(s)" else "step(s)", format(chunk_points, big.mark = ",")))
+
+  pts <- list(); vals <- list(); comp <- list(); ring_sum <- 0; pix_sum <- NULL
+  n_done <- 0L; dropped <- 0L
+  t0 <- Sys.time()
+  for (cs in seq.int(1L, n_at, by = chunk_points)) {
+    ce <- min(n_at, cs + chunk_points - 1L)
+    ex <- extract(at[cs:ce, , drop = FALSE])
+    arrs <- ex$patch_list[keys]
+    # A point whose patch is not whole -- the edge of the rasters, a coast, a
+    # gap in one channel -- is not predicted by the map either; nor here.
+    ok <- ex$edge_ok
+    for (a in arrs) ok <- ok & rowSums(!is.finite(matrix(a, nrow = dim(a)[1]))) == 0L
+    dropped <- dropped + sum(!ok)
+    if (!any(ok)) next
+    inputs <- lapply(arrs, function(a) {
+      t <- torch::torch_tensor(a[ok, , , , drop = FALSE], dtype = torch::torch_float())
+      scale_patches(t, fr$scaling, inplace = TRUE)
+    })
+    n_ok <- sum(ok)
+    draws <- if (is_eg) with_local_seed(method$seed + cs, list(
+      j = matrix(sample.int(as.integer(bg[[keys[1]]]$shape[1]), n_ok * K, replace = TRUE), n_ok, K),
+      a = matrix(stats::runif(n_ok * K), n_ok, K))) else NULL
+    phi <- 0; fx <- 0; fx_nat <- 0; ref <- 0
+    for (u in seq_along(models)) {
+      res <- .importance_shap_unit(models[[u]], inputs, rep(NA_real_, n_ok), rep(NA_real_, n_ok),
+                                   G, method$estimator,
+                                   bg_inputs = if (is_eg) lapply(keys, function(k) bg[[k]]) else NULL,
+                                   draws = draws, fill = fill, K = K, transform = transform,
+                                   clamp = clamp, batch_size = b_size)
+      comp[[length(comp) + 1L]] <- .importance_check_completeness(
+        res, method$estimator, sprintf("%s, points %d-%d", units$unit[u], cs, ce))
+      phi <- phi + res$phi
+      fx  <- fx + res$f_x
+      ref <- ref + (res$f_x - res$delta)
+      pn  <- transform(res$f_x)
+      if (is.finite(clamp[1])) pn <- pmax(pn, clamp[1])
+      if (is.finite(clamp[2])) pn <- pmin(pn, clamp[2])
+      fx_nat <- fx_nat + pn
+      ring_sum <- ring_sum + res$ring_abs * n_ok
+      pix_sum  <- if (is.null(pix_sum)) lapply(res$pix_abs, function(m) m * n_ok) else
+        Map(function(a, b) a + b * n_ok, pix_sum, res$pix_abs)
+    }
+    nm <- length(models)
+    colnames(phi) <- names(vars)
+    # The value at the point: the centre of the smallest window, QC'd, unscaled.
+    cv <- ex$patch_list[[patch_window_key(w_small)]][ok, , c0, c0, drop = FALSE]
+    cv <- matrix(cv, nrow = n_ok)[, unlist(vars[single]), drop = FALSE]
+    colnames(cv) <- single
+    vals[[length(vals) + 1L]] <- cv
+    pts[[length(pts) + 1L]] <- dplyr::bind_cols(
+      tibble::tibble(x = at$x[cs:ce][ok], y = at$y[cs:ce][ok], prediction = fx / nm,
+                     prediction_native = fx_nat / nm, reference = ref / nm),
+      tibble::as_tibble(phi / nm, .name_repair = "minimal"))
+    n_done <- n_done + n_ok
+    rm(inputs, arrs, ex); invisible(gc(verbose = FALSE))
+    el <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
+    say(sprintf("  points %s-%s: %d explained | %.1f min%s", format(cs, big.mark = ","),
+                format(ce, big.mark = ","), n_ok, el, .importance_eta(el / ce * (n_at - ce))))
+  }
+  if (n_done == 0L) stop("No map point had a whole patch to explain.", call. = FALSE)
+  points <- dplyr::bind_rows(pts)
+  values <- do.call(rbind, vals)
+  # From the matrices, not from `points`: a variable named like one of its
+  # columns (x, y) would be read as the coordinate there.
+  phi_all <- do.call(rbind, lapply(pts, function(p) as.matrix(p[, -(1:5), drop = FALSE])))
+  colnames(phi_all) <- names(vars)
+
+  by_model <- NULL
+  imp <- colMeans(abs(phi_all))
+  tab <- tibble::tibble(variable = names(vars), importance = imp,
+                        sd_models = NA_real_, mean_signed = colMeans(phi_all),
+                        n_models = length(models))
+  tab$share <- tab$importance / sum(tab$importance)
+  # The direction at the map points: Spearman between the value at the point
+  # and its SHAP value, as at the profiles.
+  tab$direction <- vapply(tab$variable, function(v) {
+    if (!v %in% single) return(NA_real_)
+    a <- values[, v]; s <- phi_all[, v]
+    if (!is.finite(stats::sd(a)) || stats::sd(a) == 0 || stats::sd(s) == 0) return(NA_real_)
+    suppressWarnings(stats::cor(a, s, method = "spearman"))
+  }, numeric(1))
+  tab$n_channels <- as.integer(lengths(vars))
+  tab <- tab[order(-tab$importance, tab$variable), , drop = FALSE]
+  tab$rank <- seq_len(nrow(tab))
+  tab$target <- tab$variable
+  tab <- dplyr::relocate(tab, "rank", "target", "variable", "n_channels")
+  ring_mean <- ring_sum / n_done
+  patch <- dplyr::bind_rows(lapply(seq_along(ws), function(i) {
+    r_max <- (ws[i] - 1L) %/% 2L
+    tibble::tibble(variable = rep(names(vars), times = r_max + 1L), window = keys[i],
+                   ring = rep(0:r_max, each = length(vars)),
+                   mean_abs = as.vector(ring_mean[, i, seq_len(r_max + 1L)]))
+  }))
+  units_out <- units[, c("unit", "kind", "fold", "seed", "role", "n_rows", "model_file")]
+  units_out$role <- "map"
+  units_out$n_rows <- n_done
+  out <- structure(list(
+    table = tab, by_model = by_model, baseline = tibble::tibble(unit = units$unit, ccc = NA_real_),
+    points = points, values = values, patch = patch,
+    pixels = stats::setNames(lapply(pix_sum, function(m) m / n_done), keys),
+    completeness = dplyr::bind_rows(comp), groups = grp, method = method, rows = "map",
+    units = units_out, run_dir = fr$run_dir, config_id = fr$config_id, window_sizes = ws,
+    transform_name = data$transform$name %||% "none", rows_alone_share = 0,
+    grid = grid, n_dropped = dropped, probe_worst = worst, label = NULL),
+    class = "dsm_importance")
+  out$label <- .importance_object_label(out)
+  out
+}
+
+#' Maps of SHAP values, from an importance computed at points of the map.
+#'
+#' Lays the values of [dsm_importance()]`(at = )` back on a grid: each cell
+#' the mean of the points in it. With the points' own grid (from
+#' [importance_points()]) every point is its own cell; with a coarser
+#' `resolution`, each cell averages the points it holds.
+#'
+#' @param x A `dsm_importance` from [shap_importance()] at map points.
+#' @param resolution Cell size of the maps, in the rasters' units; NULL for the
+#'   points' own grid.
+#' @param output_dir Where to write the GeoTIFFs (shap.tif, one layer per
+#'   variable; shap_dominant.tif and its legend, shap_dominant.csv;
+#'   prediction.tif); NULL to only return them.
+#' @return A list: `shap` (one layer per variable: the mean SHAP value of the
+#'   points in each cell, in the network's units), `dominant` (in each cell,
+#'   the variable with the largest mean |SHAP|, as the number in `legend`),
+#'   `legend`, `prediction` (the mean prediction, native units) and `files`.
+#' @export
+importance_map <- function(x, resolution = NULL, output_dir = NULL) {
+  if (!inherits(x, "dsm_importance") || !identical(x$rows, "map")) {
+    stop("importance_map() needs SHAP values at points of the map: ",
+         "dsm_importance(..., shap_importance(), at = importance_points(...)).", call. = FALSE)
+  }
+  res <- resolution %||% x$grid$res
+  if (is.null(res)) {
+    stop("The points carry no grid -- they were not made by importance_points() -- so ",
+         "give resolution.", call. = FALSE)
+  }
+  res <- rep_len(as.numeric(res), 2L)
+  crs <- x$grid$crs %||% ""
+  p <- as.data.frame(x$points)
+  v_names <- x$table$variable[order(match(x$table$variable, names(p)))]
+  # Each point at a cell's centre on its own grid: the grid's corner is half a
+  # cell from the first point.
+  tmpl <- terra::rast(xmin = min(p$x) - res[1] / 2, xmax = max(p$x) + res[1] / 2,
+                      ymin = min(p$y) - res[2] / 2, ymax = max(p$y) + res[2] / 2,
+                      resolution = res, crs = crs)
+  abs_names <- paste0(".abs_", seq_along(v_names))
+  for (i in seq_along(v_names)) p[[abs_names[i]]] <- abs(p[[v_names[i]]])
+  pv <- terra::vect(p, geom = c("x", "y"), crs = crs)
+  lay <- function(f) terra::rasterize(pv, tmpl, field = f, fun = "mean")
+  shap <- terra::rast(lapply(v_names, lay))
+  names(shap) <- v_names
+  dominant <- terra::which.max(terra::rast(lapply(abs_names, lay)))
+  names(dominant) <- "dominant"
+  legend <- tibble::tibble(value = seq_along(v_names), variable = v_names)
+  prediction <- lay("prediction_native")
+  names(prediction) <- "prediction"
+  files <- character(0)
+  if (!is.null(output_dir)) {
+    dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+    files <- file.path(output_dir, c("shap.tif", "shap_dominant.tif", "prediction.tif",
+                                     "shap_dominant.csv"))
+    terra::writeRaster(shap, files[1], overwrite = TRUE)
+    terra::writeRaster(dominant, files[2], overwrite = TRUE)
+    terra::writeRaster(prediction, files[3], overwrite = TRUE)
+    safe_write_csv2(legend, files[4])
+  }
+  list(shap = shap, dominant = dominant, legend = legend, prediction = prediction,
+       files = files)
+}
+
 # ── ALE: the bins, the moves, the curves ──────────────────────────────────────
 
 # ale_effect() through every model of the call.
@@ -1795,7 +2149,7 @@ dsm_importance <- function(final, data, method = permutation_importance(),
 
 .importance_object_label <- function(x) {
   sprintf("%s | %s | %s", basename(x$run_dir),
-          if (identical(x$rows, "test")) "test" else "folds",
+          switch(x$rows, test = "test", map = "map points", "folds"),
           .importance_label(x$method))
 }
 
@@ -1817,7 +2171,7 @@ print.dsm_importance <- function(x, n = 20L, ...) {
   # -- SHAP by expected gradients".
   cat("\nImportance -- ", .importance_label(m), "\n", sep = "")
   cat(sprintf("  %s of '%s' (%s) | %d model(s) | %s point(s) each\n",
-              if (identical(x$rows, "test")) "test set" else "fold validation rows",
+              switch(x$rows, test = "test set", map = "map points", "fold validation rows"),
               basename(x$run_dir), x$config_id, nrow(x$units),
               paste(unique(range(x$units$n_rows)), collapse = " to ")))
   if (identical(m$kind, "shap")) {
@@ -1915,8 +2269,15 @@ print.dsm_importance <- function(x, n = 20L, ...) {
   b  <- x$baseline$ccc
   cp <- x$completeness
   is_eg <- identical(x$method$estimator, "expected_gradients")
-  cat(sprintf("  the models' own CCC: %.4f (%.4f to %.4f), each as its run wrote\n",
-              mean(b), min(b), max(b)))
+  if (identical(x$rows, "map")) {
+    # A map point has no score to reproduce: what was checked is the reading.
+    cat(sprintf("  %s point(s) explained, %s without a whole patch | the store's patches cut again identically (worst %.1e)\n",
+                format(nrow(x$points), big.mark = ","), format(x$n_dropped, big.mark = ","),
+                x$probe_worst))
+  } else {
+    cat(sprintf("  the models' own CCC: %.4f (%.4f to %.4f), each as its run wrote\n",
+                mean(b), min(b), max(b)))
+  }
   cat("  values in ", .importance_units_text(x$transform_name), "\n", sep = "")
   cat(sprintf("  they add up: each point's values sum to its prediction less the %s, %s\n",
               if (is_eg) "background's mean" else "baseline's",
