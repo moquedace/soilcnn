@@ -39,6 +39,8 @@
 #      by its weight times each bin's width, a square's by the squares' step;
 #      what is not read is flat, exactly; the whole patch moves, in every
 #      window; the curve is centred; a class's effect is the class difference
+#  11. the importance as the AOA's weights: each channel its variable's, below
+#      zero none, and a map takes them as they come or refuses them
 #
 # Run: source("<package root>/tests/test_importance.R")
 
@@ -576,6 +578,32 @@ ok["a_class_effect_is_the_class_difference"] <-
 ok["the_classes_count_the_points"] <- sum(r_cat$effects$cls$n) == nv
 ok["a_binary_map_is_present_against_absent"] <-
   abs(diff(r_cat$effects$v5$effect) - 3) < 1e-5
+
+# ── 11. the importance as the AOA's weights ───────────────────────────────────
+fk_imp <- function(imp) structure(list(
+  table = tibble::tibble(variable = c("a", "set"), importance = imp),
+  groups = tibble::tibble(channel = c("a", "s1", "s2"), variable = c("a", "set", "set"),
+                          rule = c("alone", "one-hot set", "one-hot set")),
+  method = list(kind = "permutation")), class = "dsm_importance")
+w_ab <- importance_weights(fk_imp(c(0.3, -0.1)))
+ok["each_channel_takes_its_variables_weight"] <- identical(names(w_ab), c("a", "s1", "s2")) &&
+  w_ab[["a"]] == 0.3 && all(w_ab[c("s1", "s2")] == 0)
+ok["every_channel_of_a_set_takes_the_sets_weight"] <-
+  all(importance_weights(fk_imp(c(0.3, 0.2)))[c("s1", "s2")] == 0.2)
+ok["an_importance_below_zero_everywhere_gives_no_weights"] <-
+  grepl("zero or below", err(importance_weights(fk_imp(c(-1, 0)))))
+ok["a_context_importance_gives_no_weights"] <-
+  grepl("per ring or window", err(importance_weights(structure(list(method = list(kind = "context")),
+                                                               class = "dsm_importance"))))
+ok["a_map_takes_an_importance_as_its_weights"] <- identical(
+  .predict_aoa_weights(fk_imp(c(0.3, 0.2)), c("a", "s1", "s2")), importance_weights(fk_imp(c(0.3, 0.2))))
+ok["a_map_puts_named_weights_in_its_order"] <-
+  identical(.predict_aoa_weights(c(s2 = 1, a = 2, s1 = 3), c("a", "s1", "s2")), c(a = 2, s1 = 3, s2 = 1))
+ok["a_map_refuses_weights_it_cannot_place"] <-
+  grepl("name every channel", err(.predict_aoa_weights(c(a = 1, x = 2), c("a", "s1")))) &&
+  grepl("non-negative", err(.predict_aoa_weights(c(-1, 1), c("a", "b")))) &&
+  grepl("value\\(s\\) for", err(.predict_aoa_weights(c(1, 2, 3), c("a", "b")))) &&
+  grepl("all zero", err(.predict_aoa_weights(c(0, 0), c("a", "b"))))
 
 ok["ale_wants_two_bins"] <- grepl("2 or more", err(ale_effect(bins = 1)))
 ok["ale_wants_distinct_names"] <- grepl("distinct", err(ale_effect(variables = c("a", "a"))))

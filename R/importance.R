@@ -2034,6 +2034,45 @@ print.dsm_importance <- function(x, n = 20L, ...) {
   invisible(NULL)
 }
 
+# ── the importance as the AOA's weights ───────────────────────────────────────
+
+#' One weight per channel, for the area of applicability, from an importance.
+#'
+#' The dissimilarity index measures how far a pixel is from the training data,
+#' one axis per channel. Unweighted, a channel the model ignores counts as much
+#' as the one it leans on, and a pixel unlike the training data in an ignored
+#' channel falls outside the area of applicability for nothing. Meyer & Pebesma
+#' (2021) weight each axis by the predictor's importance; this gives each
+#' channel its variable's importance -- every channel of a one-hot set, or of a
+#' group of yours, its variable's -- and a negative importance, noise around
+#' zero, weight zero.
+#'
+#' @param x A `dsm_importance` with one value per variable: by
+#'   [permutation_importance()], [shap_importance()] or [ale_effect()].
+#' @return A named numeric vector, one weight per channel in the store's order,
+#'   for `dsm_predict(aoa_weights = )` or `aoa_reference(weights = )`.
+#' @export
+importance_weights <- function(x) {
+  if (!inherits(x, "dsm_importance")) {
+    stop("x must be a dsm_importance, from dsm_importance().", call. = FALSE)
+  }
+  if (identical(x$method$kind, "context")) {
+    stop("A context importance has one value per ring or window, not per variable: ",
+         "take the weights from a permutation, SHAP or ALE importance.", call. = FALSE)
+  }
+  g <- x$groups
+  w <- x$table$importance[match(g$variable, x$table$variable)]
+  # A variable the importance left out (ALE skips one with a single value)
+  # carries no weight, as one it found worthless.
+  w[is.na(w)] <- 0
+  w <- pmax(w, 0)
+  if (sum(w) == 0) {
+    stop("Every importance is zero or below: there is no weighting to take from it.",
+         call. = FALSE)
+  }
+  stats::setNames(w, g$channel)
+}
+
 # ── several importances side by side ─────────────────────────────────────────
 
 #' Several importances, side by side.

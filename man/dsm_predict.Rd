@@ -12,6 +12,7 @@ dsm_predict(
   extent = NULL,
   config = NULL,
   calibration = NULL,
+  aoa_weights = NULL,
   alpha = 0.1,
   clamp = NULL,
   bands = NULL,
@@ -56,6 +57,13 @@ from: a named vector of tuning-run directories whose cross-validated
 residuals calibrate them, e.g. c(block = "\if{html}{\out{<spatial CV run>}}", knndm =
 "\if{html}{\out{<kNNDM run>}}"). Each source gets its own bands. NULL for the final run's
 own tuning run; character(0) for none (then no interval, DI or AOA).}
+
+\item{aoa_weights}{NULL: every channel weighs alike in the dissimilarity
+index. Or a \code{dsm_importance} (see \code{\link[=importance_weights]{importance_weights()}}), or one
+non-negative weight per channel, named or in the model's order: the DI,
+the AOA and the level+DI interval then measure a pixel's distance from
+the training data in what the model uses (Meyer & Pebesma 2021). A map
+resumed with other weights is refused.}
 
 \item{alpha}{Miscoverage of the intervals: 0.1 is 90\%.}
 

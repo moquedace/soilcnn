@@ -289,6 +289,12 @@ fcn_predict_strip <- function(model, x_strip, centres, engine = c("fcn", "patch"
 #'   residuals calibrate them, e.g. c(block = "<spatial CV run>", knndm =
 #'   "<kNNDM run>"). Each source gets its own bands. NULL for the final run's
 #'   own tuning run; character(0) for none (then no interval, DI or AOA).
+#' @param aoa_weights NULL: every channel weighs alike in the dissimilarity
+#'   index. Or a `dsm_importance` (see [importance_weights()]), or one
+#'   non-negative weight per channel, named or in the model's order: the DI,
+#'   the AOA and the level+DI interval then measure a pixel's distance from
+#'   the training data in what the model uses (Meyer & Pebesma 2021). A map
+#'   resumed with other weights is refused.
 #' @param alpha   Miscoverage of the intervals: 0.1 is 90%.
 #' @param clamp   c(lower, upper) of a prediction in native units. NULL for the
 #'   refit's own (its evaluation clamps to c(0, Inf) by default).
@@ -315,7 +321,8 @@ fcn_predict_strip <- function(model, x_strip, centres, engine = c("fcn", "patch"
 #' @return A `dsm_prediction`, printed.
 #' @export
 dsm_predict <- function(final, data, rasters = NULL, qc_table = NULL, extent = NULL,
-                        config = NULL, calibration = NULL, alpha = 0.1, clamp = NULL,
+                        config = NULL, calibration = NULL, aoa_weights = NULL,
+                        alpha = 0.1, clamp = NULL,
                         bands = NULL, engine = c("auto", "patch"), output_dir = NULL,
                         run_id = NULL, resume = TRUE, n_cores = NULL,
                         threads_per_worker = 5L, max_ram_gb = NULL, unit_rows = NULL,
@@ -329,6 +336,7 @@ dsm_predict <- function(final, data, rasters = NULL, qc_table = NULL, extent = N
   # ── 0. the arguments, all checked before a raster is opened ───────────────
   fr  <- .predict_final(final, config)
   inp <- .predict_inputs(data, rasters, qc_table, fr$scaling)
+  aoa_w <- .predict_aoa_weights(aoa_weights, inp$predictors)
   alpha <- .predict_alpha(alpha)
   clamp <- .predict_clamp(clamp, fr$summ)
   n_cores <- resolve_cores(n_cores, what = "the map")
@@ -363,7 +371,7 @@ dsm_predict <- function(final, data, rasters = NULL, qc_table = NULL, extent = N
 
   # ── 2. the calibration: one set of bands per source of residuals ──────────
   sources <- .predict_sources(calibration, fr)
-  cal <- .predict_calibration(sources, fr, inp, alpha, say)
+  cal <- .predict_calibration(sources, fr, inp, alpha, say, weights = aoa_w)
   if (length(cal$sources) == 0L) {
     say("\nNo calibration source: the map carries no interval, no DI and no AOA.")
   }
@@ -395,6 +403,9 @@ dsm_predict <- function(final, data, rasters = NULL, qc_table = NULL, extent = N
                               unit_rows, step_rows, chunk_cols, say, n_seeds = length(fr$seeds))
   units <- .predict_units(grid$rows, grid$cols, work$unit_rows)
   settings <- .predict_settings(fr, inp, grid, work, band_tbl, alpha, clamp, engine, cal)
+  # THE WEIGHTS ONLY WHEN GIVEN: a map started before this setting existed has
+  # no such field, and an unweighted call must still resume it.
+  if (!is.null(aoa_w)) settings$aoa_weights <- unname(aoa_w)
   # THE SETTINGS ARE LOCKED BY THE FIRST FINISHED UNIT, not by the first call:
   # a call stopped before any unit finished -- a probe that failed on a swapped
   # channel -- left nothing its successor could be mixed with.
@@ -408,6 +419,11 @@ dsm_predict <- function(final, data, rasters = NULL, qc_table = NULL, extent = N
     saved_id <- .predict_settings_portable(saved)
     diff_fields <- names(now_id)[!vapply(names(now_id), function(k)
       identical(now_id[[k]], saved_id[[k]]), logical(1))]
+    # Checked both ways: weights saved and none given now is a change too,
+    # though the loop above walks only the fields this call has.
+    if (!identical(now_id$aoa_weights, saved_id$aoa_weights)) {
+      diff_fields <- union(diff_fields, "aoa_weights")
+    }
     if (length(diff_fields) > 0L) {
       stop("This map was started with different settings (", paste(diff_fields, collapse = ", "),
            "): its finished units would be mixed with units of another map.\n  Use another ",
@@ -880,7 +896,34 @@ print.dsm_prediction <- function(x, ...) {
 # ONE CALIBRATION PER SOURCE, from that source's residuals and that source's
 # folds: a residual's DI is the distance its own fold model faced, and the AOA
 # threshold is the CV DI of the plan whose error it delimits.
-.predict_calibration <- function(sources, fr, inp, alpha, say) {
+# The AOA weights a map was given, one per channel in the model's order --
+# from an importance, a named vector, or one in that order already.
+.predict_aoa_weights <- function(w, predictors) {
+  if (is.null(w)) return(NULL)
+  if (inherits(w, "dsm_importance")) w <- importance_weights(w)
+  if (!is.numeric(w) || length(w) == 0L || any(!is.finite(w)) || any(w < 0)) {
+    stop("aoa_weights must be a dsm_importance, or non-negative numbers, one per channel.",
+         call. = FALSE)
+  }
+  if (!is.null(names(w))) {
+    miss  <- setdiff(predictors, names(w))
+    extra <- setdiff(names(w), predictors)
+    if (length(miss) > 0L || length(extra) > 0L) {
+      stop("aoa_weights must name every channel of the model and no other",
+           if (length(miss)) paste0("; missing: ", paste(utils::head(miss, 5L), collapse = ", ")) else "",
+           if (length(extra)) paste0("; not a channel: ", paste(utils::head(extra, 5L), collapse = ", ")) else "",
+           ".", call. = FALSE)
+    }
+    w <- w[predictors]
+  } else if (length(w) != length(predictors)) {
+    stop("aoa_weights has ", length(w), " value(s) for ", length(predictors), " channels.",
+         call. = FALSE)
+  }
+  if (sum(w) == 0) stop("aoa_weights are all zero: no axis would be measured.", call. = FALSE)
+  stats::setNames(as.numeric(w), predictors)
+}
+
+.predict_calibration <- function(sources, fr, inp, alpha, say, weights = NULL) {
   out <- list()
   for (nm in names(sources)) {
     dir <- sources[[nm]]
@@ -898,7 +941,8 @@ print.dsm_prediction <- function(x, ...) {
              " sample_id(s) this store does not hold.", call. = FALSE)
       }
     }
-    aref <- aoa_reference(inp$points, inp$predictors, inp$qc_table, inp$scaling, plan)
+    aref <- aoa_reference(inp$points, inp$predictors, inp$qc_table, inp$scaling, plan,
+                          weights = weights)
     tab <- dplyr::inner_join(res, dplyr::select(aref$cv, sample_id, di = cv_di), by = "sample_id")
     iv <- list()
     for (a in alpha) {
@@ -914,9 +958,10 @@ print.dsm_prediction <- function(x, ...) {
     sm <- if (identical(inp$transform$name, "log1p")) {
       smearing_from_run(dir, attr(res, "config_id"))
     } else NULL
-    say(sprintf("\nCalibration '%s': %s (%s, as %s) | %d residual(s), %d with a CV DI | AOA DI <= %.4f%s",
+    say(sprintf("\nCalibration '%s': %s (%s, as %s) | %d residual(s), %d with a CV DI | AOA DI <= %.4f%s%s",
                 nm, basename(dir), plan$method, attr(res, "config_id"), nrow(res), nrow(tab),
                 as.numeric(aref$threshold),
+                if (!is.null(weights)) " (importance-weighted)" else "",
                 if (!is.null(sm)) sprintf(" | smearing S = %.4f", sm$s) else ""))
     for (lab in names(iv)) {
       say(sprintf("  %s: constant +/- %.3f | level+DI: q %.3f x (%.3f %+.4f x level %+.3f x DI), floor %.3f",

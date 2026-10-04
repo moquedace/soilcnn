@@ -348,10 +348,14 @@ print.di_reference <- function(x, ...) {
 #' @param qc_table   QC rules, in the same order.
 #' @param scaling    The fitted model's predictor_scaling, in the same order.
 #' @param plan       The tuning run's fold plan.
+#' @param weights    NULL (every channel alike), or one non-negative weight per
+#'   channel, in the same order -- an importance, from importance_weights(),
+#'   so a point is unlike the training data in what the model uses (Meyer &
+#'   Pebesma 2021).
 #' @return An `aoa_reference`: the DI reference, the AOA threshold, and each
 #'   used point's fold and cross-validated DI (`NA` for a point never held out).
 #' @export
-aoa_reference <- function(points, predictors, qc_table, scaling, plan) {
+aoa_reference <- function(points, predictors, qc_table, scaling, plan, weights = NULL) {
   stopifnot(inherits(plan, "fold_plan"))
   if (!identical(as.character(scaling$predictor), as.character(predictors)) ||
       !identical(as.character(qc_table$predictor), as.character(predictors))) {
@@ -388,7 +392,7 @@ aoa_reference <- function(points, predictors, qc_table, scaling, plan) {
     stop("Fewer than 2 usable training rows after QC: nothing to measure a ",
          "dissimilarity against.", call. = FALSE)
   }
-  ref <- di_reference(train_mat[used, , drop = FALSE])
+  ref <- di_reference(train_mat[used, , drop = FALSE], weights = weights)
   th  <- aoa_threshold(ref, fold_of[used])
   structure(list(
     ref = ref, threshold = th,

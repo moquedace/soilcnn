@@ -4,7 +4,7 @@
 \alias{aoa_reference}
 \title{The dissimilarity reference of a fitted model.}
 \usage{
-aoa_reference(points, predictors, qc_table, scaling, plan)
+aoa_reference(points, predictors, qc_table, scaling, plan, weights = NULL)
 }
 \arguments{
 \item{points}{Point table aligned to the store (align_points_to_meta()).}
@@ -16,6 +16,11 @@ aoa_reference(points, predictors, qc_table, scaling, plan)
 \item{scaling}{The fitted model's predictor_scaling, in the same order.}
 
 \item{plan}{The tuning run's fold plan.}
+
+\item{weights}{NULL (every channel alike), or one non-negative weight per
+channel, in the same order -- an importance, from importance_weights(),
+so a point is unlike the training data in what the model uses (Meyer &
+Pebesma 2021).}
 }
 \value{
 An \code{aoa_reference}: the DI reference, the AOA threshold, and each

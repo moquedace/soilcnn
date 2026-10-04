@@ -19,6 +19,8 @@
 #      split, from the rows it held out to the rows that only trained
 #   7. far points fall outside the AOA and near points inside
 #   8. degenerate input is refused, not answered
+#   9. a fitted model's reference takes weights: a channel weighted zero is no
+#      axis, and weights all alike are no weights
 #
 # Run: source("<package root>/tests/test_aoa.R")     (no tensors: base R on small matrices)
 
@@ -274,6 +276,33 @@ ok["a_holdout_training_row_has_no_cv_di"] <-
   all(is.na(aref_h$cv$fold[trn_h])) && all(is.na(aref_h$cv$cv_di[trn_h]))
 ok["a_holdout_validation_row_measures_to_the_training_rows"] <-
   isTRUE(all.equal(aref_h$cv$cv_di[val_h], nn_h / aref_h$ref$avg_dist, tolerance = 1e-8))
+
+# THE WEIGHTS REACH THE REFERENCE (importance_weights(), dsm_predict(aoa_weights
+# =)): a channel weighted zero is no axis, so a point moved far along it stays
+# where it was; and weights all alike are no weights, to the last digit.
+aref_w <- aoa_reference(pts_r, preds_r, qc_r, sc_r, plan_r, weights = c(1, 0, 0, 0))
+at_ref <- as.matrix(pts_r[aref_w$cv$sample_id[1], preds_r])
+moved  <- at_ref
+moved[, 2:4] <- moved[, 2:4] + 30
+ok["a_channel_weighted_zero_is_no_axis"] <-
+  abs(aoa_di(aref_w, moved) - aoa_di(aref_w, at_ref)) < 1e-9 &&
+  aoa_di(aref, moved) > aoa_di(aref, at_ref)
+ok["weights_all_alike_are_no_weights"] <- identical(
+  aoa_reference(pts_r, preds_r, qc_r, sc_r, plan_r, weights = rep(3, 4))$cv$cv_di, aref$cv$cv_di)
+# A WEIGHT OF ZERO STILL GIVES A THRESHOLD. aoa_threshold() took the rows back
+# unweighted by dividing by sqrt(weight): 0/0 made every cross-validated DI
+# NaN, and the threshold NA, silently -- found when the first map weighted by
+# an importance had no calibration point left (2026-10-03).
+ok["a_zero_weight_still_gives_a_threshold"] <- is.finite(aref_w$threshold) &&
+  all(is.finite(aref_w$cv$cv_di[!is.na(aref_w$cv$fold)]))
+ok["and_its_cv_di_is_the_distance_in_the_weighted_channel"] <- {
+  # The reference's rows are cv's rows, in order; weight 1 of 4 is sqrt(4) = 2
+  # on the one channel left.
+  X1 <- aref_w$ref$x[, 1] / 2
+  f1 <- aref_w$cv$fold
+  nn1 <- vapply(seq_along(X1), function(i) min(abs(X1[i] - X1[f1 != f1[i]])), numeric(1))
+  isTRUE(all.equal(aref_w$cv$cv_di, sqrt(4) * nn1 / aref_w$ref$avg_dist, tolerance = 1e-8))
+}
 
 cat(sprintf("  avg pairwise distance    : %.3f (theory sqrt(2p) = %.3f)\n",
             ref$avg_dist, sqrt(2 * P)))

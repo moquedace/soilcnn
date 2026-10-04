@@ -373,6 +373,29 @@ ok["sources_with_different_references_get_a_di_band_each"] <-
   identical(diff2$calibration$di_band, c("di_block", "di_other")) &&
   identical(rd(diff2, "di_block"), rd(two, "di"))
 
+# ── 8. the AOA weighted by an importance ──────────────────────────────────────
+#
+# The weights reach the map. Every channel weighted alike is no weighting, bit
+# for bit; one channel alone gives another DI; and a map resumed with other
+# weights, or without the ones it started with, is refused -- its finished
+# units would carry one DI and its new ones another.
+chs <- data$store$predictors
+sub_ext  <- list(rows = c(10L, 20L), cols = c(10L, 30L))
+sub_bands <- c("ensemble_median", "di", "aoa")
+w_alike <- stats::setNames(rep(2, length(chs)), chs)
+w_first <- stats::setNames(c(1, rep(0, length(chs) - 1L)), chs)
+plain <- mp(run_id = "map_w_none", probe = FALSE, bands = sub_bands, extent = sub_ext)
+alike <- mp(run_id = "map_w_alike", probe = FALSE, bands = sub_bands, extent = sub_ext,
+            aoa_weights = w_alike)
+first <- mp(run_id = "map_w_first", probe = FALSE, bands = sub_bands, extent = sub_ext,
+            aoa_weights = w_first)
+ok["weights_alike_map_the_unweighted_di"] <- identical(rd(alike, "di"), rd(plain, "di"))
+ok["one_channel_alone_maps_another_di"] <- !identical(rd(first, "di"), rd(plain, "di"))
+ok["a_map_resumed_with_other_weights_is_refused"] <- grepl("different settings", err(
+  mp(run_id = "map_w_first", probe = FALSE, bands = sub_bands, extent = sub_ext, aoa_weights = w_alike)))
+ok["a_map_resumed_without_its_weights_is_refused"] <- grepl("aoa_weights", err(
+  mp(run_id = "map_w_first", probe = FALSE, bands = sub_bands, extent = sub_ext)))
+
 cat(sprintf("  fixture                  : %d x %d grid, %d channels, %d profiles, %d valid pixel(s)\n",
             n_r, n_c, C, nrow(data$store$meta), sum(valid_ref)))
 cat(sprintf("  probe                    : %d profile(s), max relative difference %.2e\n",
