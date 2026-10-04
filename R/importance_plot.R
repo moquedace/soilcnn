@@ -164,7 +164,9 @@ plot.dsm_importance <- function(x, n = 20L, ...) {
       idx[is.na(idx)] <- 32L                     # no value at the point: the middle grey
       grDevices::adjustcolor(pal[idx], 0.7)
     }
-    yy <- i + stats::runif(length(keep), -0.3, 0.3)
+    # The jitter by a seed of its own: the same importance draws the same
+    # figure, and a plot leaves the session's random numbers as they were.
+    yy <- i + with_local_seed(1000L + i, stats::runif(length(keep), -0.3, 0.3))
     graphics::points(s[keep], yy, pch = 16, cex = 0.5, col = col)
   }
   graphics::mtext("value: low", side = 4, line = 0.5, at = 0.6, las = 1, cex = 0.7,

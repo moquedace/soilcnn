@@ -530,6 +530,8 @@ ok["every_importance_prints"] <- all(vapply(list(imp_t, imp_ring, imp_pv, imp_wi
 fig_dir <- file.path(base, "importance_figures")
 dir.create(fig_dir)
 grDevices::png(file.path(fig_dir, "fig_%02d.png"), width = 1100, height = 800)
+set.seed(7)
+seed_before <- .Random.seed
 drawn <- tryCatch({
   for (x in list(imp_t, imp_ring, imp_pv, imp_win, imp_eg, imp_ale, imp_k, imp_sage)) plot(x)
   plot(compare_importance(imp_e10, imp_k))
@@ -539,6 +541,7 @@ grDevices::dev.off()
 ok["every_importance_draws_its_figure"] <- isTRUE(drawn) &&
   length(list.files(fig_dir, pattern = "^fig_.*png$")) == 9L
 if (!isTRUE(drawn)) cat("  figure failed: ", drawn, "\n", sep = "")
+ok["a_figure_leaves_the_sessions_random_numbers_alone"] <- identical(seed_before, .Random.seed)
 # A STORE THAT IS NOT THE RUN'S. The same points with other targets: the
 # models' own scores no longer come back, and nothing is measured.
 bad <- data
