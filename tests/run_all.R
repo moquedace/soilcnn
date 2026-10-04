@@ -55,6 +55,7 @@ test_files <- c(
   "test_importance.R",       # which variables a model relies on, against known models
   "test_conformal.R",        # the interval covers what it promises
   "test_smearing.R",         # the mean surface beside the median surface
+  "test_block_bootstrap.R",  # intervals from whole blocks; equal-area blocks; Moran's I by distance
   "test_architecture.R",     # embed_pool wiring
   "test_fcn.R",              # the fully convolutional path gives what the network gives
   "test_augmentation.R",     # D4 symmetries

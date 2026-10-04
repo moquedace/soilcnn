@@ -402,6 +402,35 @@ Duan's derivation assumes the residual is independent of the prediction and that
 is checkable — in the SOC model it runs 1.80 at the low end to 1.15 at the
 high end, which the print warns about rather than silently averaging away.
 
+### Two models compared on clustered test points
+
+```r
+d   <- abs(test$pred_a - test$obs) - abs(test$pred_b - test$obs)   # what is compared
+spatial_correlogram(test$x, test$y, d)            # does it resemble itself nearby, and how far?
+blk <- equal_area_blocks(test$x, test$y, size_km = 100)
+block_bootstrap(test$obs, test$pred_a, blk, against = test$pred_b)
+block_bootstrap_by_size(test$x, test$y, test$obs, test$pred_a, against = test$pred_b)
+```
+
+Soil profiles come in surveys, farms and transects. In the SOC 0-30 cm trial,
+the common test set's 3,900 profiles sit in 303 one-degree blocks, half of
+them in 11. A bootstrap that draws the profiles one by one counts a block of
+603 as 603 independent pieces of evidence, and where two models' errors are
+alike within a block its interval is too narrow. `block_bootstrap()` draws
+whole blocks, and answers two questions:
+
+| weights | the question | the estimate |
+|---|---|---|
+| `"profile"` | which model errs less on a profile of this data base? | the mean over the points; the interval from whole blocks |
+| `"block"` | which model errs less in a region? | every block one vote (cell declustering); the estimate moves too |
+
+Where the two disagree, the advantage rests on the densely sampled regions.
+`n_effective` says how many independent points the profile interval is worth.
+The blocks are of equal area — a degree of longitude is 111 km at the equator
+and 71 km at 50° — and `block_bootstrap_by_size()` shows where the interval
+stops widening as they grow, which `spatial_correlogram()` says from the
+differences themselves.
+
 ---
 
 ## What the model learned
@@ -566,6 +595,7 @@ What the interval bands come from instead is [calibrated uncertainty](#calibrate
 | [`R/conformal.R`](R/conformal.R) | `conformal_calibrate()` · `picp_report()` — intervals with a coverage guarantee, and the check that they keep it |
 | [`R/occlusion.R`](R/occlusion.R) | `spatial_occlusion()` — does the trained network use the neighbourhood, or only the centre pixel? |
 | [`R/smearing.R`](R/smearing.R) | `smearing_factor()` · `smear()` — the back-transform of a log-trained median, and the one surface that may be summed |
+| [`R/block_bootstrap.R`](R/block_bootstrap.R) | `block_bootstrap()` · `equal_area_blocks()` · `spatial_correlogram()` — intervals on clustered test points from whole blocks of equal area, per profile and per block |
 | [`R/test_optimism.R`](R/test_optimism.R) | `freeze_selection()` · `score_test_grid()` — the test set, scored only after the choice is locked |
 | [`R/importance.R`](R/importance.R) | `dsm_importance()` and its methods — permutation, context, SHAP (expected and integrated gradients, the kernel), SAGE, ALE; the groups and the one-hot sets; SHAP at points of the map (`importance_points()`, `importance_map()`); `compare_importance()`; `importance_weights()` for the AOA. Every model is held to its run's predictions first |
 | [`R/importance_refit.R`](R/importance_refit.R) | `refit_importance()` — leave one covariate out: the final run's seeds trained again without each variable, in `dsm_final()`'s own workers, once a seed trained again with nothing left out has given the run's predictions back |
@@ -577,8 +607,8 @@ Beside `R/`:
 
 | Where | What |
 |------|---------|
-| [`DESCRIPTION`](DESCRIPTION) · [`NAMESPACE`](NAMESPACE) | The package, `soilcnn`: what it imports, and the 76 functions it exports — the `dsm_*()` front end, the resampling specs and fold constructors, the model registry, the importance methods, and the tools applied to results (AOA, conformal intervals, smearing, metrics, noise floor, occlusion). The runners underneath `dsm_train()`, the patch store's plumbing and the helpers are internal (`soilcnn:::`); `pkgload::load_all()` on the source tree makes every function visible. NAMESPACE is what roxygen2 writes from the `@export` tags, and `tests/test_package_metadata.R` checks that it still is |
-| [`tests/run_all.R`](tests/run_all.R) | 33 files: 26 fast, then 7 slow ones that train, map, prepare a store, and build and install the package. The package is loaded once for the suite. Every accumulator is named and `.report()` refuses an empty, unnamed, NA-bearing or non-logical one. `test_sources_parse.R` runs first and is the authority on syntax. |
+| [`DESCRIPTION`](DESCRIPTION) · [`NAMESPACE`](NAMESPACE) | The package, `soilcnn`: what it imports, and the 80 functions it exports — the `dsm_*()` front end, the resampling specs and fold constructors, the model registry, the importance methods, and the tools applied to results (AOA, conformal intervals, smearing, metrics, noise floor, occlusion, intervals by blocks). The runners underneath `dsm_train()`, the patch store's plumbing and the helpers are internal (`soilcnn:::`); `pkgload::load_all()` on the source tree makes every function visible. NAMESPACE is what roxygen2 writes from the `@export` tags, and `tests/test_package_metadata.R` checks that it still is |
+| [`tests/run_all.R`](tests/run_all.R) | 34 files: 27 fast, then 7 slow ones that train, map, prepare a store, and build and install the package. The package is loaded once for the suite. Every accumulator is named and `.report()` refuses an empty, unnamed, NA-bearing or non-logical one. `test_sources_parse.R` runs first and is the authority on syntax. |
 | [`tools/check_package.R`](tools/check_package.R) | Runs `R CMD check` on a staged copy of the package's own files |
 | [`docs/`](docs/) | [`architecture.md`](docs/architecture.md) (the network), [`design_decisions.md`](docs/design_decisions.md) (the reason for each choice), [`tuning_guide.md`](docs/tuning_guide.md) (the search space) |
 

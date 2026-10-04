@@ -658,3 +658,4 @@ and each is written where the code that implements it lives:
 | the categorical's one-hot channels perturbed as one variable, the sets inferred from the names and the data; themes as groups of the user's | `R/importance.R` (`importance_groups()`) |
 | a variable left out of a refit set to its training mean rather than taken out of the network, so the refit differs from the run's seed in nothing else; the refit trained by `dsm_final()`'s own workers and checked by a seed trained again with nothing left out | `R/importance_refit.R`, `R/final.R` |
 | the importance as the weights of the dissimilarity index | `R/importance.R` (`importance_weights()`), `R/aoa.R` |
+| intervals on clustered test points drawn by whole blocks of equal area, with two weightings -- every profile one vote, every block one vote -- and the correlogram of the compared differences to say how large the blocks must be | `R/block_bootstrap.R`; README, "Two models compared on clustered test points" |
