@@ -413,8 +413,15 @@ ok["one_worker_at_its_peak_the_rest_training"] <-
 # getting a table back at all says the checkpoint, rows, scaling, windows and
 # inverse are the run's. tests/test_importance.R checks what the numbers mean,
 # against models whose answer is known; this checks the wiring to the files.
+# AT ANOTHER THREAD COUNT THAN THE SEEDS WERE TRAINED AT. The seeds trained in
+# workers at 1 thread; the session here runs at 2. A seed's numbers move with
+# the threads in their last digits (T1), and the check -- every prediction the
+# run's to 1e-4 -- must take that and nothing more.
+threads_before <- torch::torch_get_num_threads()
+set_torch_threads(2L)
 imp_t <- suppressMessages(dsm_importance(fin, data, permutation_importance(draws = 2L),
                                          verbose = FALSE))
+set_torch_threads(threads_before)
 ok["importance_scores_every_seed_on_the_test_set"] <-
   inherits(imp_t, "dsm_importance") && identical(imp_t$units$seed, c(1L, 2L, 3L)) &&
   all(imp_t$units$role == "test")

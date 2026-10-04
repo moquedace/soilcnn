@@ -767,7 +767,9 @@ dsm_importance <- function(final, data, method = permutation_importance(),
                             as.numeric(meta_u$target_transform), tg$targets, donors = donors,
                             fill = fill, transform = transform, clamp = clamp,
                             batch_size = batch_size)
-    .importance_check_baseline(res$baseline, un)
+    .importance_check_baseline(res$baseline, un, pred_t = res$pred_t,
+                               sample_id = meta_u$sample_id,
+                               obs = as.numeric(meta_u$target_native))
     baseline[[u]] <- dplyr::mutate(res$baseline, unit = un$unit, .before = 1)
     raw[[u]]      <- dplyr::mutate(res$raw, unit = un$unit, .before = 1)
     if (is_window) {
@@ -854,7 +856,10 @@ dsm_importance <- function(final, data, method = permutation_importance(),
       train_rows = rep(list(as.integer(split$train)), length(fr$seeds)),
       scaling = rep(list(fr$scaling), length(fr$seeds)),
       cfg = rep(list(fr$cfg), length(fr$seeds)), model_file = fr$model_files,
-      perf_file = perf, cache_key = "test", n_rows = length(test)))
+      perf_file = perf,
+      pred_file = file.path(fr$run_dir, fr$config_id, "predictions",
+                            sprintf("seed%04d_pred_all.csv", fr$seeds)),
+      cache_key = "test", n_rows = length(test)))
   }
 
   td <- fr$tuning_dir
@@ -899,12 +904,48 @@ dsm_importance <- function(final, data, method = permutation_importance(),
     scaling = scal[fold], cfg = rep(list(cfg), length(fold)),
     model_file = file.path(td, "models", files),
     perf_file = file.path(td, "metrics", sprintf("%s_f%d_s%d_perf.csv", fr$config_id, fold, seed)),
+    pred_file = file.path(td, "predictions", sprintf("%s_f%d_s%d_pred_all.csv", fr$config_id,
+                                                     fold, seed)),
     cache_key = sprintf("fold_%02d", fold),
     n_rows = vapply(fold, function(k) length(plan$folds[[k]]$validation), integer(1)))
 }
 
-# The model's own score, unperturbed, against the one its run wrote for it.
-.importance_check_baseline <- function(baseline, un) {
+# The model, unperturbed, against what its run wrote for it.
+#
+# THE PREDICTIONS, POINT BY POINT, NOT ONLY THE SCORE. The first check compared
+# the CCC alone. It did refuse the model the SHAP run once took in training
+# mode (0.0017 against -0.0141 written; 2026-10-03), but a summary of a model
+# that predicts almost one value -- the test fixture's untrained seeds -- moves
+# little when the model is another, and says nothing of where. Every
+# prediction must be the run's, to 1e-4 relative (float differences between
+# thread counts are ~1e-7; T1), and the observations too -- a store with other
+# targets predicts the same and scores otherwise. The CCC stays the check for a
+# run that wrote no predictions.
+.importance_check_baseline <- function(baseline, un, pred_t = NULL, sample_id = NULL,
+                                       obs = NULL) {
+  pf <- un$pred_file %||% NA_character_
+  if (!is.null(pred_t) && !is.na(pf) && file.exists(pf)) {
+    pa <- safe_read_csv2(pf)
+    pa <- pa[pa$dataset_role == un$role, , drop = FALSE]
+    at <- match(as.character(sample_id), as.character(pa$sample_id))
+    if (anyNA(at) || !all(c("pred_transform", "obs") %in% names(pa))) {
+      stop("Model ", un$unit, " does not reproduce its run: ", sum(is.na(at)), " of its ",
+           length(at), " row(s) are not among the '", un$role, "' predictions it wrote (",
+           pf, "). The rows or the store are not the run's.", call. = FALSE)
+    }
+    dev_p <- max(abs(pred_t - pa$pred_transform[at]) / pmax(1, abs(pa$pred_transform[at])))
+    dev_o <- max(abs(obs - pa$obs[at]) / pmax(1, abs(pa$obs[at])))
+    if (!is.finite(dev_p) || dev_p > 1e-4 || !is.finite(dev_o) || dev_o > 1e-6) {
+      stop(sprintf(paste0("Model %s does not reproduce its run's own %s: they differ by %.2g ",
+                          "(relative) at its %d point(s), against %s. The checkpoint, the store, ",
+                          "the rows, the scaling or the transform is not the run's, and every ",
+                          "importance would be measured against another model."),
+                   un$unit, if (!is.finite(dev_o) || dev_o > 1e-6) "observations" else "predictions",
+                   if (!is.finite(dev_o) || dev_o > 1e-6) dev_o else dev_p, length(at), pf),
+           call. = FALSE)
+    }
+    return(invisible(dev_p))
+  }
   if (!file.exists(un$perf_file)) {
     stop("Cannot check model ", un$unit, " against its run: ", un$perf_file, " is missing. ",
          "Nothing is measured against a model whose score cannot be reproduced.",
@@ -973,7 +1014,7 @@ dsm_importance <- function(final, data, method = permutation_importance(),
                                  rmse_transform = sc$rmse_transform)
     }
   }
-  list(baseline = tibble::as_tibble(base), raw = dplyr::bind_rows(out))
+  list(baseline = tibble::as_tibble(base), raw = dplyr::bind_rows(out), pred_t = base_t)
 }
 
 # A target's masks: one per window, over its channels and pixels, or NULL for
@@ -1861,7 +1902,9 @@ importance_map <- function(x, resolution = NULL, output_dir = NULL) {
                                 as.numeric(meta_u$target_native),
                                 as.numeric(meta_u$target_transform), transform, clamp,
                                 batch_size)
-    .importance_check_baseline(res$baseline, un)
+    .importance_check_baseline(res$baseline, un, pred_t = res$pred_t,
+                               sample_id = meta_u$sample_id,
+                               obs = as.numeric(meta_u$target_native))
     baseline[[u]] <- dplyr::mutate(res$baseline, unit = un$unit, .before = 1)
     per[[u]] <- res$effects
     rm(model); invisible(gc(verbose = FALSE))
@@ -2027,7 +2070,7 @@ importance_map <- function(x, resolution = NULL, output_dir = NULL) {
     list(effect = eff - sum(w * eff), change = eff, n = n_c,
          importance = sqrt(sum(w * (eff - sum(w * eff))^2)))
   })
-  list(baseline = tibble::as_tibble(base), effects = effects)
+  list(baseline = tibble::as_tibble(base), effects = effects, pred_t = f_x)
 }
 
 # ── the draws ─────────────────────────────────────────────────────────────────
