@@ -19,6 +19,13 @@
 # minutes more. Without it those are skipped: the default is the quick check
 # run after an edit, and a CRAN check is a step of its own.
 #
+# ON A MACHINE LIKE CRAN'S. options(soilcnn.check_without_libtorch = TRUE)
+# runs the check with TORCH_HOME at an empty folder, where torch finds no
+# libtorch: CRAN installs the torch package and never downloads its backend.
+# Every example and test that needs it must then skip, and the rest pass --
+# which a check here, where libtorch is installed, cannot show otherwise. That
+# torch really sees none is asked first, and the check stops if it does.
+#
 # A SUGGESTED PACKAGE THAT IS NOT INSTALLED -- ranger, here -- would stop the
 # check before it starts. _R_CHECK_FORCE_SUGGESTS_=false runs it as a user
 # without that package would meet it: the code that needs it asks for it by
@@ -73,14 +80,26 @@ message("Building ", pkg, " (with its vignette) ...")
 tgz <- pkgbuild::build(stage, dest_path = work, manual = FALSE, quiet = TRUE)
 
 check_args <- c(if (isTRUE(getOption("soilcnn.check_as_cran"))) "--as-cran", "--no-manual")
-message("R CMD check ", paste(check_args, collapse = " "), " ", basename(tgz), " ...")
 # TWO THREADS, AS CRAN ALLOWS. torch sizes its pool to the machine unless told
 # otherwise, so an example that trains would take every core here -- beside
 # whatever else runs -- and a check that passes on 32 cores says nothing of
 # one on CRAN's two.
-res <- callr::rcmd("check", c(check_args, basename(tgz)), wd = work,
-                   env = c(callr::rcmd_safe_env(), "_R_CHECK_FORCE_SUGGESTS_" = "false",
-                           OMP_NUM_THREADS = "2", MKL_NUM_THREADS = "2"),
+check_env <- c(callr::rcmd_safe_env(), "_R_CHECK_FORCE_SUGGESTS_" = "false",
+               OMP_NUM_THREADS = "2", MKL_NUM_THREADS = "2")
+if (isTRUE(getOption("soilcnn.check_without_libtorch"))) {
+  no_backend <- file.path(work, "torch_home_empty")
+  dir.create(no_backend)
+  # TORCH_INSTALL = 0: a torch that found no backend must not fetch one.
+  check_env <- c(check_env, TORCH_HOME = no_backend, TORCH_INSTALL = "0")
+  sees <- callr::r(function() torch::torch_is_installed(), env = check_env)
+  if (!identical(sees, FALSE)) {
+    stop("With TORCH_HOME at an empty folder, torch::torch_is_installed() still says ",
+         format(sees), ": this check would not be the one CRAN's machines run.", call. = FALSE)
+  }
+  message("Checked as on a machine without libtorch: torch::torch_is_installed() is FALSE there.")
+}
+message("R CMD check ", paste(check_args, collapse = " "), " ", basename(tgz), " ...")
+res <- callr::rcmd("check", c(check_args, basename(tgz)), wd = work, env = check_env,
                    fail_on_status = FALSE, show = FALSE)
 
 log_file <- file.path(work, paste0(pkg, ".Rcheck"), "00check.log")
