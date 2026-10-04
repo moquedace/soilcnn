@@ -294,14 +294,18 @@ block_bootstrap <- function(obs, pred, blocks, against = NULL,
 # The metrics from summed columns (one row per draw), as calc_metrics() and
 # ccc() compute them: population moments, the bias as pred - obs.
 .bb_metrics <- function(s) {
-  w   <- s[, "n"]
-  mx  <- s[, "sx"] / w
-  my  <- s[, "sy"] / w
-  vx  <- s[, "sxx"] / w - mx^2
-  vy  <- s[, "syy"] / w - my^2
-  cxy <- s[, "sxy"] / w - mx * my
+  # Each column by name, and then without it: from a one-row matrix -- the
+  # estimate's sums -- s[, "abs"] comes back as a scalar named "abs", and the
+  # name rode into the result's columns (tests/testthat/test-blocks.R).
+  col <- function(k) unname(s[, k])
+  w   <- col("n")
+  mx  <- col("sx") / w
+  my  <- col("sy") / w
+  vx  <- col("sxx") / w - mx^2
+  vy  <- col("syy") / w - my^2
+  cxy <- col("sxy") / w - mx * my
   den <- vx + vy + (mx - my)^2
-  list(mae = s[, "abs"] / w, rmse = sqrt(s[, "sq"] / w), bias = s[, "err"] / w,
+  list(mae = col("abs") / w, rmse = sqrt(col("sq") / w), bias = col("err") / w,
        ccc = ifelse(den > 0, 2 * cxy / den, NA_real_))
 }
 
