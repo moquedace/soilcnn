@@ -183,9 +183,9 @@ permutation_importance <- function(draws = 5L, within = NULL,
 #' @keywords internal
 #' @export
 print.importance_spec <- function(x, ...) {
-  # Only a permutation and a context are scored by a metric; the others carry
-  # one for the frame and rank by their own value.
-  ranked <- if (x$kind %in% c("permutation", "context")) paste(" | ranked by", x$metric) else ""
+  # Only a permutation, a context and a refit are scored by a metric; the
+  # others carry one for the frame and rank by their own value.
+  ranked <- if (x$kind %in% c("permutation", "context", "refit")) paste(" | ranked by", x$metric) else ""
   cat("<importance_spec> ", .importance_label(x), ranked, "\n", sep = "")
   invisible(x)
 }
@@ -434,6 +434,10 @@ ale_effect <- function(variables = NULL, bins = 20L) {
 
 # A method in a few words, for a print and for the column of a comparison.
 .importance_label <- function(spec) {
+  if (identical(spec$kind, "refit")) {
+    return(sprintf("Refit without each variable (LOCO), %d seed(s) checked first",
+                   spec$check_seeds))
+  }
   if (identical(spec$kind, "sage")) {
     return(sprintf("SAGE, %s, %d background point(s), at most %d point(s)", spec$loss,
                    spec$background, spec$max_points))
@@ -681,9 +685,10 @@ importance_groups <- function(data, groups = "auto") {
 #' [shap_importance()] how each variable pushes each prediction, up or down;
 #' [sage_importance()] how much of the model's skill each variable carries,
 #' shared fairly among variables that carry the same information;
-#' [ale_effect()] how the prediction changes along each variable's range.
-#' Each variable is a channel, or the channels of one categorical (see
-#' [importance_groups()]), or a group of yours.
+#' [refit_importance()] how much skill a network trained without the
+#' variable loses; [ale_effect()] how the prediction changes along each
+#' variable's range. Each variable is a channel, or the channels of one
+#' categorical (see [importance_groups()]), or a group of yours.
 #'
 #' Before anything is perturbed, each model's own score is computed again and
 #' must reproduce the one its run wrote; if it does not, nothing is measured.
@@ -692,8 +697,8 @@ importance_groups <- function(data, groups = "auto") {
 #' @param data   The `dsm_data` the run was fitted on, from [dsm_load()]. Its
 #'   windows need not be loaded: one that is not is read from the store.
 #' @param method An importance method: [permutation_importance()],
-#'   [context_importance()], [shap_importance()], [sage_importance()] or
-#'   [ale_effect()].
+#'   [context_importance()], [shap_importance()], [sage_importance()],
+#'   [refit_importance()] or [ale_effect()].
 #' @param rows   "test" (the default): the final run's seeds, on the test set
 #'   the whole run held out -- the importance of the model that draws the map.
 #'   "folds": the tuning run's models of the same configuration, each on its
@@ -729,7 +734,10 @@ importance_groups <- function(data, groups = "auto") {
 #'   (each continuous variable's curve, with its spread between models) and
 #'   `classes` (each categorical's class effects). For SAGE: `table` (the loss
 #'   each variable takes away, and its share), `by_model` and `losses` (each
-#'   model's loss, and the mean prediction's, which SAGE splits).
+#'   model's loss, and the mean prediction's, which SAGE splits). For a refit:
+#'   `table`, `by_model`, `raw` (each unit's scores), `check` (the seeds
+#'   trained again with nothing left out, against the run), `noise` (what a
+#'   refit moves a score by with nothing to lose) and `refit_dir`.
 #' @export
 dsm_importance <- function(final, data, method = permutation_importance(),
                            rows = c("test", "folds"), groups = "auto", config = NULL,
@@ -741,8 +749,17 @@ dsm_importance <- function(final, data, method = permutation_importance(),
     stop("method must be an importance method, such as permutation_importance().",
          call. = FALSE)
   }
-  if (!method$kind %in% c("permutation", "context", "shap", "ale", "sage")) {
+  if (!method$kind %in% c("permutation", "context", "shap", "ale", "sage", "refit")) {
     stop("Importance method '", method$kind, "' is not implemented yet.", call. = FALSE)
+  }
+  # A REFIT TRAINS THE FINAL RUN'S SEEDS AGAIN, as run_spec.rds recorded them.
+  # On the folds it would train every fold model of the tuning run again, and
+  # a tuning run does not record the schedule its units trained with: the
+  # check that a refit is the run's training could not be made.
+  if (identical(method$kind, "refit") && rows != "test") {
+    stop("A refit trains the final run's seeds again and scores them on its test set; the ",
+         "tuning run does not record the schedule its fold models trained with, so they ",
+         "cannot be refitted as they were. Use rows = \"test\".", call. = FALSE)
   }
   if (!is.numeric(batch_size) || length(batch_size) != 1L || batch_size < 1) {
     stop("batch_size must be one positive whole number.", call. = FALSE)
@@ -784,6 +801,10 @@ dsm_importance <- function(final, data, method = permutation_importance(),
   if (identical(method$kind, "sage")) {
     return(.importance_sage_run(fr, data, units, grp, vars, method, transform, clamp,
                                 batch_size, say, rows))
+  }
+  if (identical(method$kind, "refit")) {
+    return(.importance_refit_run(fr, data, units, grp, vars, method, transform, clamp,
+                                 batch_size, say))
   }
 
   # WHAT IS PERTURBED: a variable, a band of rings, a variable at a band, or a
@@ -2655,6 +2676,10 @@ print.dsm_importance <- function(x, n = 20L, ...) {
     .importance_print_context(x, n)
     return(invisible(x))
   }
+  if (identical(m$kind, "refit")) {
+    .importance_print_refit(x, n)
+    return(invisible(x))
+  }
   cat("  ", .importance_groups_line(x$groups), "\n", sep = "")
   cat(strrep("-", 72), "\n")
   show <- utils::head(x$table, n)
@@ -2903,8 +2928,8 @@ print.dsm_importance <- function(x, n = 20L, ...) {
 #' zero, weight zero.
 #'
 #' @param x A `dsm_importance` with one value per variable: by
-#'   [permutation_importance()], [shap_importance()], [sage_importance()] or
-#'   [ale_effect()].
+#'   [permutation_importance()], [shap_importance()], [sage_importance()],
+#'   [refit_importance()] or [ale_effect()].
 #' @return A named numeric vector, one weight per channel in the store's order,
 #'   for `dsm_predict(aoa_weights = )` or `aoa_reference(weights = )`.
 #' @export
@@ -2914,7 +2939,8 @@ importance_weights <- function(x) {
   }
   if (identical(x$method$kind, "context")) {
     stop("A context importance has one value per ring or window, not per variable: ",
-         "take the weights from a permutation, SHAP, SAGE or ALE importance.", call. = FALSE)
+         "take the weights from a permutation, SHAP, SAGE, refit or ALE importance.",
+         call. = FALSE)
   }
   g <- x$groups
   w <- x$table$importance[match(g$variable, x$table$variable)]
@@ -2986,7 +3012,8 @@ compare_importance <- function(..., n = 20L) {
   # the score its frame carries for the models' own check.
   metrics <- vapply(xs, function(x) {
     switch(x$method$kind %||% "permutation", shap = "mean |SHAP|", ale = "ALE spread",
-           sage = "SAGE (loss explained)", x$method$metric)
+           sage = "SAGE (loss explained)", refit = paste("refit,", x$method$metric),
+           x$method$metric)
   }, character(1))
   # POINT BY POINT, for two SHAP importances of the same points: per variable,
   # the correlation of their values over the points both explain, and how far

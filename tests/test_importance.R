@@ -49,6 +49,10 @@
 #      variables that carry one signal split it; nothing for what is not read;
 #      exact sums; paired permutations exact for two variables; the loss asked
 #      for
+#  14. the refit: a unit's channels left out in place in every window and
+#      role, and put back bit for bit; nothing left out touches nothing; the
+#      refit's record refuses a resume for other variables or threads; the
+#      check compares every row and stops on a difference
 #
 # Run: source("<package root>/tests/test_importance.R")
 
@@ -740,6 +744,94 @@ ok["sage_prints_its_loss_and_no_metric"] <- any(grepl(
   capture.output(print(sage_importance()))))
 ok["too_many_variables_for_sage_are_refused"] <-
   grepl("SAGE takes up to 40", err(.importance_kernel_size(41L, sage = TRUE)))
+
+# ── 14. the refit: what a unit leaves out, and the checks around it ───────────
+#
+# A refit unit's channels take their training mean in every window and role of
+# the worker's fold cache, IN PLACE -- the loaders read the cache's own tensors
+# -- and are put back bit for bit after, or the next unit would train from a
+# cache with a variable missing. Nothing to leave out touches nothing: every
+# dsm_final() unit passes through the same worker. Around the units, the
+# refit's record refuses a resume for other variables, and the check compares
+# every row of the seed trained again with the run's, in whatever order.
+fake_cache <- function() {
+  with_local_seed(41L, list(
+    train = list(w03 = torch_tensor(array(runif(6 * 4 * 9), c(6L, 4L, 3L, 3L))),
+                 w05 = torch_tensor(array(runif(6 * 4 * 25), c(6L, 4L, 5L, 5L))),
+                 y = torch_tensor(runif(6))),
+    test = list(w03 = torch_tensor(array(runif(2 * 4 * 9), c(2L, 4L, 3L, 3L))),
+                w05 = torch_tensor(array(runif(2 * 4 * 25), c(2L, 4L, 5L, 5L))),
+                y = torch_tensor(runif(2)))))
+}
+as_arrays <- function(cache) lapply(cache, function(r) lapply(r, as_array))
+fc <- fake_cache()
+before <- as_arrays(fc)
+kept_fc <- .importance_leave_out(fc, c(2L, 4L), c(a = 0, b = 0.25, c = 0, d = 0.5))
+now <- as_arrays(fc)
+ok["a_unit_leaves_its_channels_out_in_every_window_and_role"] <-
+  all(vapply(c("train", "test"), function(r) all(vapply(c("w03", "w05"), function(k) {
+    a <- now[[r]][[k]]
+    all(a[, 2, , ] == 0.25) && all(a[, 4, , ] == 0.5) &&
+      identical(a[, c(1, 3), , ], before[[r]][[k]][, c(1, 3), , ])
+  }, logical(1))), logical(1))) &&
+  identical(now$train$y, before$train$y)
+.importance_put_back(fc, kept_fc)
+ok["and_puts_them_back_bit_for_bit"] <- identical(as_arrays(fc), before)
+ok["nothing_to_leave_out_touches_nothing"] <-
+  is.null(.importance_leave_out(fc, integer(0), NULL)) && identical(as_arrays(fc), before)
+ok["a_channel_with_no_mean_is_not_left_out"] <-
+  grepl("no finite training mean", err(.importance_leave_out(fc, 1L, c(NA, 0, 0, 0))))
+
+rs_dir <- file.path(tempdir(), "refit_spec_test")
+unlink(rs_dir, recursive = TRUE)
+sp <- list(final_run = "par", final_spec_written = as.POSIXct("2026-10-04 10:00:00", tz = "UTC"),
+           config_id = "cfg_001",
+           variables = tibble::tibble(dir = c("v001", "v002"), variable = c("a", "b"),
+                                      n_channels = 1:2, channels = c("a", "b1, b2")),
+           fill = c(0, 0.5, 0.5), threads_per_unit = 5L)
+invisible(.importance_refit_spec(rs_dir, "t", sp, TRUE))
+ok["a_refit_records_what_it_is_of"] <-
+  all(file.exists(file.path(rs_dir, c("refit_spec.rds", "variables.csv"))))
+ok["a_refit_resumes_with_what_it_started_with"] <- is.list(.importance_refit_spec(rs_dir, "t", sp, TRUE))
+sp_v <- sp
+sp_v$variables$channels[2] <- "b1"
+sp_t <- sp
+sp_t$threads_per_unit <- 1L
+ok["a_refit_resumed_for_other_variables_is_refused"] <-
+  grepl("other variables", err(.importance_refit_spec(rs_dir, "t", sp_v, TRUE))) &&
+  grepl("another thread count", err(.importance_refit_spec(rs_dir, "t", sp_t, TRUE)))
+ok["a_refit_not_resumed_is_refused_over_one_that_exists"] <-
+  grepl("already exists", err(.importance_refit_spec(rs_dir, "t", sp, FALSE)))
+foreign <- file.path(tempdir(), "refit_foreign")
+dir.create(foreign, showWarnings = FALSE)
+writeLines("x", file.path(foreign, "held.txt"))
+ok["a_directory_the_refit_did_not_start_is_refused"] <-
+  grepl("did not start", err(.importance_refit_spec(foreign, "f", sp, TRUE)))
+
+fr_fake <- list(run_dir = file.path(rs_dir, "final"), config_id = "cfg_001")
+dir.create(file.path(fr_fake$run_dir, "cfg_001", "predictions"), recursive = TRUE)
+dir.create(file.path(rs_dir, "v000", "predictions"), recursive = TRUE)
+pa_run <- tibble::tibble(sample_id = 1:6, dataset_role = rep(c("train", "validation", "test"), 2),
+                         obs = as.numeric(1:6), pred = as.numeric(1:6), pred_transform = log1p(1:6))
+safe_write_csv2(pa_run, file.path(fr_fake$run_dir, "cfg_001", "predictions", "seed0042_pred_all.csv"))
+safe_write_csv2(pa_run[6:1, ], file.path(rs_dir, "v000", "predictions", "seed0042_pred_all.csv"))
+chk42 <- .importance_refit_check(fr_fake, rs_dir, 42L)
+ok["the_check_compares_every_row_in_any_order"] <- chk42$max_difference == 0 && chk42$n_rows == 6L
+pa_off <- pa_run
+pa_off$pred_transform[3] <- pa_off$pred_transform[3] + 0.01
+safe_write_csv2(pa_off, file.path(rs_dir, "v000", "predictions", "seed0042_pred_all.csv"))
+ok["a_refit_that_does_not_reproduce_the_run_stops"] <-
+  grepl("does not give the final run's predictions", err(.importance_refit_check(fr_fake, rs_dir, 42L)))
+sc_t <- .importance_refit_scores(
+  file.path(fr_fake$run_dir, "cfg_001", "predictions", "seed0042_pred_all.csv"),
+  tibble::tibble(sample_id = c(6L, 3L), target_native = c(6, 3), target_transform = log1p(c(6, 3))),
+  expm1, c(0, Inf))
+ok["a_units_scores_come_from_its_test_rows"] <- sc_t$n == 2L && abs(sc_t$ccc - 1) < 1e-9 &&
+  sc_t$rmse < 1e-9
+ok["a_refit_checks_one_seed_at_least"] <- grepl("not skipped", err(refit_importance(check_seeds = 0)))
+ok["a_refit_prints_its_check_and_its_metric"] <- any(grepl(
+  "Refit without each variable \\(LOCO\\), 1 seed\\(s\\) checked first \\| ranked by ccc$",
+  capture.output(print(refit_importance()))))
 
 cat(sprintf("  one-hot sets found        : %s\n",
             paste(unique(g$variable[g$rule == "one-hot set"]), collapse = ", ")))

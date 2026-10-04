@@ -594,6 +594,16 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
 .final_unit_record_path <- function(run_dir, config_id, seed) {
   file.path(run_dir, config_id, "units", sprintf("seed%04d.rds", seed))
 }
+# Where a unit's files go, under the run: its configuration's directory -- or,
+# for a refit that leaves channels out (refit_importance(), R/importance_refit.R),
+# the directory its `dir` names, one per variable left out.
+.final_unit_dir <- function(units) {
+  if ("dir" %in% names(units)) units$dir else units$config_id
+}
+# The channels a unit leaves out: none, but in a refit_importance() unit.
+.final_unit_left_out <- function(units, u) {
+  if ("left_out" %in% names(units)) as.integer(units$left_out[[u]]) else integer(0)
+}
 .final_unit_record <- function(run_dir, config_id, seed) {
   p <- .final_unit_record_path(run_dir, config_id, seed)
   if (file.exists(p)) readRDS(p) else NULL
@@ -773,9 +783,12 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
   expr
 }
 
+# `fill` is for a refit that leaves channels out (refit_importance()): each
+# channel's training mean, scaled as the inputs are, which the left-out
+# channels take. NULL for dsm_final(), whose units leave nothing out.
 .final_train_units <- function(todo, selected, data, index, scaling, windows,
                                training, transform, run_dir, n_cores,
-                               threads_per_unit, max_ram_gb, say) {
+                               threads_per_unit, max_ram_gb, say, fill = NULL) {
   if (!requireNamespace("callr", quietly = TRUE)) {
     stop("dsm_final() trains every seed in its own R process and needs the ",
          "callr package. install.packages(\"callr\").", call. = FALSE)
@@ -819,7 +832,7 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
     cell_size = data$cell_size, target_col = data$target_col, index = index,
     scaling = scaling, cfgs = selected, units = todo, training = training,
     transform = transform, run_dir = run_dir, claims_dir = claims_dir,
-    threads = threads_per_unit,
+    threads = threads_per_unit, fill = fill,
     # options(dsm.final.trace_mem = TRUE): every worker records its memory
     # after each phase and each epoch (see .final_worker()). T7 does.
     trace_mem = isTRUE(getOption("dsm.final.trace_mem", FALSE)))
@@ -843,7 +856,7 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
   n_seen <- -1L
   repeat {
     alive  <- vapply(procs, function(p) p$is_alive(), logical(1))
-    n_done <- sum(file.exists(.final_unit_record_path(run_dir, todo$config_id, todo$seed)))
+    n_done <- sum(file.exists(.final_unit_record_path(run_dir, .final_unit_dir(todo), todo$seed)))
     if (n_done != n_seen) {
       say(sprintf("  %5.1f min | %d of %d unit(s) finished | %d worker(s) running",
                   as.numeric(difftime(Sys.time(), t0, units = "mins")), n_done,
@@ -952,9 +965,20 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
     uid  <- job$units$unit_id[u]
     if (!dir.create(file.path(job$claims_dir, uid), showWarnings = FALSE)) next
     cfg <- job$cfgs[job$cfgs$config_id == cid, , drop = FALSE]
-    cfg_dir <- file.path(job$run_dir, cid)
+    unit_dir <- .final_unit_dir(job$units[u, , drop = FALSE])
+    cfg_dir  <- file.path(job$run_dir, unit_dir)
+    left_out <- .final_unit_left_out(job$units, u)
     message("\n-- [", cid, "] seed ", seed, " (worker ", job$worker, ", ",
-            job$threads, " thread(s)) --")
+            job$threads, " thread(s))",
+            if (length(left_out)) sprintf(", %d channel(s) left out (%s)", length(left_out), unit_dir),
+            " --")
+
+    # LEFT OUT, for refit_importance(): the unit's channels take their training
+    # mean in every window and role of the cache, and are put back once the
+    # unit is done, so the next unit trains from the cache as it was read.
+    # Before the seeds are set: it draws no random number, and the unit then
+    # trains exactly as the run's seed did, but for those channels.
+    kept <- .importance_leave_out(cache, left_out, job$fill)
 
     # Stage 04's order: the seeds, then the loaders -- the loaders shuffle
     # with torch's generator, so they must be built after it is seeded.
@@ -975,6 +999,7 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
 
     rec <- list(unit_id = uid, config_id = cid, seed = seed,
                 threads = job$threads, worker = job$worker, finished_at = Sys.time())
+    if (length(left_out)) rec$left_out <- left_out
     if (inherits(result, "error")) {
       rec$status <- "failed"
       rec$error  <- conditionMessage(result)
@@ -997,7 +1022,8 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
               sprintf(" | %.1f min", result$runtime_min))
     }
     # The record LAST: its existence is what says the unit is finished.
-    safe_save_rds(rec, .final_unit_record_path(job$run_dir, cid, seed), compress = FALSE)
+    safe_save_rds(rec, .final_unit_record_path(job$run_dir, unit_dir, seed), compress = FALSE)
+    .importance_put_back(cache, kept)
     rm(result, loaders)
     invisible(gc(verbose = FALSE))
     mark("unit_released", uid)

@@ -18,6 +18,8 @@
 #                 effects as bars;
 #   sage          the loss each variable takes away, ranked, with the spread
 #                 between models -- below zero, it costs skill;
+#   refit         the skill a network trained without each variable loses,
+#                 with the spread between seeds;
 #   a map        importance_map()'s layers: SHAP per variable on a diverging
 #                 scale centred on zero, the dominant variable, the prediction.
 #
@@ -29,8 +31,9 @@
 #' The figure that answers the importance's own question: bars for a
 #' permutation, the cost per pixel by ring (or per variable, or per window)
 #' for a context, the summary plot for SHAP -- a point per profile at its SHAP
-#' value, coloured by the variable's value there -- the curves for ALE, and
-#' for SAGE the loss each variable takes away.
+#' value, coloured by the variable's value there -- the curves for ALE, for
+#' SAGE the loss each variable takes away, and for a refit the skill a network
+#' trained without it loses.
 #'
 #' @param x A `dsm_importance`, from [dsm_importance()].
 #' @param n How many variables to show.
@@ -49,9 +52,10 @@ plot.dsm_importance <- function(x, n = 20L, ...) {
     ale = .importance_plot_ale(x, n),
     sage = .importance_plot_bars(x$table, n, sprintf("SAGE -- %s", basename(x$run_dir)),
                                  "loss explained (trained space)"),
-    refit = .importance_plot_bars(x$table, n, sprintf("Refit without the variable -- %s",
-                                                      basename(x$run_dir)),
-                                  "loss of skill when refitted without it"),
+    refit = .importance_plot_bars(
+      x$table, n, sprintf("Refit without the variable -- %s", basename(x$run_dir)),
+      c(ccc = "drop in CCC, refitted without it", rmse = "rise in RMSE, refitted without it",
+        rmse_transform = "rise in RMSE (trained space), refitted without it")[[m$metric]]),
     stop("No figure for an importance of kind '", m$kind, "'.", call. = FALSE))
   invisible(x)
 }

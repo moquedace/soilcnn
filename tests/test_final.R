@@ -27,8 +27,10 @@
 #      the RAM budget counts every worker training and one at its peak
 #  11. the importance of this final model, on the files a real run wrote:
 #      every method on the test set and on the folds, at another thread count
-#      than the seeds trained at; every kind prints and draws its figure; a
-#      store that is not the run's is refused
+#      than the seeds trained at; the refit trains seeds again, the first with
+#      nothing left out and to the digit the run's, and resumes training
+#      nothing; every kind prints and draws its figure; a store that is not
+#      the run's is refused
 #
 # The fixture: 96 points in 8 sites two degrees apart, 3 channels, window 3 --
 # enough blocks that a spatial tuning plan and its refit split both have
@@ -508,6 +510,30 @@ ok["sage_on_the_folds_scores_every_fold_model"] <- nrow(imp_sagef$units) == 4L &
   all(is.finite(imp_sagef$table$importance))
 ok["sage_compares_with_the_rest"] <-
   inherits(compare_importance(imp_t, imp_eg, imp_sage), "importance_comparison")
+# THE REFIT (LOCO), on the same files: each variable left out and two of the
+# seeds trained again by dsm_final()'s own workers -- first one seed with
+# nothing left out, which must give the run's predictions to the digit (T2),
+# then every variable under every seed. Resumed, it trains nothing again;
+# resumed for other variables, or asked for on the folds, it is refused.
+refit_spec <- refit_importance(run_id = "loco", n_cores = 2L, max_ram_gb = 12)
+imp_rf <- suppressMessages(dsm_importance(fin, data, refit_spec, seeds = 1:2, verbose = FALSE))
+ok["the_refit_with_nothing_left_out_is_the_runs_seed_to_the_digit"] <-
+  identical(imp_rf$check$seed, 1L) && identical(imp_rf$check$max_difference, 0)
+ok["the_refit_leaves_out_every_variable_under_every_seed"] <-
+  setequal(imp_rf$table$variable, preds) && all(imp_rf$table$n_models == 2L) &&
+  all(file.exists(file.path(imp_rf$refit_dir, sprintf("v%03d", 1:3), "models", "seed0002_best.pt")))
+ok["a_variable_left_out_changes_what_the_network_learns"] <- all(
+  imp_rf$raw$rmse_transform != imp_rf$baseline$rmse_transform[match(imp_rf$raw$unit, imp_rf$baseline$unit)])
+ck_file <- file.path(imp_rf$refit_dir, "v001", "models", "seed0001_best.pt")
+ck_time <- file.mtime(ck_file)
+imp_rf2 <- suppressMessages(dsm_importance(fin, data, refit_spec, seeds = 1:2, verbose = FALSE))
+ok["a_refit_resumed_trains_nothing_again"] <-
+  identical(imp_rf2$table$importance, imp_rf$table$importance) &&
+  identical(file.mtime(ck_file), ck_time)
+ok["a_refit_resumed_for_other_variables_is_refused"] <- grepl("other variables", err(
+  dsm_importance(fin, data, refit_spec, groups = list(all = preds), verbose = FALSE)))
+ok["a_refit_on_the_folds_is_refused"] <- grepl("rows = \"test\"", err(
+  dsm_importance(fin, data, refit_importance(), rows = "folds", verbose = FALSE)))
 # ALE, on the same files: a curve per variable, its bins shared by every model
 # of the call -- the three seeds here, the four fold models below.
 imp_ale <- suppressMessages(dsm_importance(fin, data, ale_effect(bins = 5L), verbose = FALSE))
@@ -521,25 +547,26 @@ ok["ale_on_the_folds_runs_on_every_fold_model"] <- nrow(imp_alef$units) == 4L &&
 ok["ale_compares_with_the_rest"] <-
   inherits(compare_importance(imp_t, imp_eg, imp_ale), "importance_comparison")
 ok["every_importance_prints"] <- all(vapply(list(imp_t, imp_ring, imp_pv, imp_win, imp_eg, imp_ale,
-                                                 imp_k, imp_sage),
+                                                 imp_k, imp_sage, imp_rf),
                                             function(x) length(utils::capture.output(print(x))) > 5L,
                                             logical(1)))
 # EVERY KIND DRAWS ITS FIGURE, to files: a bar chart, the rings, the context
 # per variable, the windows, SHAP's summary plot, the ALE curves, the kernel's
-# summary plot, SAGE's bars, and two SHAP importances compared point by point.
+# summary plot, SAGE's bars, the refit's bars, and two SHAP importances
+# compared point by point.
 fig_dir <- file.path(base, "importance_figures")
 dir.create(fig_dir)
 grDevices::png(file.path(fig_dir, "fig_%02d.png"), width = 1100, height = 800)
 set.seed(7)
 seed_before <- .Random.seed
 drawn <- tryCatch({
-  for (x in list(imp_t, imp_ring, imp_pv, imp_win, imp_eg, imp_ale, imp_k, imp_sage)) plot(x)
+  for (x in list(imp_t, imp_ring, imp_pv, imp_win, imp_eg, imp_ale, imp_k, imp_sage, imp_rf)) plot(x)
   plot(compare_importance(imp_e10, imp_k))
   TRUE
 }, error = function(e) conditionMessage(e))
 grDevices::dev.off()
 ok["every_importance_draws_its_figure"] <- isTRUE(drawn) &&
-  length(list.files(fig_dir, pattern = "^fig_.*png$")) == 9L
+  length(list.files(fig_dir, pattern = "^fig_.*png$")) == 10L
 if (!isTRUE(drawn)) cat("  figure failed: ", drawn, "\n", sep = "")
 ok["a_figure_leaves_the_sessions_random_numbers_alone"] <- identical(seed_before, .Random.seed)
 # A STORE THAT IS NOT THE RUN'S. The same points with other targets: the
@@ -556,5 +583,7 @@ cat(sprintf("  fixture                  : %d points in %d sites | %d configs tun
 cat(sprintf("  selected                 : %s (%s)\n", cid, fin$selection$rule_applied))
 cat(sprintf("  2 workers vs 1           : identical seeds -> %s\n",
             ok[["two_workers_and_one_give_identical_seeds"]]))
+cat(sprintf("  refit, nothing left out  : seed %d trained again, largest difference %.2g\n",
+            imp_rf$check$seed[1], imp_rf$check$max_difference[1]))
 
 .report(ok, "test_final")
