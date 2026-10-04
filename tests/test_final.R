@@ -501,6 +501,21 @@ ok["ale_compares_with_the_rest"] <-
 ok["every_importance_prints"] <- all(vapply(list(imp_t, imp_ring, imp_pv, imp_win, imp_eg, imp_ale),
                                             function(x) length(utils::capture.output(print(x))) > 5L,
                                             logical(1)))
+# EVERY KIND DRAWS ITS FIGURE, to files: a bar chart, the rings, the context
+# per variable, the windows, SHAP's summary plot, the ALE curves, the kernel's
+# bars, and two SHAP importances compared point by point.
+fig_dir <- file.path(base, "importance_figures")
+dir.create(fig_dir)
+grDevices::png(file.path(fig_dir, "fig_%02d.png"), width = 1100, height = 800)
+drawn <- tryCatch({
+  for (x in list(imp_t, imp_ring, imp_pv, imp_win, imp_eg, imp_ale, imp_k)) plot(x)
+  plot(compare_importance(imp_e10, imp_k))
+  TRUE
+}, error = function(e) conditionMessage(e))
+grDevices::dev.off()
+ok["every_importance_draws_its_figure"] <- isTRUE(drawn) &&
+  length(list.files(fig_dir, pattern = "^fig_.*png$")) == 8L
+if (!isTRUE(drawn)) cat("  figure failed: ", drawn, "\n", sep = "")
 # A STORE THAT IS NOT THE RUN'S. The same points with other targets: the
 # models' own scores no longer come back, and nothing is measured.
 bad <- data

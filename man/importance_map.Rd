@@ -17,10 +17,11 @@ variable; shap_dominant.tif and its legend, shap_dominant.csv;
 prediction.tif); NULL to only return them.}
 }
 \value{
-A list: \code{shap} (one layer per variable: the mean SHAP value of the
-points in each cell, in the network's units), \code{dominant} (in each cell,
-the variable with the largest mean |SHAP|, as the number in \code{legend}),
-\code{legend}, \code{prediction} (the mean prediction, native units) and \code{files}.
+An \code{importance_map}, a list: \code{shap} (one layer per variable: the mean
+SHAP value of the points in each cell, in the network's units), \code{dominant}
+(in each cell, the variable with the largest mean |SHAP|, as the number in
+\code{legend}), \code{legend}, \code{prediction} (the mean prediction, native units)
+and \code{files}. \code{plot()} draws it.
 }
 \description{
 Lays the values of \code{\link[=dsm_importance]{dsm_importance()}}\verb{(at = )} back on a grid: each cell

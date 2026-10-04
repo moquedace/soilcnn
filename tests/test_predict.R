@@ -428,6 +428,14 @@ ok["the_map_lays_each_point_on_its_cell"] <- all(file.exists(map9$files)) && {
   v <- terra::extract(map9$shap[["band_a"]], as.matrix(imp9$points[, c("x", "y")]))[, 1]
   isTRUE(all.equal(as.numeric(v), imp9$points$band_a, tolerance = 1e-6))
 }
+ok["the_map_and_its_importance_draw"] <- {
+  f9 <- file.path(base, "shap_map", "fig_%02d.png")
+  grDevices::png(f9, width = 1100, height = 800)
+  d9 <- tryCatch({ plot(map9); plot(imp9); TRUE }, error = function(e) conditionMessage(e))
+  grDevices::dev.off()
+  if (!isTRUE(d9)) cat("  figure failed: ", d9, "\n", sep = "")
+  isTRUE(d9) && length(list.files(dirname(f9), pattern = "^fig_.*png$")) == 2L
+}
 ok["the_dominant_layer_names_a_variable"] <- {
   d <- terra::values(map9$dominant)[, 1]
   any(!is.na(d)) && all(d[!is.na(d)] %in% map9$legend$value)

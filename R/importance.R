@@ -1363,6 +1363,12 @@ dsm_importance <- function(final, data, method = permutation_importance(),
   # columns (x, y) would be read as the coordinate there.
   phi_all <- do.call(rbind, lapply(sets, function(us) Reduce(`+`, phi_of[us]) / length(us)))
   colnames(phi_all) <- names(vars)
+  # The value at each point explained, for every one-channel variable -- as at
+  # map points: for the direction below and for plots of SHAP against value.
+  single <- names(vars)[lengths(vars) == 1L]
+  values <- matrix(vapply(single, function(v) as.numeric(data$points[[ch[vars[[v]]]]][all_rows]),
+                          numeric(length(all_rows))),
+                   nrow = length(all_rows), dimnames = list(NULL, single))
 
   # DIRECTION: does a higher value of the variable at the point raise the
   # prediction? Spearman between the value and the SHAP value, over the points.
@@ -1414,7 +1420,7 @@ dsm_importance <- function(final, data, method = permutation_importance(),
 
   out <- structure(list(
     table = tab, by_model = by_model, baseline = dplyr::bind_rows(baseline),
-    points = points, patch = patch, pixels = pixels,
+    points = points, values = values, patch = patch, pixels = pixels,
     completeness = dplyr::bind_rows(comp), groups = grp, method = method, rows = rows,
     units = units[, c("unit", "kind", "fold", "seed", "role", "n_rows", "model_file")],
     run_dir = fr$run_dir, config_id = fr$config_id, window_sizes = ws_model,
@@ -1979,10 +1985,11 @@ importance_points <- function(final, data, extent = NULL, every = 1L, rasters = 
 #' @param output_dir Where to write the GeoTIFFs (shap.tif, one layer per
 #'   variable; shap_dominant.tif and its legend, shap_dominant.csv;
 #'   prediction.tif); NULL to only return them.
-#' @return A list: `shap` (one layer per variable: the mean SHAP value of the
-#'   points in each cell, in the network's units), `dominant` (in each cell,
-#'   the variable with the largest mean |SHAP|, as the number in `legend`),
-#'   `legend`, `prediction` (the mean prediction, native units) and `files`.
+#' @return An `importance_map`, a list: `shap` (one layer per variable: the mean
+#'   SHAP value of the points in each cell, in the network's units), `dominant`
+#'   (in each cell, the variable with the largest mean |SHAP|, as the number in
+#'   `legend`), `legend`, `prediction` (the mean prediction, native units)
+#'   and `files`. `plot()` draws it.
 #' @export
 importance_map <- function(x, resolution = NULL, output_dir = NULL) {
   if (!inherits(x, "dsm_importance") || !identical(x$rows, "map")) {
@@ -2024,8 +2031,9 @@ importance_map <- function(x, resolution = NULL, output_dir = NULL) {
     terra::writeRaster(prediction, files[3], overwrite = TRUE)
     safe_write_csv2(legend, files[4])
   }
-  list(shap = shap, dominant = dominant, legend = legend, prediction = prediction,
-       files = files)
+  structure(list(shap = shap, dominant = dominant, legend = legend, prediction = prediction,
+                 files = files),
+            class = "importance_map")
 }
 
 # ── ALE: the bins, the moves, the curves ──────────────────────────────────────

@@ -23,6 +23,8 @@ Imports:
     callr,
     coro,
     dplyr,
+    graphics,
+    grDevices,
     janitor,
     matrixStats,
     parallel,

@@ -22,7 +22,7 @@
 #   1. DESCRIPTION names the package, and declares every package R/ calls with ::
 #   2. every declared import is used
 #   3. NAMESPACE is what the @export tags say, and names only what exists
-#   4. every print.<class> in R/ is a registered S3 method
+#   4. every print.<class> and plot.<class> in R/ is a registered S3 method
 #   5. R/ holds no loader and sources nothing
 #   6. the session's loader describes the source tree, with a fingerprint
 #   7. the loader refuses a framework that is not a namespace
@@ -98,8 +98,10 @@ tagged <- unlist(lapply(r_files, function(f) {
     sub("^([A-Za-z_.][A-Za-z0-9_.]*)\\s*<-\\s*function.*$", "\\1", ln[j])
   }, character(1))
 }))
-from_tags <- ifelse(grepl("^print\\.", tagged),
-                    sprintf("S3method(print,%s)", sub("^print\\.", "", tagged)),
+# print and plot: the two generics this package writes methods for.
+from_tags <- ifelse(grepl("^(print|plot)\\.", tagged),
+                    sprintf("S3method(%s,%s)", sub("\\..*$", "", tagged),
+                            sub("^(print|plot)\\.", "", tagged)),
                     sprintf("export(%s)", tagged))
 ns_lines <- readLines(file.path(root, "NAMESPACE"), warn = FALSE)
 ns_lines <- ns_lines[nzchar(ns_lines) & !grepl("^#", ns_lines)]
@@ -112,11 +114,15 @@ ok["every_export_is_a_function_of_the_namespace"] <-
   all(vapply(exported, function(n) exists(n, envir = ns, inherits = FALSE) &&
                is.function(get(n, envir = ns)), logical(1)))
 
-# ── 4. every print method is registered ──────────────────────────────────────
+# ── 4. every print and plot method is registered ─────────────────────────────
 methods_in_r <- grep("^print\\.", ls(ns, all.names = TRUE), value = TRUE)
 registered <- sub("^S3method\\(print,(.*)\\)$", "print.\\1",
                   grep("^S3method\\(print,", ns_lines, value = TRUE))
 ok["every_print_method_is_registered"] <- setequal(methods_in_r, registered)
+plots_in_r <- grep("^plot\\.", ls(ns, all.names = TRUE), value = TRUE)
+plots_reg  <- sub("^S3method\\(plot,(.*)\\)$", "plot.\\1",
+                  grep("^S3method\\(plot,", ns_lines, value = TRUE))
+ok["every_plot_method_is_registered"] <- setequal(plots_in_r, plots_reg)
 
 # ── 5. R/ is a package's R/: no loader, nothing sourced ──────────────────────
 sources_something <- vapply(r_files, function(f) {
