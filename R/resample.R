@@ -1356,7 +1356,10 @@ na_to_zero <- function(x) {
 #'
 #' @param comparison Unit-level comparison table.
 #' @param metric     Metric column to measure.
-#' @return list(by_config = tibble, median_sd, max_sd, n_comparable)
+#' @return A list: `metric`; `by_config`, one row per (config, fold) trained
+#'   under more than one seed, with the mean, sd and range over the seeds;
+#'   `n_comparable`, how many such rows; `median_sd`, the floor; and
+#'   `max_range`, the widest spread seen.
 #' @export
 seed_noise_floor <- function(comparison, metric = "val_ccc") {
   if (!metric %in% names(comparison)) {

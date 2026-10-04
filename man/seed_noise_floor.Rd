@@ -12,7 +12,10 @@ seed_noise_floor(comparison, metric = "val_ccc")
 \item{metric}{Metric column to measure.}
 }
 \value{
-list(by_config = tibble, median_sd, max_sd, n_comparable)
+A list: \code{metric}; \code{by_config}, one row per (config, fold) trained
+under more than one seed, with the mean, sd and range over the seeds;
+\code{n_comparable}, how many such rows; \code{median_sd}, the floor; and
+\code{max_range}, the widest spread seen.
 }
 \description{
 The noise floor of the whole experiment. Computed within (config, fold), so
