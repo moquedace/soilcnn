@@ -3,10 +3,10 @@
 # ONE FRAME, SEVERAL QUESTIONS. dsm_train() takes the validation design as an
 # argument -- resampling = spatial_cv(), random_cv(), ... -- and changing that
 # one argument changes the question the run answers. dsm_importance() is built
-# the same way: method = permutation_importance() today, and the methods to
-# come (the patch's rings and scales, SHAP by expected gradients, ALE, SAGE,
-# a refit without the variable) are further constructors for the same slot.
-# They are not rival estimates of one number. Each answers its own question
+# the same way: method = permutation_importance(), context_importance(),
+# shap_importance(), sage_importance(), refit_importance() or ale_effect() --
+# one slot, six questions. They are not rival estimates of one number. Each
+# answers its own question
 # (Ewald et al. 2024, "A guide to feature importance methods for scientific
 # inference"), and where they disagree is where the reading is.
 #
@@ -50,11 +50,26 @@
 # point's prediction, less a reference, shared among the variables with a sign
 # (Lundberg & Lee 2017), from the network's gradients -- expected gradients
 # (Erion et al. 2021) over a background of the model's own training points, or
-# integrated gradients (Sundararajan et al. 2017) from the training mean.
+# integrated gradients (Sundararajan et al. 2017) from the training mean -- or,
+# over a few themes, the exact Shapley values of the coalitions, with no
+# gradient at all (the kernel: Lundberg & Lee 2017's game). The gradient
+# estimators and the kernel share the same total and split it alike when the
+# themes do not interact, so where they part is how much the themes do.
 # Mean |SHAP| says how much a variable MOVES the predictions; the permutation
 # says how much the model's skill rests on it. The two need not agree, and
 # where they do not is a reading. The values add up to the prediction less the
 # reference, and that is checked, as the score is.
+#
+# SAGE (sage_importance()). The Shapley values of the LOSS rather than of the
+# prediction (Covert, Lundberg & Lee 2020), in the kernel's game: how much of
+# the model's skill each theme carries, a signal two themes share split between
+# them. The values add up exactly to the loss of the mean prediction less the
+# model's own, and that is checked.
+#
+# REFIT (refit_importance(), R/importance_refit.R). Whether a variable is
+# needed at all: the final run's seeds trained again with it left out (LOCO;
+# Lei et al. 2018). The only method here that retrains, and the only one that
+# answers for a network that never saw the variable.
 #
 # ALE (ale_effect()). Not how much, but how: the prediction along each
 # variable's range (Apley & Zhu 2020), each point moved only across its own bin
@@ -96,11 +111,11 @@
 # by the draw.
 #
 # THE CHECK THAT STOPS. Before anything is permuted, each model's unperturbed
-# score must reproduce the score its run wrote for it. That one comparison
-# covers the checkpoint, the configuration, the rows, the scaling, the
-# windows' order and the inverse transform: if any of them is wrong, the
-# number differs, and every importance computed after it would have been
-# measured against a model that is not the run's.
+# predictions must reproduce, point by point, the ones its run wrote for it.
+# That one comparison covers the checkpoint, the configuration, the rows, the
+# scaling, the windows' order and the inverse transform: if any of them is
+# wrong, the predictions differ, and every importance computed after it would
+# have been measured against a model that is not the run's.
 
 # ── the method ────────────────────────────────────────────────────────────────
 

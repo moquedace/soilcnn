@@ -113,6 +113,9 @@ print_one_se(one_se(fit$by_config))      # the simplest config within 1 SE
 
 final <- dsm_final(fit, seeds = 10)      # the selected config, under ten seeds
 map   <- dsm_predict(final, data)        # median, mean, intervals, DI and AOA bands
+
+imp   <- dsm_importance(final, data)     # what the model learned: permutation, by default
+plot(imp)
 ```
 
 `dsm_load()` opens the store, reads the points and predictor types, aligns
@@ -401,6 +404,66 @@ high end, which the print warns about rather than silently averaging away.
 
 ---
 
+## What the model learned
+
+`dsm_importance()` asks a final model which variables it uses, and the method
+is an argument, the way the validation design is one in `dsm_train()`:
+
+```r
+dsm_importance(final, data)                                      # permutation, on the test set
+dsm_importance(final, data, permutation_importance(within = 5))  # donors from the same 5-unit block
+dsm_importance(final, data, context_importance())                # how far from the point it reads
+dsm_importance(final, data, shap_importance())                   # what pushes each prediction, and how
+dsm_importance(final, data, sage_importance(), groups = themes)  # the skill, shared among themes
+dsm_importance(final, data, refit_importance(), groups = themes, seeds = 42:44)
+dsm_importance(final, data, ale_effect())                        # the prediction along each range
+```
+
+Each answers its own question, and they are meant to be read together:
+
+| method | the question it answers | how |
+|---|---|---|
+| `permutation_importance()` | how much does the fitted model rely on the variable? | each point takes the variable's whole patch, every window, from another point |
+| … `within =` a block size or a class | what does it add beyond the place? | the donor comes from the same block or class |
+| `context_importance()` | how far from the point, and through which window, does it read? | rings of the patch, or a window's whole input, permuted; the cost per pixel |
+| `shap_importance()` | how does each variable push each prediction, up or down? | expected gradients (the default), integrated gradients, or exact Shapley values over themes (`"kernel"`) |
+| `sage_importance()` | how much of the model's skill does each variable carry, shared fairly? | Shapley values of the loss, over themes |
+| `refit_importance()` | is the variable needed at all? | the final run's seeds trained again with the variable at its training mean |
+| `ale_effect()` | how does the prediction change along the variable's range? | accumulated local effects, the whole patch moved |
+
+A variable is a channel, or the channels of one categorical — the one-hot sets
+are inferred from the names and checked against the data — or a group of
+yours. With many correlated predictors, themes (climate, relief, vegetation,
+...) are the unit a reader can use. Of the signal two near-copies share, a
+permutation credits neither, a refit without one finds it in the other, and
+SAGE splits it between them. `rows = "folds"` scores the tuning run's fold models on their
+own validation rows instead of the final seeds on the test set — the way two
+validation designs are compared on what their models learned.
+`compare_importance()` sets importances side by side and says how far their
+rankings agree, and `plot()` draws the figure each one answers with.
+
+**Nothing is measured against a model that is not the run's.** Before anything
+is perturbed, each model must give back, point by point, the predictions its
+run wrote. SHAP values must add up to the prediction less the reference, and
+SAGE values to the loss the model explains. A refit first trains a seed again
+with nothing left out and must get the run's predictions back: in the SOC
+0-30 cm trial's test run, a seed trained again five days later did, to a
+difference of 0.
+
+SHAP runs at points of the map too, and becomes maps:
+
+```r
+pts <- importance_points(final, data, extent = c(-55, -53, -31, -29))   # a tile, every cell
+imp <- dsm_importance(final, data, shap_importance(), at = pts)
+plot(importance_map(imp, output_dir = "shap_tile"))  # per variable, the dominant one, the prediction
+```
+
+And an importance can weight the area of applicability (Meyer & Pebesma
+2021): with `dsm_predict(final, data, aoa_weights = imp)`, a predictor the
+model ignores no longer pushes a pixel out of the AOA.
+
+---
+
 ## Tuneable parameters
 
 The table below summarises the search space `make_tune_grid()` draws from. See [`docs/tuning_guide.md`](docs/tuning_guide.md) for the rationale behind every range and its connection to digital soil mapping.
@@ -504,6 +567,9 @@ What the interval bands come from instead is [calibrated uncertainty](#calibrate
 | [`R/occlusion.R`](R/occlusion.R) | `spatial_occlusion()` — does the trained network use the neighbourhood, or only the centre pixel? |
 | [`R/smearing.R`](R/smearing.R) | `smearing_factor()` · `smear()` — the back-transform of a log-trained median, and the one surface that may be summed |
 | [`R/test_optimism.R`](R/test_optimism.R) | `freeze_selection()` · `score_test_grid()` — the test set, scored only after the choice is locked |
+| [`R/importance.R`](R/importance.R) | `dsm_importance()` and its methods — permutation, context, SHAP (expected and integrated gradients, the kernel), SAGE, ALE; the groups and the one-hot sets; SHAP at points of the map (`importance_points()`, `importance_map()`); `compare_importance()`; `importance_weights()` for the AOA. Every model is held to its run's predictions first |
+| [`R/importance_refit.R`](R/importance_refit.R) | `refit_importance()` — leave one covariate out: the final run's seeds trained again without each variable, in `dsm_final()`'s own workers, once a seed trained again with nothing left out has given the run's predictions back |
+| [`R/importance_plot.R`](R/importance_plot.R) | `plot()` for an importance, a map of SHAP values and a comparison of importances — in base graphics |
 | [`R/globals.R`](R/globals.R) | The column names dplyr resolves at run time, declared for `R CMD check` — each checked against its use |
 | [`R/zzz.R`](R/zzz.R) | `.onLoad()`: registers the built-in models, and fingerprints the code it loaded — every worker compares its own with it before it starts |
 
@@ -511,8 +577,8 @@ Beside `R/`:
 
 | Where | What |
 |------|---------|
-| [`DESCRIPTION`](DESCRIPTION) · [`NAMESPACE`](NAMESPACE) | The package, `soilcnn`: what it imports, and the 64 functions it exports — the `dsm_*()` front end, the resampling specs and fold constructors, the model registry, and the tools applied to results (AOA, conformal intervals, smearing, metrics, noise floor, occlusion). The runners underneath `dsm_train()`, the patch store's plumbing and the helpers are internal (`soilcnn:::`); `pkgload::load_all()` on the source tree makes every function visible. NAMESPACE is what roxygen2 writes from the `@export` tags, and `tests/test_package_metadata.R` checks that it still is |
-| [`tests/run_all.R`](tests/run_all.R) | 31 files: 25 fast, then 6 slow ones that train, map, prepare a store, and build and install the package. The package is loaded once for the suite. Every accumulator is named and `.report()` refuses an empty, unnamed, NA-bearing or non-logical one. `test_sources_parse.R` runs first and is the authority on syntax. |
+| [`DESCRIPTION`](DESCRIPTION) · [`NAMESPACE`](NAMESPACE) | The package, `soilcnn`: what it imports, and the 76 functions it exports — the `dsm_*()` front end, the resampling specs and fold constructors, the model registry, the importance methods, and the tools applied to results (AOA, conformal intervals, smearing, metrics, noise floor, occlusion). The runners underneath `dsm_train()`, the patch store's plumbing and the helpers are internal (`soilcnn:::`); `pkgload::load_all()` on the source tree makes every function visible. NAMESPACE is what roxygen2 writes from the `@export` tags, and `tests/test_package_metadata.R` checks that it still is |
+| [`tests/run_all.R`](tests/run_all.R) | 33 files: 26 fast, then 7 slow ones that train, map, prepare a store, and build and install the package. The package is loaded once for the suite. Every accumulator is named and `.report()` refuses an empty, unnamed, NA-bearing or non-logical one. `test_sources_parse.R` runs first and is the authority on syntax. |
 | [`tools/check_package.R`](tools/check_package.R) | Runs `R CMD check` on a staged copy of the package's own files |
 | [`docs/`](docs/) | [`architecture.md`](docs/architecture.md) (the network), [`design_decisions.md`](docs/design_decisions.md) (the reason for each choice), [`tuning_guide.md`](docs/tuning_guide.md) (the search space) |
 

@@ -654,3 +654,7 @@ and each is written where the code that implements it lives:
 | the dissimilarity index and the area of applicability | `R/aoa.R` |
 | the map: the network run fully convolutionally where that is exact | `R/predict.R`; `architecture.md` |
 | the package: one way to load, and workers that load what their session loaded | `R/utils.R` (`.pkg_loader()`), `R/zzz.R`; README, "Loading it" |
+| variable importance with the method as an argument -- permutation (over all rows or within blocks), context, SHAP, SAGE, refit, ALE -- and every model held to its run's predictions, point by point, before anything is perturbed | `R/importance.R`; README, "What the model learned" |
+| the categorical's one-hot channels perturbed as one variable, the sets inferred from the names and the data; themes as groups of the user's | `R/importance.R` (`importance_groups()`) |
+| a variable left out of a refit set to its training mean rather than taken out of the network, so the refit differs from the run's seed in nothing else; the refit trained by `dsm_final()`'s own workers and checked by a seed trained again with nothing left out | `R/importance_refit.R`, `R/final.R` |
+| the importance as the weights of the dissimilarity index | `R/importance.R` (`importance_weights()`), `R/aoa.R` |

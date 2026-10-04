@@ -310,6 +310,44 @@ describe different aspects of reliability.
 The maps of the application will be shown here once its full run is
 complete.
 
+## 9. What the model learned
+
+```{r}
+themes <- read.csv2("importance_themes.csv")[, c("channel", "variable")]
+perm <- dsm_importance(final, data, groups = themes)
+shap <- dsm_importance(final, data, shap_importance(), groups = themes)
+compare_importance(permutation = perm, shap = shap)
+plot(shap)
+```
+
+`dsm_importance()` takes the method as an argument, as `dsm_train()` takes the
+validation design:
+
+- `permutation_importance()`: how much the model relies on a variable; with
+  `within =`, what the variable adds beyond the place;
+- `context_importance()`: how far from the point, and through which window,
+  the network reads;
+- `shap_importance()`: how each variable pushes each prediction, up or down;
+  with `at =` points of the map, its maps (`importance_map()`);
+- `sage_importance()`: how much of the skill each theme carries, a signal two
+  themes share split between them;
+- `refit_importance()`: whether a variable is needed at all, the seeds trained
+  again without it;
+- `ale_effect()`: how the prediction changes along each variable's range.
+
+With many correlated predictors, themes are the unit to read: a table of
+yours (`channel`, `variable`) groups the channels, and the channels of one
+categorical always move together. `rows = "folds"` scores the tuning run's
+fold models instead of the final seeds, which is how two validation designs
+are compared on what their models learned.
+
+Every model must first give back, point by point, the predictions its run
+wrote, and a refit must first train a seed again and get them back. An
+importance measured on another model would look just as plausible.
+
+The application's importances will be shown here once its full run is
+complete.
+
 ## About the illustrations
 
 Profile locations come from the full SOC 0-30 cm application at 250 m. The
