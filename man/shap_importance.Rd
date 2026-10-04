@@ -5,10 +5,12 @@
 \title{SHAP importance: how each variable pushes each prediction, up or down.}
 \usage{
 shap_importance(
-  estimator = c("expected_gradients", "integrated_gradients"),
+  estimator = c("expected_gradients", "integrated_gradients", "kernel"),
   samples = 100L,
-  background = 200L,
+  background = NULL,
   steps = 50L,
+  permutations = 64L,
+  max_points = NULL,
   seed = 42L
 )
 }
@@ -19,16 +21,34 @@ random, so no baseline is chosen by hand -- the values are SHAP values of
 the network, and the same estimator as SHAP's GradientExplainer.
 "integrated_gradients" (Sundararajan et al. 2017): one baseline, the
 training mean of every channel -- the average landscape, flat, which no
-point is -- kept because its sum is exact rather than sampled.}
+point is -- kept because its sum is exact rather than sampled.
+"kernel": the Shapley values of the variables themselves, computed from
+coalitions, with no gradient (Lundberg & Lee 2017's KernelSHAP game): the
+value of a set of variables is the mean prediction, over a background of
+training points, with the variables outside it taken from the background
+point -- the whole patch, the same point in every window. Exact over
+every coalition up to 14 variables; by sampled permutations above, up to
+40. Meant for a few variables -- give \code{groups} themes -- and a few points.
+Read against the gradient estimators: they share the total and split it
+alike when the variables do not interact, so where they part is how much
+the variables do.}
 
 \item{samples}{For expected gradients: draws per point, each a background
 point and a place on the straight path to it. The noise they leave is
 reported.}
 
-\item{background}{For expected gradients: how many of the model's training
-points the references are drawn from.}
+\item{background}{How many of the model's training points the references
+are drawn from. NULL: 200 for expected gradients, 16 for the kernel --
+each coalition costs one pass per background point.}
 
 \item{steps}{For integrated gradients: points on the path.}
+
+\item{permutations}{For the kernel above 14 variables: permutations
+sampled (in pairs, each with its reverse).}
+
+\item{max_points}{Explain this many of the rows only, drawn at random --
+the same rows for every estimator, so two can be compared point by point.
+NULL: every row for the gradient estimators, 200 for the kernel.}
 
 \item{seed}{Seed of the draws, shared by every model.}
 }

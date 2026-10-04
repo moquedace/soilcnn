@@ -16,7 +16,9 @@ labels; unnamed ones are labelled by run, rows and method.}
 An \code{importance_comparison}: \code{table} (one row per target: each
 importance, its rank, and its share of that importance's largest),
 \code{agreement} (Spearman's correlation between the rankings, over the
-variables they share) and \code{labels}.
+variables they share), \code{labels}, and for two SHAP importances of the same
+points \code{points_agreement} (per variable, the correlation of their values
+point by point and their mean difference against the second's size).
 }
 \description{
 Aligns importances computed by different methods, variants, rows or runs --

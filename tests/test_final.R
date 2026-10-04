@@ -472,6 +472,20 @@ ok["shap_on_the_folds_explains_each_point_once"] <-
   !anyDuplicated(imp_sf$points$sample_id) && all(!is.na(imp_sf$points$fold))
 ok["shap_compares_with_permutation"] <-
   inherits(compare_importance(imp_t, imp_eg), "importance_comparison")
+# The kernel, on the same files and the same drawn points as expected
+# gradients: its sums exact, the two compared point by point.
+imp_k   <- suppressMessages(dsm_importance(fin, data, shap_importance("kernel", background = 8L,
+                                                                     max_points = 10L),
+                                           verbose = FALSE))
+imp_e10 <- suppressMessages(dsm_importance(fin, data, shap_importance(samples = 20L, background = 8L,
+                                                                     max_points = 10L),
+                                           verbose = FALSE))
+ok["the_kernel_runs_on_the_final_at_the_points_drawn"] <- nrow(imp_k$points) == 10L &&
+  all(imp_k$completeness$rel_noise < 1e-5) && is.null(imp_k$patch)
+ok["two_estimators_explain_the_same_points"] <-
+  identical(sort(imp_k$points$sample_id), sort(imp_e10$points$sample_id))
+ok["and_are_compared_point_by_point"] <-
+  !is.null(compare_importance(imp_e10, imp_k)$points_agreement)
 # ALE, on the same files: a curve per variable, its bins shared by every model
 # of the call -- the three seeds here, the four fold models below.
 imp_ale <- suppressMessages(dsm_importance(fin, data, ale_effect(bins = 5L), verbose = FALSE))

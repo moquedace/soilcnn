@@ -41,6 +41,10 @@
 #      window; the curve is centred; a class's effect is the class difference
 #  11. the importance as the AOA's weights: each channel its variable's, below
 #      zero none, and a map takes them as they come or refuses them
+#  12. the kernel, against Shapley values known in closed form: a linear
+#      model's, a product's interaction split; nothing for what is not read;
+#      exact sums; permutations exact for a linear model; one background point
+#      in every window; and two SHAP importances compared point by point
 #
 # Run: source("<package root>/tests/test_importance.R")
 
@@ -609,6 +613,63 @@ ok["a_map_refuses_weights_it_cannot_place"] <-
   grepl("non-negative", err(.predict_aoa_weights(c(-1, 1), c("a", "b")))) &&
   grepl("value\\(s\\) for", err(.predict_aoa_weights(c(1, 2, 3), c("a", "b")))) &&
   grepl("all zero", err(.predict_aoa_weights(c(0, 0), c("a", "b"))))
+
+# ── 12. the kernel: Shapley values of the variables, from coalitions ──────────
+#
+# In the game the kernel plays -- a variable outside a coalition taken from a
+# background point -- a linear model's values are its weights times the
+# distance to the background's mean, exactly; a product of two variables
+# splits the interaction by Shapley's rule; what the model ignores gets
+# exactly nothing; and every point's values add up exactly. With sampled
+# permutations instead of every coalition, a linear model's values are exact
+# too: each permutation gives a variable the same marginal.
+bg8  <- x5_bg[1:8, , , , drop = FALSE]
+bga8 <- bg_arr[1:8, , , , drop = FALSE]
+r_k <- .importance_kernel_unit(lin_reader(), list(x5), G5, list(bg8), batch_size = 64L)
+ok["kernel_linear_is_weight_times_distance_to_the_background_mean"] <-
+  max(abs(r_k$phi[, 1] - 2 * (a5[, 1, 3, 3] - mean(bga8[, 1, 3, 3])))) < 1e-4 &&
+  max(abs(r_k$phi[, 3] + 0.5 * (mean3 - mean(apply(bga8[, 3, , , drop = FALSE], 1, mean))))) < 1e-4
+ok["kernel_gives_what_the_model_ignores_exactly_nothing"] <- all(r_k$phi[, c(2, 4, 5)] == 0)
+ok["kernel_adds_up_exactly"] <- max(abs(r_k$gap)) < 1e-5
+
+prod_reader <- nn_module("prod_reader", forward = function(x) x[, 1, 3, 3] * x[, 2, 3, 3])
+r_pk <- .importance_kernel_unit(prod_reader(), list(x5), G5, list(bg8), batch_size = 64L)
+b1 <- bga8[, 1, 3, 3]; b2 <- bga8[, 2, 3, 3]
+xx1 <- a5[, 1, 3, 3]; xx2 <- a5[, 2, 3, 3]
+v0 <- mean(b1 * b2); v1 <- xx1 * mean(b2); v2 <- mean(b1) * xx2; v12 <- xx1 * xx2
+ok["kernel_splits_an_interaction_by_shapley"] <-
+  max(abs(r_pk$phi[, 1] - 0.5 * ((v1 - v0) + (v12 - v2)))) < 1e-3 &&
+  max(abs(r_pk$phi[, 2] - 0.5 * ((v2 - v0) + (v12 - v1)))) < 1e-3
+
+r_kp <- .importance_kernel_unit(lin_reader(), list(x5), G5, list(bg8), exact_max = 2L,
+                                permutations = 6L, batch_size = 64L)
+ok["sampled_permutations_are_exact_for_a_linear_model"] <-
+  max(abs(r_kp$phi - r_k$phi)) < 1e-4 && max(abs(r_kp$gap)) < 1e-5
+
+r_k2 <- .importance_kernel_unit(two_win(), list(x3, x5), G5, bg35, batch_size = 64L)
+ok["the_kernel_takes_one_background_point_in_every_window"] <-
+  max(abs(r_k2$phi[, 1] - (a5[, 1, 3, 3] - mean(a5[1:20, 1, 3, 3])))) < 1e-4 &&
+  max(abs(r_k2$phi[, 2] - (a5[, 2, 3, 3] - mean(a5[1:20, 2, 3, 3])))) < 1e-4
+ok["a_kernel_that_does_not_add_up_stops"] <- grepl("do not add up", err(
+  .importance_check_completeness(list(delta = rep(1, 5), gap = rep(0.01, 5)), "kernel", "m")))
+ok["the_kernel_has_its_own_defaults"] <-
+  shap_importance("kernel")$background == 16L && shap_importance("kernel")$max_points == 200L &&
+  shap_importance()$background == 200L && is.null(shap_importance()$max_points)
+ok["too_many_variables_for_the_kernel_are_refused"] <-
+  grepl("up to 40", err(.importance_kernel_size(41L)))
+
+# TWO SHAP IMPORTANCES OF THE SAME POINTS, compared point by point: the same
+# values correlate at 1, a variable's sign flipped at -1.
+fake_shap <- function(phi) structure(list(
+  table = tibble::tibble(rank = 1:2, variable = c("a", "b"), importance = colMeans(abs(phi))),
+  points = tibble::tibble(sample_id = seq_len(nrow(phi)), a = phi[, 1], b = phi[, 2]),
+  method = list(kind = "shap", metric = "ccc"), label = "s"), class = "dsm_importance")
+P <- matrix(stats::rnorm(40), 20, 2)
+cmp_p <- compare_importance(one = fake_shap(P), two = fake_shap(cbind(P[, 1], -P[, 2])))
+ok["two_shaps_are_compared_point_by_point"] <-
+  isTRUE(all.equal(cmp_p$points_agreement$r, c(1, -1))) &&
+  attr(cmp_p$points_agreement, "n_points") == 20L
+ok["the_point_comparison_prints"] <- any(grepl("point by point", capture.output(print(cmp_p))))
 
 ok["ale_wants_two_bins"] <- grepl("2 or more", err(ale_effect(bins = 1)))
 ok["ale_wants_distinct_names"] <- grepl("distinct", err(ale_effect(variables = c("a", "a"))))

@@ -278,12 +278,28 @@ context_importance <- function(by = c("ring", "window"), bands = NULL, per_varia
 #'   "integrated_gradients" (Sundararajan et al. 2017): one baseline, the
 #'   training mean of every channel -- the average landscape, flat, which no
 #'   point is -- kept because its sum is exact rather than sampled.
+#'   "kernel": the Shapley values of the variables themselves, computed from
+#'   coalitions, with no gradient (Lundberg & Lee 2017's KernelSHAP game): the
+#'   value of a set of variables is the mean prediction, over a background of
+#'   training points, with the variables outside it taken from the background
+#'   point -- the whole patch, the same point in every window. Exact over
+#'   every coalition up to 14 variables; by sampled permutations above, up to
+#'   40. Meant for a few variables -- give `groups` themes -- and a few points.
+#'   Read against the gradient estimators: they share the total and split it
+#'   alike when the variables do not interact, so where they part is how much
+#'   the variables do.
 #' @param samples For expected gradients: draws per point, each a background
 #'   point and a place on the straight path to it. The noise they leave is
 #'   reported.
-#' @param background For expected gradients: how many of the model's training
-#'   points the references are drawn from.
+#' @param background How many of the model's training points the references
+#'   are drawn from. NULL: 200 for expected gradients, 16 for the kernel --
+#'   each coalition costs one pass per background point.
 #' @param steps For integrated gradients: points on the path.
+#' @param permutations For the kernel above 14 variables: permutations
+#'   sampled (in pairs, each with its reverse).
+#' @param max_points Explain this many of the rows only, drawn at random --
+#'   the same rows for every estimator, so two can be compared point by point.
+#'   NULL: every row for the gradient estimators, 200 for the kernel.
 #' @param seed Seed of the draws, shared by every model.
 #' @return An `importance_spec`, for [dsm_importance()].
 #' @details The values are in the units the network predicts in: for a log1p
@@ -294,8 +310,9 @@ context_importance <- function(by = c("ring", "window"), bands = NULL, per_varia
 #'   if they do not. SHAP by deep-network rules (DeepSHAP) is not offered: it
 #'   needs a propagation rule written for every layer of this architecture.
 #' @export
-shap_importance <- function(estimator = c("expected_gradients", "integrated_gradients"),
-                            samples = 100L, background = 200L, steps = 50L, seed = 42L) {
+shap_importance <- function(estimator = c("expected_gradients", "integrated_gradients", "kernel"),
+                            samples = 100L, background = NULL, steps = 50L,
+                            permutations = 64L, max_points = NULL, seed = 42L) {
   estimator <- match.arg(estimator)
   whole <- function(v, what, min = 1) {
     if (!is.numeric(v) || length(v) != 1L || !is.finite(v) || v < min || v != round(v)) {
@@ -303,16 +320,21 @@ shap_importance <- function(estimator = c("expected_gradients", "integrated_grad
     }
     as.integer(v)
   }
+  is_kernel  <- identical(estimator, "kernel")
   samples    <- whole(samples, "samples")
-  background <- whole(background, "background", 2)
+  background <- whole(background %||% if (is_kernel) 16L else 200L, "background", 2)
   steps      <- whole(steps, "steps", 2)
+  permutations <- whole(permutations, "permutations", 2)
+  max_points <- max_points %||% if (is_kernel) 200L else NULL
+  if (!is.null(max_points)) max_points <- whole(max_points, "max_points", 2)
   if (!is.numeric(seed) || length(seed) != 1L || !is.finite(seed)) {
     stop("seed must be one number.", call. = FALSE)
   }
   # draws, metric, within and fill are what the frame reads of every method; a
   # SHAP value is one pass of the model per sample, scored against nothing.
   structure(list(kind = "shap", estimator = estimator, samples = samples,
-                 background = background, steps = steps, seed = as.integer(seed),
+                 background = background, steps = steps, permutations = permutations,
+                 max_points = max_points, seed = as.integer(seed),
                  draws = 1L, metric = "ccc", within = NULL, fill = "permute"),
             class = "importance_spec")
 }
@@ -369,12 +391,14 @@ ale_effect <- function(variables = NULL, bins = 20L) {
                      sprintf(", %d variable(s)", length(spec$variables))))
   }
   if (identical(spec$kind, "shap")) {
-    return(if (identical(spec$estimator, "expected_gradients")) {
-      sprintf("SHAP by expected gradients, %d sample(s) over %d background point(s)",
-              spec$samples, spec$background)
-    } else {
-      sprintf("SHAP by integrated gradients, %d step(s) from the training mean", spec$steps)
-    })
+    pts <- if (is.null(spec$max_points)) "" else sprintf(", at most %d point(s)", spec$max_points)
+    return(switch(spec$estimator,
+      expected_gradients = sprintf("SHAP by expected gradients, %d sample(s) over %d background point(s)%s",
+                                   spec$samples, spec$background, pts),
+      integrated_gradients = sprintf("SHAP by integrated gradients, %d step(s) from the training mean%s",
+                                     spec$steps, pts),
+      kernel = sprintf("SHAP by kernel, Shapley over the variables, %d background point(s)%s",
+                       spec$background, pts)))
   }
   if (identical(spec$kind, "context")) {
     what <- if (identical(spec$by, "window")) "by window (each branch's whole input)" else
@@ -1062,6 +1086,12 @@ dsm_importance <- function(final, data, method = permutation_importance(),
 # lowered, its texture kept.
 .importance_forward <- function(model, inputs, batch_size, mask = NULL, donor = NULL,
                                  fill = NULL, shift = NULL) {
+  # EVALUATION MODE, HERE, FOR EVERY CALLER. A module is built in training mode:
+  # dropout on, batch norm on each batch's own statistics. The SHAP run, once
+  # reorganised, took the model's reference predictions before anything had
+  # called eval() -- the check refused it, 4.4x off the run's own (2026-10-03).
+  # A forward that is only ever for importance sets the mode itself.
+  model$eval()
   n <- as.integer(inputs[[1]]$shape[1])
   out <- numeric(n)
   masks <- if (is.null(mask)) NULL else if (is.list(mask)) mask else rep(list(mask), length(inputs))
@@ -1211,26 +1241,31 @@ dsm_importance <- function(final, data, method = permutation_importance(),
   ws_model <- as.integer(units$cfg[[1]]$window_sizes[[1]])
   keys <- patch_window_key(ws_model)
   b_size <- min(batch_size, 128L)
-  is_eg  <- identical(method$estimator, "expected_gradients")
-  K <- if (is_eg) method$samples else method$steps
+  est    <- method$estimator
+  is_eg  <- identical(est, "expected_gradients")
+  needs_bg <- est %in% c("expected_gradients", "kernel")
+  K <- switch(est, expected_gradients = method$samples, integrated_gradients = method$steps,
+              kernel = NA_integer_)
+  if (identical(est, "kernel")) .importance_kernel_size(ncol(G))
 
   say(sprintf("Importance -- %s | %s of final run '%s' (%s)", .importance_label(method),
               if (rows == "test") "test set" else "fold validation rows",
               basename(fr$run_dir), fr$config_id))
   say("  ", .importance_groups_line(grp))
-  say(sprintf("  %d model(s) x %d %s, each a forward and a backward pass over each model's rows",
-              nrow(units), K, if (is_eg) "sample(s)" else "step(s)"))
+  say("  ", .importance_shap_cost_line(method, ncol(G), nrow(units)))
 
   device <- torch::torch_device("cpu")
   baseline <- list(); per_model <- list(); comp <- list()
   phi_of <- list(); fx_of <- list(); ref_of <- list(); ring_of <- list(); pix_of <- list()
-  cache <- NULL; cache_key <- NULL; bg <- NULL; draws <- NULL; fill <- NULL
+  sel_of <- list()
+  cache <- NULL; cache_key <- NULL; bg <- NULL; draws <- NULL; fill <- NULL; sel <- NULL
   t0 <- Sys.time()
   for (u in seq_len(nrow(units))) {
     un <- units[u, , drop = FALSE]
     rows_u <- un$rows[[1]]
-    # ONE CACHE, ONE BACKGROUND AND ONE SET OF DRAWS PER ROW SET: every seed of
-    # a final run gets the same references and the same places on the path.
+    # ONE CACHE, ONE BACKGROUND, ONE SET OF ROWS AND ONE SET OF DRAWS PER ROW
+    # SET: every seed of a final run gets the same references, the same places
+    # on the path, and explains the same points.
     if (!identical(cache_key, un$cache_key)) {
       cache <- NULL; bg <- NULL; invisible(gc(verbose = FALSE))
       ws_all <- sort(unique(unlist(un$cfg[[1]]$window_sizes)))
@@ -1239,7 +1274,12 @@ dsm_importance <- function(final, data, method = permutation_importance(),
                                 scaling = un$scaling[[1]], verbose = FALSE)$cache[[un$role]]
       cache_key <- un$cache_key
       train <- un$train_rows[[1]]
-      if (is_eg) {
+      # THE ROWS EXPLAINED: all, or max_points of them drawn by the seed alone,
+      # so two estimators with one seed explain the same points.
+      n_all <- length(rows_u)
+      sel <- if (is.null(method$max_points) || method$max_points >= n_all) seq_len(n_all) else
+        with_local_seed(method$seed + 31L, sort(sample.int(n_all, method$max_points)))
+      if (needs_bg) {
         # THE MODEL'S OWN TRAINING POINTS are the background: the reference a
         # SHAP value is measured from is the distribution the model learned on,
         # never the rows being explained.
@@ -1249,15 +1289,14 @@ dsm_importance <- function(final, data, method = permutation_importance(),
         bg <- build_fold_cache(data$store, data$points, data$type_table,
                                list(background = bg_rows), ws_all,
                                scaling = un$scaling[[1]], verbose = FALSE)$cache$background
-        n <- length(rows_u)
-        draws <- with_local_seed(method$seed, list(
-          j = matrix(sample.int(length(bg_rows), n * K, replace = TRUE), n, K),
-          a = matrix(stats::runif(n * K), n, K)))
-        fill <- NULL
-      } else {
-        fill <- .importance_fill_values(data, un$scaling[[1]], train)
-        draws <- NULL
       }
+      n <- length(sel)
+      draws <- if (is_eg) with_local_seed(method$seed, list(
+        j = matrix(sample.int(length(bg_rows), n * K, replace = TRUE), n, K),
+        a = matrix(stats::runif(n * K), n, K))) else NULL
+      fill <- if (identical(est, "integrated_gradients")) {
+        .importance_fill_values(data, un$scaling[[1]], train)
+      } else NULL
     }
     cfg <- un$cfg[[1]]
     inputs <- lapply(keys, function(k) cache[[k]])
@@ -1267,26 +1306,36 @@ dsm_importance <- function(final, data, method = permutation_importance(),
     model$load_state_dict(torch::torch_load(un$model_file))
     model$to(device = device)
 
-    res <- .importance_shap_unit(model, inputs, as.numeric(meta_u$target_native),
-                                 as.numeric(meta_u$target_transform), G, method$estimator,
-                                 bg_inputs = if (is_eg) lapply(keys, function(k) bg[[k]]) else NULL,
-                                 draws = draws, fill = fill, K = K, transform = transform,
-                                 clamp = clamp, batch_size = b_size)
-    .importance_check_baseline(res$baseline, un)
-    comp[[u]] <- .importance_check_completeness(res, method$estimator, un$unit)
-    baseline[[u]] <- dplyr::mutate(res$baseline, unit = un$unit, .before = 1)
+    # THE MODEL'S OWN SCORE, ON EVERY ROW, before any is explained: the check
+    # is against what the run wrote, which is for the whole set.
+    f_full <- .importance_forward(model, inputs, batch_size)
+    base <- tibble::as_tibble(.importance_scores(
+      f_full, as.numeric(meta_u$target_native), as.numeric(meta_u$target_transform),
+      transform, clamp))
+    .importance_check_baseline(base, un, pred_t = f_full, sample_id = meta_u$sample_id,
+                               obs = as.numeric(meta_u$target_native))
+    sub <- if (length(sel) == n_all) inputs else {
+      st <- torch::torch_tensor(as.integer(sel), dtype = torch::torch_long())
+      lapply(inputs, function(t) torch::torch_index_select(t, 1L, st))
+    }
+    res <- .importance_attribute(model, sub, G, method, K = K,
+                                 bg_inputs = if (needs_bg) lapply(keys, function(k) bg[[k]]) else NULL,
+                                 draws = draws, fill = fill, transform = transform, clamp = clamp,
+                                 batch_size = b_size)
+    comp[[u]] <- .importance_check_completeness(res, est, un$unit)
+    baseline[[u]] <- dplyr::mutate(base, unit = un$unit, .before = 1)
     per_model[[u]] <- tibble::tibble(unit = un$unit, variable = names(vars),
                                      importance = colMeans(abs(res$phi)),
                                      mean_signed = colMeans(res$phi))
     phi_of[[u]] <- res$phi; fx_of[[u]] <- res$f_x; ref_of[[u]] <- res$f_x - res$delta
-    ring_of[[u]] <- res$ring_abs; pix_of[[u]] <- res$pix_abs
-    rm(model); invisible(gc(verbose = FALSE))
+    ring_of[[u]] <- res$ring_abs; pix_of[[u]] <- res$pix_abs; sel_of[[u]] <- sel
+    rm(model, sub); invisible(gc(verbose = FALSE))
 
     el <- as.numeric(difftime(Sys.time(), t0, units = "mins"))
     say(sprintf("  [%d/%d] %s: CCC %.4f, as its run wrote | values add up%s | %.1f min%s",
-                u, nrow(units), un$unit, res$baseline$ccc,
+                u, nrow(units), un$unit, base$ccc,
                 if (is_eg) sprintf(" (sampling noise %.1f%%)", 100 * comp[[u]]$rel_noise) else
-                  sprintf(" (to %.2f%%)", 100 * comp[[u]]$rel_noise),
+                  sprintf(" (to %.2g%%)", 100 * comp[[u]]$rel_noise),
                 el, .importance_eta(el / u * (nrow(units) - u))))
   }
   rm(cache, bg); invisible(gc(verbose = FALSE))
@@ -1296,7 +1345,7 @@ dsm_importance <- function(final, data, method = permutation_importance(),
   # being additive in the model.
   sets <- split(seq_len(nrow(units)), factor(units$cache_key, levels = unique(units$cache_key)))
   pts <- lapply(sets, function(us) {
-    r <- units$rows[[us[1]]]
+    r <- units$rows[[us[1]]][sel_of[[us[1]]]]
     phi <- Reduce(`+`, phi_of[us]) / length(us)
     colnames(phi) <- names(vars)
     dplyr::bind_cols(
@@ -1308,7 +1357,8 @@ dsm_importance <- function(final, data, method = permutation_importance(),
       tibble::as_tibble(phi, .name_repair = "minimal"))
   })
   points <- dplyr::bind_rows(pts)
-  all_rows <- unlist(lapply(sets, function(us) units$rows[[us[1]]]), use.names = FALSE)
+  all_rows <- unlist(lapply(sets, function(us) units$rows[[us[1]]][sel_of[[us[1]]]]),
+                     use.names = FALSE)
   # From the matrices, not from `points`: a variable named like one of its
   # columns (x, y) would be read as the coordinate there.
   phi_all <- do.call(rbind, lapply(sets, function(us) Reduce(`+`, phi_of[us]) / length(us)))
@@ -1346,17 +1396,21 @@ dsm_importance <- function(final, data, method = permutation_importance(),
 
   # WHERE IN THE PATCH: per variable, window and ring, the mean |SHAP| of the
   # ring's pixels summed -- and per window, every channel's |SHAP| pixel by
-  # pixel, the classic attribution map of the input.
-  ring_mean <- Reduce(`+`, ring_of) / length(ring_of)
-  patch <- dplyr::bind_rows(lapply(seq_along(ws_model), function(i) {
-    r_max <- (ws_model[i] - 1L) %/% 2L
-    tibble::tibble(variable = rep(names(vars), times = r_max + 1L),
-                   window = keys[i], ring = rep(0:r_max, each = length(vars)),
-                   mean_abs = as.vector(ring_mean[, i, seq_len(r_max + 1L)]))
-  }))
-  pixels <- stats::setNames(lapply(seq_along(ws_model), function(i) {
-    Reduce(`+`, lapply(pix_of, `[[`, i)) / length(pix_of)
-  }), keys)
+  # pixel, the classic attribution map of the input. The kernel has none: its
+  # players are variables, whole patches, not pixels.
+  patch <- NULL; pixels <- NULL
+  if (!identical(est, "kernel")) {
+    ring_mean <- Reduce(`+`, ring_of) / length(ring_of)
+    patch <- dplyr::bind_rows(lapply(seq_along(ws_model), function(i) {
+      r_max <- (ws_model[i] - 1L) %/% 2L
+      tibble::tibble(variable = rep(names(vars), times = r_max + 1L),
+                     window = keys[i], ring = rep(0:r_max, each = length(vars)),
+                     mean_abs = as.vector(ring_mean[, i, seq_len(r_max + 1L)]))
+    }))
+    pixels <- stats::setNames(lapply(seq_along(ws_model), function(i) {
+      Reduce(`+`, lapply(pix_of, `[[`, i)) / length(pix_of)
+    }), keys)
+  }
 
   out <- structure(list(
     table = tab, by_model = by_model, baseline = dplyr::bind_rows(baseline),
@@ -1466,6 +1520,131 @@ dsm_importance <- function(final, data, method = permutation_importance(),
        pix_abs = lapply(pix_abs, function(m) m / n))
 }
 
+# The attributions of one model, by the estimator asked for.
+.importance_attribute <- function(model, inputs, G, method, K, bg_inputs = NULL, draws = NULL,
+                                  fill = NULL, transform = identity, clamp = c(0, Inf),
+                                  batch_size = 128L) {
+  if (identical(method$estimator, "kernel")) {
+    return(.importance_kernel_unit(model, inputs, G, bg_inputs, permutations = method$permutations,
+                                   seed = method$seed, batch_size = max(batch_size, 512L)))
+  }
+  n <- as.integer(inputs[[1]]$shape[1])
+  .importance_shap_unit(model, inputs, rep(NA_real_, n), rep(NA_real_, n), G, method$estimator,
+                        bg_inputs = bg_inputs, draws = draws, fill = fill, K = K,
+                        transform = transform, clamp = clamp, batch_size = batch_size)
+}
+
+# How many variables the kernel can take: every coalition up to 14, sampled
+# permutations up to 40 -- beyond, a permutation is a pass per variable per
+# background point per point, and themes are what the method is for.
+.importance_kernel_size <- function(M) {
+  if (M > 40L) {
+    stop("The kernel estimator takes up to 40 variables; this grouping has ", M, ". Give ",
+         "groups = a table of themes, or use expected gradients.", call. = FALSE)
+  }
+  invisible(M)
+}
+
+# What a SHAP run will do, in a line.
+.importance_shap_cost_line <- function(method, M, n_models) {
+  switch(method$estimator,
+    expected_gradients = sprintf("%d model(s) x %d sample(s), each a forward and a backward pass over each model's rows",
+                                 n_models, method$samples),
+    integrated_gradients = sprintf("%d model(s) x %d step(s), each a forward and a backward pass over each model's rows",
+                                   n_models, method$steps),
+    kernel = if (M <= 14L) {
+      sprintf("%d model(s) x every one of %s coalitions of %d variable(s) x %d background point(s), forward passes",
+              n_models, format(2^M, big.mark = ","), M, method$background)
+    } else {
+      sprintf("%d model(s) x %d sampled permutation(s) of %d variable(s) x %d background point(s), forward passes",
+              n_models, 2L * (method$permutations %/% 2L), M, method$background)
+    })
+}
+
+# The Shapley values of the variables, from coalitions (the KernelSHAP game,
+# Lundberg & Lee 2017), for one model. Kept apart from the files so the tests
+# can hand it a model whose values are known.
+#
+# THE VALUE OF A COALITION is the mean prediction, over the background points,
+# with every channel of a variable outside the coalition taken from the
+# background point: the whole patch, the same point in every window -- a
+# point's windows are one place, and so are its reference's. With every
+# coalition (up to `exact_max` variables) the values are the Shapley values
+# themselves; above, sampled permutations, each with its reverse, estimate
+# them. Either way they add up exactly, the coalition of all being the
+# prediction and the empty one the background's mean.
+.importance_kernel_unit <- function(model, inputs, G, bg_inputs, exact_max = 14L,
+                                    permutations = 64L, seed = 42L, batch_size = 512L) {
+  model$eval()
+  n    <- as.integer(inputs[[1]]$shape[1])
+  n_ch <- as.integer(inputs[[1]]$shape[2])
+  M    <- ncol(G)
+  B    <- as.integer(bg_inputs[[1]]$shape[1])
+  # Every (point, background point) pair is one row of the passes: in batches
+  # of rows, the point's and the reference's patches picked by index -- no
+  # stack of n x B patches is ever made.
+  pt_idx <- rep(seq_len(n), times = B)
+  bg_idx <- rep(seq_len(B), each = n)
+  value <- function(S) {
+    keep <- torch::torch_tensor(as.vector(G %*% as.numeric(S)) > 0,
+                                dtype = torch::torch_bool())$view(c(1L, n_ch, 1L, 1L))
+    out <- numeric(n * B)
+    torch::with_no_grad({
+      for (s in seq.int(1L, n * B, by = batch_size)) {
+        e  <- min(n * B, s + batch_size - 1L)
+        pi_t <- torch::torch_tensor(pt_idx[s:e], dtype = torch::torch_long())
+        bi_t <- torch::torch_tensor(bg_idx[s:e], dtype = torch::torch_long())
+        xb <- lapply(seq_along(inputs), function(i) {
+          torch::torch_where(keep, torch::torch_index_select(inputs[[i]], 1L, pi_t),
+                             torch::torch_index_select(bg_inputs[[i]], 1L, bi_t))
+        })
+        out[s:e] <- as.numeric(do.call(model, unname(xb))$to(device = "cpu"))
+      }
+    })
+    rowMeans(matrix(out, nrow = n, ncol = B))
+  }
+
+  if (M <= exact_max) {
+    n_coal <- 2^M
+    bits <- 2^(seq_len(M) - 1L)
+    member <- function(m) bitwAnd(m, bits) > 0
+    V <- matrix(NA_real_, n, n_coal)
+    for (m in 0:(n_coal - 1)) V[, m + 1] <- value(member(m))
+    size <- vapply(0:(n_coal - 1), function(m) sum(member(m)), numeric(1))
+    w <- factorial(0:(M - 1)) * factorial((M - 1):0) / factorial(M)
+    phi <- matrix(0, n, M)
+    for (i in seq_len(M)) {
+      without <- which(bitwAnd(0:(n_coal - 1), bits[i]) == 0) - 1
+      for (m in without) {
+        phi[, i] <- phi[, i] + w[size[m + 1] + 1] * (V[, m + bits[i] + 1] - V[, m + 1])
+      }
+    }
+    v_empty <- V[, 1]
+    v_full  <- V[, n_coal]
+  } else {
+    half  <- max(1L, permutations %/% 2L)
+    perms <- with_local_seed(seed + 101L, lapply(seq_len(half), function(p) sample.int(M)))
+    perms <- c(perms, lapply(perms, rev))
+    v_empty <- value(rep(FALSE, M))
+    v_full  <- value(rep(TRUE, M))
+    phi <- matrix(0, n, M)
+    for (pm in perms) {
+      S <- rep(FALSE, M)
+      prev <- v_empty
+      for (k in seq_len(M)) {
+        S[pm[k]] <- TRUE
+        cur <- if (k == M) v_full else value(S)
+        phi[, pm[k]] <- phi[, pm[k]] + (cur - prev)
+        prev <- cur
+      }
+    }
+    phi <- phi / length(perms)
+  }
+  delta <- v_full - v_empty
+  list(phi = phi, f_x = v_full, delta = delta, gap = rowSums(phi) - delta,
+       ring_abs = NULL, pix_abs = NULL)
+}
+
 # THE CHECK THAT STOPS, for attributions: they must add up. Each point's values
 # sum to its prediction less the reference -- exactly, for integrated
 # gradients, up to how finely the path is cut; on average, for expected
@@ -1479,6 +1658,16 @@ dsm_importance <- function(final, data, method = permutation_importance(),
   out <- tibble::tibble(unit = unit, mean_gap = mean(gap), sd_gap = stats::sd(gap),
                         rel_noise = mean(abs(gap)) / scale, rel_bias = abs(mean(gap)) / scale)
   if (!is.finite(scale) || scale <= 0) return(out)       # one prediction for all: nothing to share
+  if (identical(estimator, "kernel")) {
+    # Exact by construction: the coalition of all is the prediction and the
+    # empty one the background's mean. Off by more than rounding is wiring.
+    if (out$rel_noise > 1e-5) {
+      stop(sprintf(paste0("Model %s: its Shapley values do not add up to the prediction less the ",
+                          "background's mean (off by %.2g%%): the coalitions are not the model's."),
+                   unit, 100 * out$rel_noise), call. = FALSE)
+    }
+    return(out)
+  }
   if (identical(estimator, "integrated_gradients")) {
     if (out$rel_noise > 0.05) {
       stop(sprintf(paste0("Model %s: its integrated gradients add up to the prediction less the ",
@@ -1594,8 +1783,12 @@ importance_points <- function(final, data, extent = NULL, every = 1L, rasters = 
   single <- names(vars)[lengths(vars) == 1L]
   w_small <- min(ws)
   c0 <- (w_small + 1L) %/% 2L
-  is_eg <- identical(method$estimator, "expected_gradients")
-  K <- if (is_eg) method$samples else method$steps
+  est <- method$estimator
+  is_eg <- identical(est, "expected_gradients")
+  needs_bg <- est %in% c("expected_gradients", "kernel")
+  if (identical(est, "kernel")) .importance_kernel_size(ncol(G))
+  K <- switch(est, expected_gradients = method$samples, integrated_gradients = method$steps,
+              kernel = NA_integer_)
   b_size <- min(batch_size, 128L)
   quiet <- function(...) invisible(NULL)
   extract <- function(xy) {
@@ -1633,7 +1826,7 @@ importance_points <- function(final, data, extent = NULL, every = 1L, rasters = 
   split <- readRDS(file.path(fr$run_dir, "run_spec.rds"))$split
   train <- as.integer(split$train)
   bg <- NULL; fill <- NULL
-  if (is_eg) {
+  if (needs_bg) {
     bg_rows <- with_local_seed(method$seed + 7919L, {
       if (length(train) > method$background) sort(sample(train, method$background)) else train
     })
@@ -1658,8 +1851,8 @@ importance_points <- function(final, data, extent = NULL, every = 1L, rasters = 
   say(sprintf("  the probe: %d of the store's profiles cut again by this path, as the store holds them (worst %.1e)",
               n_probe, worst))
   say("  ", .importance_groups_line(grp))
-  say(sprintf("  %d model(s) x %d %s, in chunks of %s point(s)", nrow(units), K,
-              if (is_eg) "sample(s)" else "step(s)", format(chunk_points, big.mark = ",")))
+  say("  ", .importance_shap_cost_line(method, ncol(G), nrow(units)),
+      sprintf(", in chunks of %s point(s)", format(chunk_points, big.mark = ",")))
 
   pts <- list(); vals <- list(); comp <- list(); ring_sum <- 0; pix_sum <- NULL
   n_done <- 0L; dropped <- 0L
@@ -1684,10 +1877,9 @@ importance_points <- function(final, data, extent = NULL, every = 1L, rasters = 
       a = matrix(stats::runif(n_ok * K), n_ok, K))) else NULL
     phi <- 0; fx <- 0; fx_nat <- 0; ref <- 0
     for (u in seq_along(models)) {
-      res <- .importance_shap_unit(models[[u]], inputs, rep(NA_real_, n_ok), rep(NA_real_, n_ok),
-                                   G, method$estimator,
-                                   bg_inputs = if (is_eg) lapply(keys, function(k) bg[[k]]) else NULL,
-                                   draws = draws, fill = fill, K = K, transform = transform,
+      res <- .importance_attribute(models[[u]], inputs, G, method, K = K,
+                                   bg_inputs = if (needs_bg) lapply(keys, function(k) bg[[k]]) else NULL,
+                                   draws = draws, fill = fill, transform = transform,
                                    clamp = clamp, batch_size = b_size)
       comp[[length(comp) + 1L]] <- .importance_check_completeness(
         res, method$estimator, sprintf("%s, points %d-%d", units$unit[u], cs, ce))
@@ -1698,9 +1890,11 @@ importance_points <- function(final, data, extent = NULL, every = 1L, rasters = 
       if (is.finite(clamp[1])) pn <- pmax(pn, clamp[1])
       if (is.finite(clamp[2])) pn <- pmin(pn, clamp[2])
       fx_nat <- fx_nat + pn
-      ring_sum <- ring_sum + res$ring_abs * n_ok
-      pix_sum  <- if (is.null(pix_sum)) lapply(res$pix_abs, function(m) m * n_ok) else
-        Map(function(a, b) a + b * n_ok, pix_sum, res$pix_abs)
+      if (!is.null(res$ring_abs)) {
+        ring_sum <- ring_sum + res$ring_abs * n_ok
+        pix_sum  <- if (is.null(pix_sum)) lapply(res$pix_abs, function(m) m * n_ok) else
+          Map(function(a, b) a + b * n_ok, pix_sum, res$pix_abs)
+      }
     }
     nm <- length(models)
     colnames(phi) <- names(vars)
@@ -1746,20 +1940,23 @@ importance_points <- function(final, data, extent = NULL, every = 1L, rasters = 
   tab$rank <- seq_len(nrow(tab))
   tab$target <- tab$variable
   tab <- dplyr::relocate(tab, "rank", "target", "variable", "n_channels")
-  ring_mean <- ring_sum / n_done
-  patch <- dplyr::bind_rows(lapply(seq_along(ws), function(i) {
-    r_max <- (ws[i] - 1L) %/% 2L
-    tibble::tibble(variable = rep(names(vars), times = r_max + 1L), window = keys[i],
-                   ring = rep(0:r_max, each = length(vars)),
-                   mean_abs = as.vector(ring_mean[, i, seq_len(r_max + 1L)]))
-  }))
+  patch <- NULL
+  if (!is.null(pix_sum)) {
+    ring_mean <- ring_sum / n_done
+    patch <- dplyr::bind_rows(lapply(seq_along(ws), function(i) {
+      r_max <- (ws[i] - 1L) %/% 2L
+      tibble::tibble(variable = rep(names(vars), times = r_max + 1L), window = keys[i],
+                     ring = rep(0:r_max, each = length(vars)),
+                     mean_abs = as.vector(ring_mean[, i, seq_len(r_max + 1L)]))
+    }))
+  }
   units_out <- units[, c("unit", "kind", "fold", "seed", "role", "n_rows", "model_file")]
   units_out$role <- "map"
   units_out$n_rows <- n_done
   out <- structure(list(
     table = tab, by_model = by_model, baseline = tibble::tibble(unit = units$unit, ccc = NA_real_),
     points = points, values = values, patch = patch,
-    pixels = stats::setNames(lapply(pix_sum, function(m) m / n_done), keys),
+    pixels = if (is.null(pix_sum)) NULL else stats::setNames(lapply(pix_sum, function(m) m / n_done), keys),
     completeness = dplyr::bind_rows(comp), groups = grp, method = method, rows = "map",
     units = units_out, run_dir = fr$run_dir, config_id = fr$config_id, window_sizes = ws,
     transform_name = data$transform$name %||% "none", rows_alone_share = 0,
@@ -2331,10 +2528,12 @@ print.dsm_importance <- function(x, n = 20L, ...) {
                 mean(b), min(b), max(b)))
   }
   cat("  values in ", .importance_units_text(x$transform_name), "\n", sep = "")
+  is_kernel <- identical(x$method$estimator, "kernel")
   cat(sprintf("  they add up: each point's values sum to its prediction less the %s, %s\n",
-              if (is_eg) "background's mean" else "baseline's",
+              if (is_eg || is_kernel) "background's mean" else "baseline's",
               if (is_eg) sprintf("on average (sampling noise %.1f%% per point)", 100 * mean(cp$rel_noise)) else
-                sprintf("to within %.2f%%", 100 * max(cp$rel_noise))))
+                if (is_kernel) "exactly (the Shapley values of the coalitions)" else
+                  sprintf("to within %.2f%%", 100 * max(cp$rel_noise))))
   cat("  ", .importance_groups_line(x$groups), "\n", sep = "")
   cat(strrep("-", 72), "\n")
   show <- utils::head(x$table, n)
@@ -2348,7 +2547,7 @@ print.dsm_importance <- function(x, n = 20L, ...) {
   cat("  direction: Spearman between the variable's value at the point and its SHAP\n")
   cat("  value -- +1, higher values raise the prediction; NA for a group of channels.\n")
   cat("  $points: every point's values, the map of what drives the prediction where;\n")
-  cat("  $patch and $pixels: where in the patch the attribution sits.\n")
+  if (!is.null(x$patch)) cat("  $patch and $pixels: where in the patch the attribution sits.\n")
   # THE NOISE IS PER POINT. Averaged over the points it washes out of the table
   # above; a map of single points keeps it, and only more samples lower it.
   if (is_eg && mean(cp$rel_noise) > 0.05) {
@@ -2503,7 +2702,9 @@ importance_weights <- function(x) {
 #' @return An `importance_comparison`: `table` (one row per target: each
 #'   importance, its rank, and its share of that importance's largest),
 #'   `agreement` (Spearman's correlation between the rankings, over the
-#'   variables they share) and `labels`.
+#'   variables they share), `labels`, and for two SHAP importances of the same
+#'   points `points_agreement` (per variable, the correlation of their values
+#'   point by point and their mean difference against the second's size).
 #' @export
 compare_importance <- function(..., n = 20L) {
   xs <- list(...)
@@ -2543,8 +2744,38 @@ compare_importance <- function(..., n = 20L) {
     switch(x$method$kind %||% "permutation", shap = "mean |SHAP|", ale = "ALE spread",
            x$method$metric)
   }, character(1))
+  # POINT BY POINT, for two SHAP importances of the same points: per variable,
+  # the correlation of their values over the points both explain, and how far
+  # apart they are against the second's size. Two estimators share each
+  # point's total; where they part, they split it differently -- interactions
+  # between the variables, or the sampling noise of expected gradients.
+  pa <- NULL
+  shp <- which(vapply(xs, function(x) identical(x$method$kind, "shap") && !is.null(x$points),
+                      logical(1)))
+  if (length(shp) >= 2L) {
+    a <- xs[[shp[1]]]$points
+    b <- xs[[shp[2]]]$points
+    key <- function(p) if ("sample_id" %in% names(p)) as.character(p$sample_id) else
+      sprintf("%.10g_%.10g", p$x, p$y)
+    ka <- key(a); kb <- key(b)
+    common <- intersect(ka, kb)
+    if (length(common) >= 3L) {
+      vs <- intersect(xs[[shp[1]]]$table$variable, xs[[shp[2]]]$table$variable)
+      pa <- dplyr::bind_rows(lapply(vs, function(v) {
+        va <- a[[v]][match(common, ka)]
+        vb <- b[[v]][match(common, kb)]
+        sd_ok <- stats::sd(va) > 0 && stats::sd(vb) > 0
+        tibble::tibble(variable = v, r = if (sd_ok) stats::cor(va, vb) else NA_real_,
+                       mean_abs_diff = mean(abs(va - vb)),
+                       rel_diff = mean(abs(va - vb)) / max(mean(abs(vb)), .Machine$double.eps))
+      }))
+      attr(pa, "pair") <- cols[shp[1:2]]
+      attr(pa, "n_points") <- length(common)
+    }
+  }
   structure(list(table = tab, agreement = agree, labels = stats::setNames(labs, cols),
-                 metrics = stats::setNames(metrics, cols), n = as.integer(n)),
+                 metrics = stats::setNames(metrics, cols), points_agreement = pa,
+                 n = as.integer(n)),
             class = "importance_comparison")
 }
 
@@ -2572,5 +2803,15 @@ print.importance_comparison <- function(x, ...) {
   print(out, n = Inf)
   if (nrow(x$table) > x$n) cat(sprintf("  ... %d more in $table\n", nrow(x$table) - x$n))
   cat("  share: each importance over the largest of the same column.\n")
+  pa <- x$points_agreement
+  if (!is.null(pa)) {
+    pr <- attr(pa, "pair")
+    cat(sprintf("\n  SHAP point by point, %s against %s, over %d point(s) both explain:\n",
+                pr[1], pr[2], attr(pa, "n_points")))
+    print(data.frame(variable = pa$variable, r = round(pa$r, 3), rel_diff = round(pa$rel_diff, 3)),
+          row.names = FALSE)
+    cat("  Both split each point's same total. Where r is low or rel_diff high they split\n")
+    cat("  it differently: the variables interact (or expected gradients' noise shows).\n")
+  }
   invisible(x)
 }
