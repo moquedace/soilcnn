@@ -19,3 +19,4 @@
 ^vignettes/\.gitignore$
 ^docs/pilot_reports$
 ^data-raw$
+^cran-comments\.md$
