@@ -2,3 +2,155 @@ url: https://moquedace.github.io/soilcnn/
 destination: site
 template:
   bootstrap: 5
+
+# The reference in the order of the chain, from the points to the map, then
+# what reads the model and what judges it. Every exported function and every
+# page of its own is in a section: pkgdown::check_pkgdown() refuses the site
+# otherwise, so a new export is placed here when it is written.
+reference:
+- title: The chain
+  desc: >
+    Points and rasters to a patch store, the store to a tuned network, the
+    chosen configuration to a final model under several seeds, the model to
+    maps -- and what the model learned.
+  contents:
+  - dsm_prepare
+  - dsm_load
+  - dsm_train
+  - dsm_final
+  - dsm_predict
+  - dsm_importance
+  - dsm_report_final
+
+- title: Example data
+  desc: A small synthetic landscape, and a run fitted on it once a session.
+  contents:
+  - example_landscape
+  - example_run
+
+- title: Who trains and who scores
+  desc: >
+    Resampling designs, the fold plans they cut -- with a test set and an
+    optional calibration set carved by the same criterion -- and the checks
+    of a plan.
+  contents:
+  - spatial_cv
+  - knndm_cv
+  - random_cv
+  - holdout_cv
+  - region_cv
+  - resolve_resampling
+  - spatial_folds
+  - knndm_folds
+  - random_folds
+  - holdout
+  - region_folds
+  - prediction_sample
+  - check_fold_plan
+  - fold_leakage_report
+
+- title: Models, grids and devices
+  contents:
+  - list_models
+  - get_model
+  - model_spec
+  - register_model
+  - caret_spec
+  - caret_available
+  - make_tune_grid
+  - make_manual_tune_grid
+  - target_transform_spec
+  - setup_torch_device
+  - set_torch_threads
+
+- title: Choosing a configuration
+  desc: >
+    Repetitions summarised, the noise floor of the seeds, the
+    one-standard-error rule, and a test set scored only after the choice is
+    frozen.
+  contents:
+  - summarise_resamples
+  - seed_noise_floor
+  - print_noise_floor
+  - one_se
+  - print_one_se
+  - paired_family_test
+  - freeze_selection
+  - score_test_grid
+  - selected_config_id
+  - latest_run_dir
+
+- title: Intervals
+  desc: >
+    Conformal intervals calibrated on cross-validated residuals, on a
+    calibration set (split conformal) or with every fold's model (CV+), at a
+    constant width or one that follows the level and the dissimilarity
+    index, with points or whole groups weighing alike -- and their coverage.
+  contents:
+  - conformal_calibrate
+  - conformal_interval
+  - conformal_scale_fit
+  - conformal_scaled_calibrate
+  - conformal_scaled_interval
+  - cv_plus_calibrate
+  - cv_plus_interval
+  - conformal_cv
+  - cv_residuals
+  - cv_residuals_for_config
+  - picp_report
+
+- title: The mean surface
+  desc: The conditional mean of a log-scale model, by Duan's smearing.
+  contents:
+  - smear
+  - smear_map
+  - smearing_factor
+  - smearing_from_run
+  - smearing_check
+
+- title: Where the map may be believed
+  desc: The dissimilarity index and the area of applicability (Meyer and Pebesma 2021).
+  contents:
+  - aoa_reference
+  - aoa_di
+  - aoa_threshold
+  - inside_aoa
+  - print_aoa
+  - di_reference
+  - dissimilarity_index
+
+- title: What the model learned
+  desc: >
+    Importance by permutation, SHAP, SAGE, refits and the patch's context;
+    accumulated local effects; SHAP over the map.
+  contents:
+  - permutation_importance
+  - shap_importance
+  - sage_importance
+  - refit_importance
+  - context_importance
+  - ale_effect
+  - compare_importance
+  - importance_groups
+  - importance_points
+  - importance_map
+  - importance_weights
+  - occlusion_report
+  - plot.dsm_importance
+  - plot.importance_comparison
+  - plot.importance_map
+
+- title: Errors on clustered points
+  desc: Intervals for a difference in error, drawn from whole blocks of equal area.
+  contents:
+  - block_bootstrap
+  - block_bootstrap_by_size
+  - equal_area_blocks
+  - spatial_correlogram
+  - plot.block_bootstrap_by_size
+  - plot.spatial_correlogram
+
+- title: Metrics
+  contents:
+  - calc_metrics
+  - ccc
