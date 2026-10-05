@@ -63,7 +63,7 @@ raster_panel <- function(r, x0, y0, x1, y1, palette, zlim = NULL, classes = NULL
   p <- terra::trim(terra::project(s, crs_lac, method = method))
   m <- terra::as.matrix(p, wide = TRUE)
   if (is.null(classes)) {
-    zlim <- zlim %||% stats::quantile(m, c(.02, .98), na.rm = TRUE, names = FALSE)
+    if (is.null(zlim)) zlim <- stats::quantile(m, c(.02, .98), na.rm = TRUE, names = FALSE)
     if (diff(zlim) == 0) zlim <- zlim + c(-1, 1) * max(abs(zlim[1]) * 1e-6, 1e-9)
     k <- 1 + floor((pmin(pmax(m, zlim[1]), zlim[2]) - zlim[1]) / diff(zlim) * (length(palette) - 1))
     col <- palette[k]
@@ -105,4 +105,3 @@ range_digits <- function(x) {
 fmt_value <- function(x, significant = 3L) {
   format(signif(x, significant), scientific = abs(x) > 0 & abs(x) < 1e-4, trim = TRUE)
 }
-`%||%` <- function(a, b) if (is.null(a)) b else a
