@@ -607,10 +607,13 @@ print.dsm_prediction <- function(x, ...) {
         sep = "")
     for (i in seq_len(nrow(x$calibration))) {
       r <- x$calibration[i, ]
-      cat(sprintf("    %-8s %-8s %s  constant %s | level+DI q %.3g x (%.3g %+.3g x level %+.3g x DI)%s | smearing %s\n",
+      cat(sprintf("    %-8s %-8s %s  constant %s | level+DI %s x (%.3g %+.3g x level %+.3g x DI)%s | smearing %s\n",
                   r$source, r$method, r$label,
                   if (is.finite(r$q_constant)) sprintf("+/-%.3g", r$q_constant) else "(per pixel)",
-                  r$q_level_di, r$scale_intercept, r$scale_level, r$scale_di,
+                  # CV+ has no single q: its order statistic is taken at each pixel.
+                  if (is.finite(r$q_level_di)) sprintf("q %.3g", r$q_level_di) else
+                    if (identical(r$method, "cv_plus")) "(per pixel)" else "q NA",
+                  r$scale_intercept, r$scale_level, r$scale_di,
                   if (is.finite(r$aoa_threshold)) sprintf(" | AOA DI <= %.3f", r$aoa_threshold) else "",
                   if (is.finite(r$smearing_s)) sprintf("%.4f", r$smearing_s) else "-"))
     }
