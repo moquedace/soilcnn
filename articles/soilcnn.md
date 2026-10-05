@@ -178,12 +178,13 @@ models perform. The spatial blocks here are 0.1 degree; the full run
 uses 1-degree blocks.
 
 ![Figure 5. Validation geometry: fold 1 of each design, with one test
-set for all five. Hollow points are not used in this fold. All panels
-use the same equal-area projection and extent.](figures/designs.png)
+set and one calibration set for all five. Hollow points are not used in
+this fold. All panels use the same equal-area projection and
+extent.](figures/designs.png)
 
 Figure 5. Validation geometry: fold 1 of each design, with one test set
-for all five. Hollow points are not used in this fold. All panels use
-the same equal-area projection and extent.
+and one calibration set for all five. Hollow points are not used in this
+fold. All panels use the same equal-area projection and extent.
 
 Random folds do not enforce geographic separation, so nearby
 observations can appear in training and validation. Spatial blocks and
