@@ -80,8 +80,9 @@ A <strong>caret-style hyperparameter tuning framework</strong> for dual-branch C
                         │
                         ▼
    dsm_final()      The config the run supports (one_se), refitted under N seeds
-                    side by side; the ensemble, the conformal interval, the
-                    smearing factor, and a declaration of every hyperparameter.
+                    side by side; the ensemble, the conformal intervals (each
+                    checked on the test set), the smearing factor, and a
+                    declaration of every hyperparameter.
                         │
                         ▼
    dsm_predict()    The map: median, mean, spread, intervals, DI and AOA bands —
@@ -390,7 +391,7 @@ ring_01                            8  0.488      -0.001
 </tr>
 </tbody>
 </table>
-<p>Duan’s smearing estimator corrects it with one scalar, calibrated on the same out-of-fold <strong>ensemble</strong> residuals the conformal interval uses — the deployed prediction is the ensemble median, so the calibrated residual has to be the ensemble’s and not one seed’s.</p>
+<p>Duan’s smearing estimator corrects it with one scalar, calibrated on the same out-of-fold <strong>ensemble</strong> residuals the cross-validated interval uses — the deployed prediction is the ensemble median, so the calibrated residual has to be the ensemble’s and not one seed’s. With a calibration set, a second factor comes from its residuals (<code>smeared_mean_split</code>).</p>
 <p><strong>Nothing is replaced.</strong> <code><a href="reference/dsm_predict.html">dsm_predict()</a></code> writes <code>smeared_mean_&lt;source&gt;</code> <em>beside</em> <code>ensemble_median</code> and labels both, because they answer different questions: the median is the typical stock at a pixel and minimises absolute error; the mean is the only one you may add up. Silently swapping one for the other trades a known bias for an unknown one.</p>
 <p><code><a href="reference/print.smearing_cal.html">print.smearing_cal()</a></code> also reports S by quintile of the prediction, because Duan’s derivation assumes the residual is independent of the prediction and that is checkable — in the SOC model it runs 1.80 at the low end to 1.15 at the high end, which the print warns about rather than silently averaging away.</p>
 <p>Two refinements are options of <code><a href="reference/smear.html">smear()</a></code>, not its default: <code>method = "level"</code>, a factor by the prediction’s level from bins of it, and <code>method = "total"</code>, the exp(f)-weighted scalar that unbiases a sum. On the SOC model both made the held-out bias worse (−3.9% and −5.8%, against +2.7%), because its three folds saw half the points the deployed model saw. A run whose folds see about as many may find otherwise, so <code><a href="reference/smearing_check.html">smearing_check()</a></code> measures all three on its test set, and <code><a href="reference/smear_map.html">smear_map()</a></code> makes the mean map by the factor chosen from a median map already made, without running the network again.</p>
@@ -738,12 +739,12 @@ ring_01                            8  0.488      -0.001
 <tr>
 <td><a href="R/final.R"><code>R/final.R</code></a></td>
 <td>
-<code><a href="reference/dsm_final.html">dsm_final()</a></code>: the selected config refitted under N seeds, side by side with fixed threads per seed; the ensemble, the conformal interval, the smearing factor; and <code>final_report.md</code>, which declares every hyperparameter of the chosen CNN and whether the search chose it. A resume is held to the settings its run started with</td>
+<code><a href="reference/dsm_final.html">dsm_final()</a></code>: the selected config refitted under N seeds, side by side with fixed threads per seed; the ensemble, the conformal intervals (cv, split, CV+), each checked on the test set, the smearing factor; and <code>final_report.md</code>, which declares every hyperparameter of the chosen CNN and whether the search chose it. A resume is held to the settings its run started with</td>
 </tr>
 <tr>
 <td><a href="R/predict.R"><code>R/predict.R</code></a></td>
 <td>
-<code><a href="reference/dsm_predict.html">dsm_predict()</a></code>: the map, for a grid as large as the world at 250 m – row bands read once through a buffer that keeps its halo, the network fully convolutional where that is exact, workers side by side and resumable; the ensemble bands, the smeared mean, the constant and the level-and-DI conformal intervals and the AOA for every calibration source given (block, kNNDM), one VRT per band; and, first, a probe that must reproduce the final model’s stored predictions at the profiles</td>
+<code><a href="reference/dsm_predict.html">dsm_predict()</a></code>: the map, for a grid as large as the world at 250 m – row bands read once through a buffer that keeps its halo, the network fully convolutional where that is exact, workers side by side and resumable; the ensemble bands, the smeared mean, the conformal intervals of every calibration given (cv, split, CV+), each at a constant width and one that follows the level and the DI, and the AOA, one VRT per band; and, first, a probe that must reproduce the final model’s stored predictions at the profiles</td>
 </tr>
 <tr>
 <td><a href="R/utils.R"><code>R/utils.R</code></a></td>
@@ -828,7 +829,7 @@ ring_01                            8  0.488      -0.001
 <tr>
 <td><a href="R/conformal.R"><code>R/conformal.R</code></a></td>
 <td>
-<code><a href="reference/conformal_calibrate.html">conformal_calibrate()</a></code> · <code><a href="reference/picp_report.html">picp_report()</a></code> — intervals with a coverage guarantee, and the check that they keep it</td>
+<code><a href="reference/conformal_calibrate.html">conformal_calibrate()</a></code> · <code><a href="reference/conformal_scaled_calibrate.html">conformal_scaled_calibrate()</a></code> · <code><a href="reference/conformal_scale_fit.html">conformal_scale_fit()</a></code> · <code><a href="reference/cv_plus_calibrate.html">cv_plus_calibrate()</a></code> · <code><a href="reference/picp_report.html">picp_report()</a></code> — split conformal and CV+, with points or whole groups weighing alike, at a constant width or one fitted to the level and the DI; and the check that they keep their coverage</td>
 </tr>
 <tr>
 <td><a href="R/occlusion.R"><code>R/occlusion.R</code></a></td>
@@ -891,7 +892,7 @@ ring_01                            8  0.488      -0.001
 <td>
 <a href="DESCRIPTION"><code>DESCRIPTION</code></a> · <a href="NAMESPACE"><code>NAMESPACE</code></a>
 </td>
-<td>The package, <code>soilcnn</code>: what it imports, and the 82 functions it exports — the <code>dsm_*()</code> front end, the resampling specs and fold constructors, the model registry, the importance methods, and the tools applied to results (AOA, conformal intervals, smearing, metrics, noise floor, occlusion, intervals by blocks). The runners underneath <code><a href="reference/dsm_train.html">dsm_train()</a></code>, the patch store’s plumbing and the helpers are internal (<code>soilcnn:::</code>); <code><a href="https://pkgload.r-lib.org/reference/load_all.html" class="external-link">pkgload::load_all()</a></code> on the source tree makes every function visible. NAMESPACE is what roxygen2 writes from the <code>@export</code> tags, and <code>tests/test_package_metadata.R</code> checks that it still is</td>
+<td>The package, <code>soilcnn</code>: what it imports, and the 85 functions it exports — the <code>dsm_*()</code> front end, the resampling specs and fold constructors, the model registry, the importance methods, and the tools applied to results (AOA, conformal intervals, smearing, metrics, noise floor, occlusion, intervals by blocks). The runners underneath <code><a href="reference/dsm_train.html">dsm_train()</a></code>, the patch store’s plumbing and the helpers are internal (<code>soilcnn:::</code>); <code><a href="https://pkgload.r-lib.org/reference/load_all.html" class="external-link">pkgload::load_all()</a></code> on the source tree makes every function visible. NAMESPACE is what roxygen2 writes from the <code>@export</code> tags, and <code>tests/test_package_metadata.R</code> checks that it still is</td>
 </tr>
 <tr>
 <td><a href="tests/run_all.R"><code>tests/run_all.R</code></a></td>
