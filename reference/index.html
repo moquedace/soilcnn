@@ -33,9 +33,9 @@
     </div>
 
     <div class="section level2">
-      <h2 id="all-functions">All functions<a class="anchor" aria-label="anchor" href="#all-functions"></a></h2>
+      <h2 id="the-chain">The chain<a class="anchor" aria-label="anchor" href="#the-chain"></a></h2>
 
-
+      <div class="section-desc"><p>Points and rasters to a patch store, the store to a tuned network, the chosen configuration to a final model under several seeds, the model to maps – and what the model learned.</p></div>
 
       <dl></dl></div><div class="section level2">
 
@@ -44,73 +44,168 @@
 
       <dl><dt>
 
-          <code><a href="ale_effect.html">ale_effect()</a></code>
+          <code><a href="dsm_prepare.html">dsm_prepare()</a></code>
 
         </dt>
-        <dd>ALE: how the prediction changes along each variable's range.</dd>
+        <dd>Build a patch store from a point table and a folder of aligned rasters.</dd>
 
         <dt>
 
-          <code><a href="aoa_di.html">aoa_di()</a></code>
+          <code><a href="dsm_load.html">dsm_load()</a></code>
 
         </dt>
-        <dd>The DI of new rows of RAW predictor values, QC'd and scaled as the reference was.</dd>
+        <dd>Load everything a run needs, and check that it fits together.</dd>
 
         <dt>
 
-          <code><a href="aoa_reference.html">aoa_reference()</a></code>
+          <code><a href="dsm_train.html">dsm_train()</a></code>
 
         </dt>
-        <dd>The dissimilarity reference of a fitted model.</dd>
+        <dd>Fit and tune a model over a resampling plan.</dd>
 
         <dt>
 
-          <code><a href="aoa_threshold.html">aoa_threshold()</a></code>
+          <code><a href="dsm_final.html">dsm_final()</a></code>
 
         </dt>
-        <dd>The DI threshold that separates the area of applicability.</dd>
+        <dd>Refit the configuration a tuning run selects, under N seeds.</dd>
 
         <dt>
 
-          <code><a href="block_bootstrap.html">block_bootstrap()</a></code>
+          <code><a href="dsm_predict.html">dsm_predict()</a></code>
 
         </dt>
-        <dd>A metric, or two models' difference in it, with an interval from whole blocks.</dd>
+        <dd>Predict a map from a final model.</dd>
 
         <dt>
 
-          <code><a href="block_bootstrap_by_size.html">block_bootstrap_by_size()</a></code>
+          <code><a href="dsm_importance.html">dsm_importance()</a></code>
 
         </dt>
-        <dd>The interval as the blocks grow.</dd>
+        <dd>Variable importance of a fitted model, by the method you choose.</dd>
 
         <dt>
 
-          <code><a href="calc_metrics.html">calc_metrics()</a></code>
+          <code><a href="dsm_report_final.html">dsm_report_final()</a></code>
 
         </dt>
-        <dd>Compute all regression metrics for one obs/pred pair.</dd>
+        <dd>The declaration of a final model that already exists.</dd>
+      </dl></div><div class="section level2">
+      <h2 id="example-data">Example data<a class="anchor" aria-label="anchor" href="#example-data"></a></h2>
+
+      <div class="section-desc"><p>A small synthetic landscape, and a run fitted on it once a session.</p></div>
+
+      <dl></dl></div><div class="section level2">
+
+
+
+
+      <dl><dt>
+
+          <code><a href="example_landscape.html">example_landscape()</a></code>
+
+        </dt>
+        <dd>A small synthetic landscape, for the examples and the tests.</dd>
 
         <dt>
 
-          <code><a href="caret_available.html">caret_available()</a></code>
+          <code><a href="example_run.html">example_run()</a></code>
 
         </dt>
-        <dd>Every caret method that could be borrowed here.</dd>
+        <dd>A small fitted run on the example landscape, made once a session.</dd>
+      </dl></div><div class="section level2">
+      <h2 id="who-trains-and-who-scores">Who trains and who scores<a class="anchor" aria-label="anchor" href="#who-trains-and-who-scores"></a></h2>
+
+      <div class="section-desc"><p>Resampling designs, the fold plans they cut – with a test set and an optional calibration set carved by the same criterion – and the checks of a plan.</p></div>
+
+      <dl></dl></div><div class="section level2">
+
+
+
+
+      <dl><dt>
+
+          <code><a href="spatial_cv.html">spatial_cv()</a></code>
+
+        </dt>
+        <dd>Spatially blocked k-fold: whole blocks of ground go to one fold.</dd>
 
         <dt>
 
-          <code><a href="caret_spec.html">caret_spec()</a></code>
+          <code><a href="knndm_cv.html">knndm_cv()</a></code>
 
         </dt>
-        <dd>Turn a caret method into a model_spec.</dd>
+        <dd>Folds matched to where the map will be predicted (kNNDM).</dd>
 
         <dt>
 
-          <code><a href="ccc.html">ccc()</a></code>
+          <code><a href="random_cv.html">random_cv()</a></code>
 
         </dt>
-        <dd>Lin's Concordance Correlation Coefficient.</dd>
+        <dd>Random k-fold. Ignores geography by construction.</dd>
+
+        <dt>
+
+          <code><a href="holdout_cv.html">holdout_cv()</a></code>
+
+        </dt>
+        <dd>A single train/validation/test split.</dd>
+
+        <dt>
+
+          <code><a href="region_cv.html">region_cv()</a></code>
+
+        </dt>
+        <dd>Leave-region-out, on a grouping that already exists (biome, catchment, ...).</dd>
+
+        <dt>
+
+          <code><a href="resolve_resampling.html">resolve_resampling()</a></code>
+
+        </dt>
+        <dd>Turn a spec into a fold plan against real points.</dd>
+
+        <dt>
+
+          <code><a href="spatial_folds.html">spatial_folds()</a></code>
+
+        </dt>
+        <dd>Spatially blocked folds of a point table.</dd>
+
+        <dt>
+
+          <code><a href="knndm_folds.html">knndm_folds()</a></code>
+
+        </dt>
+        <dd>Fold plan from k-fold Nearest Neighbour Distance Matching.</dd>
+
+        <dt>
+
+          <code><a href="random_folds.html">random_folds()</a></code>
+
+        </dt>
+        <dd>Random k-fold over the train+validation pool.</dd>
+
+        <dt>
+
+          <code><a href="holdout.html">holdout()</a></code>
+
+        </dt>
+        <dd>A single train/validation/test split of a point table.</dd>
+
+        <dt>
+
+          <code><a href="region_folds.html">region_folds()</a></code>
+
+        </dt>
+        <dd>Fold by a grouping column: no group is split across folds.</dd>
+
+        <dt>
+
+          <code><a href="prediction_sample.html">prediction_sample()</a></code>
+
+        </dt>
+        <dd>A regular sample of the prediction area, as kNNDM's <code>predpoints</code>.</dd>
 
         <dt>
 
@@ -121,24 +216,191 @@
 
         <dt>
 
-          <code><a href="compare_importance.html">compare_importance()</a></code>
+          <code><a href="fold_leakage_report.html">fold_leakage_report()</a></code>
 
         </dt>
-        <dd>Several importances, side by side.</dd>
+        <dd>How much does each fold still leak?</dd>
+      </dl></div><div class="section level2">
+      <h2 id="models-grids-and-devices">Models, grids and devices<a class="anchor" aria-label="anchor" href="#models-grids-and-devices"></a></h2>
+
+
+
+      <dl></dl></div><div class="section level2">
+
+
+
+
+      <dl><dt>
+
+          <code><a href="list_models.html">list_models()</a></code>
+
+        </dt>
+        <dd>Every registered model, as a table.</dd>
 
         <dt>
+
+          <code><a href="get_model.html">get_model()</a></code>
+
+        </dt>
+        <dd>Fetch a registered model.</dd>
+
+        <dt>
+
+          <code><a href="model_spec.html">model_spec()</a></code>
+
+        </dt>
+        <dd>Describe a model the framework can fit.</dd>
+
+        <dt>
+
+          <code><a href="register_model.html">register_model()</a></code>
+
+        </dt>
+        <dd>Add a model to the registry.</dd>
+
+        <dt>
+
+          <code><a href="caret_spec.html">caret_spec()</a></code>
+
+        </dt>
+        <dd>Turn a caret method into a model_spec.</dd>
+
+        <dt>
+
+          <code><a href="caret_available.html">caret_available()</a></code>
+
+        </dt>
+        <dd>Every caret method that could be borrowed here.</dd>
+
+        <dt>
+
+          <code><a href="make_tune_grid.html">make_tune_grid()</a></code>
+
+        </dt>
+        <dd>Generate a random hyperparameter grid (like caret's tuneLength).</dd>
+
+        <dt>
+
+          <code><a href="make_manual_tune_grid.html">make_manual_tune_grid()</a></code>
+
+        </dt>
+        <dd>Build a manual grid from explicit lists of values per parameter.</dd>
+
+        <dt>
+
+          <code><a href="target_transform_spec.html">target_transform_spec()</a></code>
+
+        </dt>
+        <dd>The forward and inverse functions for a named target transform.</dd>
+
+        <dt>
+
+          <code><a href="setup_torch_device.html">setup_torch_device()</a></code>
+
+        </dt>
+        <dd>Configure torch threads and select compute device.</dd>
+
+        <dt>
+
+          <code><a href="set_torch_threads.html">set_torch_threads()</a></code>
+
+        </dt>
+        <dd>Set torch's thread pools.</dd>
+      </dl></div><div class="section level2">
+      <h2 id="choosing-a-configuration">Choosing a configuration<a class="anchor" aria-label="anchor" href="#choosing-a-configuration"></a></h2>
+
+      <div class="section-desc"><p>Repetitions summarised, the noise floor of the seeds, the one-standard-error rule, and a test set scored only after the choice is frozen.</p></div>
+
+      <dl></dl></div><div class="section level2">
+
+
+
+
+      <dl><dt>
+
+          <code><a href="summarise_resamples.html">summarise_resamples()</a></code>
+
+        </dt>
+        <dd>Aggregate a unit-level comparison table into one row per config.</dd>
+
+        <dt>
+
+          <code><a href="seed_noise_floor.html">seed_noise_floor()</a></code>
+
+        </dt>
+        <dd>How much does a metric move when ONLY the seed changes?</dd>
+
+        <dt>
+
+          <code><a href="print_noise_floor.html">print_noise_floor()</a></code>
+
+        </dt>
+        <dd>Print a noise-floor report in the terms it should be read in.</dd>
+
+        <dt>
+
+          <code><a href="one_se.html">one_se()</a></code>
+
+        </dt>
+        <dd>Pick the simplest config within one standard error of the best.</dd>
+
+        <dt>
+
+          <code><a href="print_one_se.html">print_one_se()</a></code>
+
+        </dt>
+        <dd>Say what one_se() did, including when it did nothing.</dd>
+
+        <dt>
+
+          <code><a href="paired_family_test.html">paired_family_test()</a></code>
+
+        </dt>
+        <dd>Paired comparison between two model families.</dd>
+
+        <dt>
+
+          <code><a href="freeze_selection.html">freeze_selection()</a></code>
+
+        </dt>
+        <dd>Record which config was chosen, and when.</dd>
+
+        <dt>
+
+          <code><a href="score_test_grid.html">score_test_grid()</a></code>
+
+        </dt>
+        <dd>Score every trained unit of a tuning run on the held-out test set.</dd>
+
+        <dt>
+
+          <code><a href="selected_config_id.html">selected_config_id()</a></code>
+
+        </dt>
+        <dd>The configuration a final run deployed.</dd>
+
+        <dt>
+
+          <code><a href="latest_run_dir.html">latest_run_dir()</a></code>
+
+        </dt>
+        <dd>The most recent run under <code>base</code>, by time, and only if it finished.</dd>
+      </dl></div><div class="section level2">
+      <h2 id="intervals">Intervals<a class="anchor" aria-label="anchor" href="#intervals"></a></h2>
+
+      <div class="section-desc"><p>Conformal intervals calibrated on cross-validated residuals, on a calibration set (split conformal) or with every fold’s model (CV+), at a constant width or one that follows the level and the dissimilarity index, with points or whole groups weighing alike – and their coverage.</p></div>
+
+      <dl></dl></div><div class="section level2">
+
+
+
+
+      <dl><dt>
 
           <code><a href="conformal_calibrate.html">conformal_calibrate()</a></code>
 
         </dt>
         <dd>Calibrate a conformal interval from held-out residuals.</dd>
-
-        <dt>
-
-          <code><a href="conformal_cv.html">conformal_cv()</a></code>
-
-        </dt>
-        <dd>Calibrate on the folds of a resampling run, then report coverage.</dd>
 
         <dt>
 
@@ -170,13 +432,6 @@
 
         <dt>
 
-          <code><a href="context_importance.html">context_importance()</a></code>
-
-        </dt>
-        <dd>Context importance: how far from the point, and at which scale, the model reads.</dd>
-
-        <dt>
-
           <code><a href="cv_plus_calibrate.html">cv_plus_calibrate()</a></code>
 
         </dt>
@@ -188,6 +443,13 @@
 
         </dt>
         <dd>Turn the fold models' predictions into CV+ intervals.</dd>
+
+        <dt>
+
+          <code><a href="conformal_cv.html">conformal_cv()</a></code>
+
+        </dt>
+        <dd>Calibrate on the folds of a resampling run, then report coverage.</dd>
 
         <dt>
 
@@ -205,6 +467,101 @@
 
         <dt>
 
+          <code><a href="picp_report.html">picp_report()</a></code>
+
+        </dt>
+        <dd>Coverage, and whether it holds where it is needed.</dd>
+      </dl></div><div class="section level2">
+      <h2 id="the-mean-surface">The mean surface<a class="anchor" aria-label="anchor" href="#the-mean-surface"></a></h2>
+
+      <div class="section-desc"><p>The conditional mean of a log-scale model, by Duan’s smearing.</p></div>
+
+      <dl></dl></div><div class="section level2">
+
+
+
+
+      <dl><dt>
+
+          <code><a href="smear.html">smear()</a></code>
+
+        </dt>
+        <dd>The conditional MEAN surface, from transform-space predictions.</dd>
+
+        <dt>
+
+          <code><a href="smear_map.html">smear_map()</a></code>
+
+        </dt>
+        <dd>The mean surface of a median map already made.</dd>
+
+        <dt>
+
+          <code><a href="smearing_factor.html">smearing_factor()</a></code>
+
+        </dt>
+        <dd>The smearing factor, from held-out residuals in transform space.</dd>
+
+        <dt>
+
+          <code><a href="smearing_from_run.html">smearing_from_run()</a></code>
+
+        </dt>
+        <dd>The smearing factor from a tuning run's out-of-fold predictions.</dd>
+
+        <dt>
+
+          <code><a href="smearing_check.html">smearing_check()</a></code>
+
+        </dt>
+        <dd>The smearing factors on held-out points: which one unbiases the mean surface.</dd>
+      </dl></div><div class="section level2">
+      <h2 id="where-the-map-may-be-believed">Where the map may be believed<a class="anchor" aria-label="anchor" href="#where-the-map-may-be-believed"></a></h2>
+
+      <div class="section-desc"><p>The dissimilarity index and the area of applicability (Meyer and Pebesma 2021).</p></div>
+
+      <dl></dl></div><div class="section level2">
+
+
+
+
+      <dl><dt>
+
+          <code><a href="aoa_reference.html">aoa_reference()</a></code>
+
+        </dt>
+        <dd>The dissimilarity reference of a fitted model.</dd>
+
+        <dt>
+
+          <code><a href="aoa_di.html">aoa_di()</a></code>
+
+        </dt>
+        <dd>The DI of new rows of RAW predictor values, QC'd and scaled as the reference was.</dd>
+
+        <dt>
+
+          <code><a href="aoa_threshold.html">aoa_threshold()</a></code>
+
+        </dt>
+        <dd>The DI threshold that separates the area of applicability.</dd>
+
+        <dt>
+
+          <code><a href="inside_aoa.html">inside_aoa()</a></code>
+
+        </dt>
+        <dd>Is each row inside the area of applicability?</dd>
+
+        <dt>
+
+          <code><a href="print_aoa.html">print_aoa()</a></code>
+
+        </dt>
+        <dd>Report what an AOA covers.</dd>
+
+        <dt>
+
           <code><a href="di_reference.html">di_reference()</a></code>
 
         </dt>
@@ -216,111 +573,64 @@
 
         </dt>
         <dd>The dissimilarity index of new data.</dd>
+      </dl></div><div class="section level2">
+      <h2 id="what-the-model-learned">What the model learned<a class="anchor" aria-label="anchor" href="#what-the-model-learned"></a></h2>
+
+      <div class="section-desc"><p>Importance by permutation, SHAP, SAGE, refits and the patch’s context; accumulated local effects; SHAP over the map.</p></div>
+
+      <dl></dl></div><div class="section level2">
+
+
+
+
+      <dl><dt>
+
+          <code><a href="permutation_importance.html">permutation_importance()</a></code>
+
+        </dt>
+        <dd>Permutation importance: how much a fitted model relies on each variable.</dd>
 
         <dt>
 
-          <code><a href="dsm_final.html">dsm_final()</a></code>
+          <code><a href="shap_importance.html">shap_importance()</a></code>
 
         </dt>
-        <dd>Refit the configuration a tuning run selects, under N seeds.</dd>
+        <dd>SHAP importance: how each variable pushes each prediction, up or down.</dd>
 
         <dt>
 
-          <code><a href="dsm_importance.html">dsm_importance()</a></code>
+          <code><a href="sage_importance.html">sage_importance()</a></code>
 
         </dt>
-        <dd>Variable importance of a fitted model, by the method you choose.</dd>
+        <dd>SAGE: how much of the model's skill each variable carries, shared fairly.</dd>
 
         <dt>
 
-          <code><a href="dsm_load.html">dsm_load()</a></code>
+          <code><a href="refit_importance.html">refit_importance()</a></code>
 
         </dt>
-        <dd>Load everything a run needs, and check that it fits together.</dd>
+        <dd>Refit importance: what the model loses when trained without a variable.</dd>
 
         <dt>
 
-          <code><a href="dsm_predict.html">dsm_predict()</a></code>
+          <code><a href="context_importance.html">context_importance()</a></code>
 
         </dt>
-        <dd>Predict a map from a final model.</dd>
+        <dd>Context importance: how far from the point, and at which scale, the model reads.</dd>
 
         <dt>
 
-          <code><a href="dsm_prepare.html">dsm_prepare()</a></code>
+          <code><a href="ale_effect.html">ale_effect()</a></code>
 
         </dt>
-        <dd>Build a patch store from a point table and a folder of aligned rasters.</dd>
+        <dd>ALE: how the prediction changes along each variable's range.</dd>
 
         <dt>
 
-          <code><a href="dsm_report_final.html">dsm_report_final()</a></code>
+          <code><a href="compare_importance.html">compare_importance()</a></code>
 
         </dt>
-        <dd>The declaration of a final model that already exists.</dd>
-
-        <dt>
-
-          <code><a href="dsm_train.html">dsm_train()</a></code>
-
-        </dt>
-        <dd>Fit and tune a model over a resampling plan.</dd>
-
-        <dt>
-
-          <code><a href="equal_area_blocks.html">equal_area_blocks()</a></code>
-
-        </dt>
-        <dd>Square blocks of equal area, in kilometres.</dd>
-
-        <dt>
-
-          <code><a href="example_landscape.html">example_landscape()</a></code>
-
-        </dt>
-        <dd>A small synthetic landscape, for the examples and the tests.</dd>
-
-        <dt>
-
-          <code><a href="example_run.html">example_run()</a></code>
-
-        </dt>
-        <dd>A small fitted run on the example landscape, made once a session.</dd>
-
-        <dt>
-
-          <code><a href="fold_leakage_report.html">fold_leakage_report()</a></code>
-
-        </dt>
-        <dd>How much does each fold still leak?</dd>
-
-        <dt>
-
-          <code><a href="freeze_selection.html">freeze_selection()</a></code>
-
-        </dt>
-        <dd>Record which config was chosen, and when.</dd>
-
-        <dt>
-
-          <code><a href="get_model.html">get_model()</a></code>
-
-        </dt>
-        <dd>Fetch a registered model.</dd>
-
-        <dt>
-
-          <code><a href="holdout.html">holdout()</a></code>
-
-        </dt>
-        <dd>A single train/validation/test split of a point table.</dd>
-
-        <dt>
-
-          <code><a href="holdout_cv.html">holdout_cv()</a></code>
-
-        </dt>
-        <dd>A single train/validation/test split.</dd>
+        <dd>Several importances, side by side.</dd>
 
         <dt>
 
@@ -331,17 +641,17 @@
 
         <dt>
 
-          <code><a href="importance_map.html">importance_map()</a></code>
-
-        </dt>
-        <dd>Maps of SHAP values, from an importance computed at points of the map.</dd>
-
-        <dt>
-
           <code><a href="importance_points.html">importance_points()</a></code>
 
         </dt>
         <dd>Points of the map to explain: a regular grid of the model's raster cells.</dd>
+
+        <dt>
+
+          <code><a href="importance_map.html">importance_map()</a></code>
+
+        </dt>
+        <dd>Maps of SHAP values, from an importance computed at points of the map.</dd>
 
         <dt>
 
@@ -352,101 +662,10 @@
 
         <dt>
 
-          <code><a href="inside_aoa.html">inside_aoa()</a></code>
-
-        </dt>
-        <dd>Is each row inside the area of applicability?</dd>
-
-        <dt>
-
-          <code><a href="knndm_cv.html">knndm_cv()</a></code>
-
-        </dt>
-        <dd>Folds matched to where the map will be predicted (kNNDM).</dd>
-
-        <dt>
-
-          <code><a href="knndm_folds.html">knndm_folds()</a></code>
-
-        </dt>
-        <dd>Fold plan from k-fold Nearest Neighbour Distance Matching.</dd>
-
-        <dt>
-
-          <code><a href="latest_run_dir.html">latest_run_dir()</a></code>
-
-        </dt>
-        <dd>The most recent run under <code>base</code>, by time, and only if it finished.</dd>
-
-        <dt>
-
-          <code><a href="list_models.html">list_models()</a></code>
-
-        </dt>
-        <dd>Every registered model, as a table.</dd>
-
-        <dt>
-
-          <code><a href="make_manual_tune_grid.html">make_manual_tune_grid()</a></code>
-
-        </dt>
-        <dd>Build a manual grid from explicit lists of values per parameter.</dd>
-
-        <dt>
-
-          <code><a href="make_tune_grid.html">make_tune_grid()</a></code>
-
-        </dt>
-        <dd>Generate a random hyperparameter grid (like caret's tuneLength).</dd>
-
-        <dt>
-
-          <code><a href="model_spec.html">model_spec()</a></code>
-
-        </dt>
-        <dd>Describe a model the framework can fit.</dd>
-
-        <dt>
-
           <code><a href="occlusion_report.html">occlusion_report()</a></code>
 
         </dt>
         <dd>What each part of the patch is worth to one trained unit of a tuning run.</dd>
-
-        <dt>
-
-          <code><a href="one_se.html">one_se()</a></code>
-
-        </dt>
-        <dd>Pick the simplest config within one standard error of the best.</dd>
-
-        <dt>
-
-          <code><a href="paired_family_test.html">paired_family_test()</a></code>
-
-        </dt>
-        <dd>Paired comparison between two model families.</dd>
-
-        <dt>
-
-          <code><a href="permutation_importance.html">permutation_importance()</a></code>
-
-        </dt>
-        <dd>Permutation importance: how much a fitted model relies on each variable.</dd>
-
-        <dt>
-
-          <code><a href="picp_report.html">picp_report()</a></code>
-
-        </dt>
-        <dd>Coverage, and whether it holds where it is needed.</dd>
-
-        <dt>
-
-          <code><a href="plot.block_bootstrap_by_size.html">plot(<i>&lt;block_bootstrap_by_size&gt;</i>)</a></code>
-
-        </dt>
-        <dd>Plot the interval as the blocks grow.</dd>
 
         <dt>
 
@@ -468,174 +687,36 @@
 
         </dt>
         <dd>Plot maps of SHAP values.</dd>
+      </dl></div><div class="section level2">
+      <h2 id="errors-on-clustered-points">Errors on clustered points<a class="anchor" aria-label="anchor" href="#errors-on-clustered-points"></a></h2>
+
+      <div class="section-desc"><p>Intervals for a difference in error, drawn from whole blocks of equal area.</p></div>
+
+      <dl></dl></div><div class="section level2">
+
+
+
+
+      <dl><dt>
+
+          <code><a href="block_bootstrap.html">block_bootstrap()</a></code>
+
+        </dt>
+        <dd>A metric, or two models' difference in it, with an interval from whole blocks.</dd>
 
         <dt>
 
-          <code><a href="plot.spatial_correlogram.html">plot(<i>&lt;spatial_correlogram&gt;</i>)</a></code>
+          <code><a href="block_bootstrap_by_size.html">block_bootstrap_by_size()</a></code>
 
         </dt>
-        <dd>Plot a spatial correlogram.</dd>
+        <dd>The interval as the blocks grow.</dd>
 
         <dt>
 
-          <code><a href="prediction_sample.html">prediction_sample()</a></code>
+          <code><a href="equal_area_blocks.html">equal_area_blocks()</a></code>
 
         </dt>
-        <dd>A regular sample of the prediction area, as kNNDM's <code>predpoints</code>.</dd>
-
-        <dt>
-
-          <code><a href="print_aoa.html">print_aoa()</a></code>
-
-        </dt>
-        <dd>Report what an AOA covers.</dd>
-
-        <dt>
-
-          <code><a href="print_noise_floor.html">print_noise_floor()</a></code>
-
-        </dt>
-        <dd>Print a noise-floor report in the terms it should be read in.</dd>
-
-        <dt>
-
-          <code><a href="print_one_se.html">print_one_se()</a></code>
-
-        </dt>
-        <dd>Say what one_se() did, including when it did nothing.</dd>
-
-        <dt>
-
-          <code><a href="random_cv.html">random_cv()</a></code>
-
-        </dt>
-        <dd>Random k-fold. Ignores geography by construction.</dd>
-
-        <dt>
-
-          <code><a href="random_folds.html">random_folds()</a></code>
-
-        </dt>
-        <dd>Random k-fold over the train+validation pool.</dd>
-
-        <dt>
-
-          <code><a href="refit_importance.html">refit_importance()</a></code>
-
-        </dt>
-        <dd>Refit importance: what the model loses when trained without a variable.</dd>
-
-        <dt>
-
-          <code><a href="region_cv.html">region_cv()</a></code>
-
-        </dt>
-        <dd>Leave-region-out, on a grouping that already exists (biome, catchment, ...).</dd>
-
-        <dt>
-
-          <code><a href="region_folds.html">region_folds()</a></code>
-
-        </dt>
-        <dd>Fold by a grouping column: no group is split across folds.</dd>
-
-        <dt>
-
-          <code><a href="register_model.html">register_model()</a></code>
-
-        </dt>
-        <dd>Add a model to the registry.</dd>
-
-        <dt>
-
-          <code><a href="resolve_resampling.html">resolve_resampling()</a></code>
-
-        </dt>
-        <dd>Turn a spec into a fold plan against real points.</dd>
-
-        <dt>
-
-          <code><a href="sage_importance.html">sage_importance()</a></code>
-
-        </dt>
-        <dd>SAGE: how much of the model's skill each variable carries, shared fairly.</dd>
-
-        <dt>
-
-          <code><a href="score_test_grid.html">score_test_grid()</a></code>
-
-        </dt>
-        <dd>Score every trained unit of a tuning run on the held-out test set.</dd>
-
-        <dt>
-
-          <code><a href="seed_noise_floor.html">seed_noise_floor()</a></code>
-
-        </dt>
-        <dd>How much does a metric move when ONLY the seed changes?</dd>
-
-        <dt>
-
-          <code><a href="selected_config_id.html">selected_config_id()</a></code>
-
-        </dt>
-        <dd>The configuration a final run deployed.</dd>
-
-        <dt>
-
-          <code><a href="set_torch_threads.html">set_torch_threads()</a></code>
-
-        </dt>
-        <dd>Set torch's thread pools.</dd>
-
-        <dt>
-
-          <code><a href="setup_torch_device.html">setup_torch_device()</a></code>
-
-        </dt>
-        <dd>Configure torch threads and select compute device.</dd>
-
-        <dt>
-
-          <code><a href="shap_importance.html">shap_importance()</a></code>
-
-        </dt>
-        <dd>SHAP importance: how each variable pushes each prediction, up or down.</dd>
-
-        <dt>
-
-          <code><a href="smear.html">smear()</a></code>
-
-        </dt>
-        <dd>The conditional MEAN surface, from transform-space predictions.</dd>
-
-        <dt>
-
-          <code><a href="smear_map.html">smear_map()</a></code>
-
-        </dt>
-        <dd>The mean surface of a median map already made.</dd>
-
-        <dt>
-
-          <code><a href="smearing_check.html">smearing_check()</a></code>
-
-        </dt>
-        <dd>The smearing factors on held-out points: which one unbiases the mean surface.</dd>
-
-        <dt>
-
-          <code><a href="smearing_factor.html">smearing_factor()</a></code>
-
-        </dt>
-        <dd>The smearing factor, from held-out residuals in transform space.</dd>
-
-        <dt>
-
-          <code><a href="smearing_from_run.html">smearing_from_run()</a></code>
-
-        </dt>
-        <dd>The smearing factor from a tuning run's out-of-fold predictions.</dd>
+        <dd>Square blocks of equal area, in kilometres.</dd>
 
         <dt>
 
@@ -646,33 +727,43 @@
 
         <dt>
 
-          <code><a href="spatial_cv.html">spatial_cv()</a></code>
+          <code><a href="plot.block_bootstrap_by_size.html">plot(<i>&lt;block_bootstrap_by_size&gt;</i>)</a></code>
 
         </dt>
-        <dd>Spatially blocked k-fold: whole blocks of ground go to one fold.</dd>
+        <dd>Plot the interval as the blocks grow.</dd>
 
         <dt>
 
-          <code><a href="spatial_folds.html">spatial_folds()</a></code>
+          <code><a href="plot.spatial_correlogram.html">plot(<i>&lt;spatial_correlogram&gt;</i>)</a></code>
 
         </dt>
-        <dd>Spatially blocked folds of a point table.</dd>
+        <dd>Plot a spatial correlogram.</dd>
+      </dl></div><div class="section level2">
+      <h2 id="metrics">Metrics<a class="anchor" aria-label="anchor" href="#metrics"></a></h2>
+
+
+
+      <dl></dl></div><div class="section level2">
+
+
+
+
+      <dl><dt>
+
+          <code><a href="calc_metrics.html">calc_metrics()</a></code>
+
+        </dt>
+        <dd>Compute all regression metrics for one obs/pred pair.</dd>
 
         <dt>
 
-          <code><a href="summarise_resamples.html">summarise_resamples()</a></code>
+          <code><a href="ccc.html">ccc()</a></code>
 
         </dt>
-        <dd>Aggregate a unit-level comparison table into one row per config.</dd>
-
-        <dt>
-
-          <code><a href="target_transform_spec.html">target_transform_spec()</a></code>
-
-        </dt>
-        <dd>The forward and inverse functions for a named target transform.</dd>
+        <dd>Lin's Concordance Correlation Coefficient.</dd>
       </dl></div>
-  </main></div>
+  </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>
+    </nav></aside></div>
 
 
     <footer><div class="pkgdown-footer-left">

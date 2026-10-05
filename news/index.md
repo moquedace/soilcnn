@@ -67,3 +67,7 @@ First release.
 - A small synthetic landscape for examples and tests
   ([`example_landscape()`](https://moquedace.github.io/soilcnn/reference/example_landscape.md),
   [`example_run()`](https://moquedace.github.io/soilcnn/reference/example_run.md)).
+- Every final model and every map records the soilcnn version that made
+  it – with its GitHub commit, when installed from there – beside the
+  versions of torch and R (terra, for a map) and the commit of the
+  project it was written into.
