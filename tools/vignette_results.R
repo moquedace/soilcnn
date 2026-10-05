@@ -5,6 +5,8 @@
 #                     difference in error by whole blocks
 #   trial_maps        the median, the width of the 90% interval and the AOA
 #   trial_importance  permutation against SHAP by theme, and SHAP maps
+#   trial_intervals   the three interval calibrations on the one test set:
+#                     coverage against the 90% promised, and mean width
 #
 # Drawn from the SMOKE run while the real one runs -- for the layout only: its
 # models never learned, every figure says so across its face, and its record
@@ -12,6 +14,7 @@
 # The same code draws the real figures: results_from = "sample10" (or "full").
 #
 #   results_from <- "smoke"   # before source(), or leave it to the default
+#   figures <- "intervals"    # some of them only; rm(figures) for all five
 #   source("D:/usuario_armazenamento/cassio/projects/soilcnn/tools/vignette_results.R")
 #
 # Reads the run's files directly, not 00_settings.R, which a running stage of
@@ -19,6 +22,9 @@
 # kept in <run>/vignette/; delete that folder to compute it again.
 
 if (!exists("results_from")) results_from <- "smoke"
+# Which figures: all five, or some -- figures <- "intervals" draws that one,
+# from a run that has not mapped the region or measured the importance yet.
+if (!exists("figures")) figures <- c("selection", "designs", "maps", "importance", "intervals")
 if (!exists("root")) root <- "D:/usuario_armazenamento/cassio/projects/soilcnn"
 trial <- "D:/usuario_armazenamento/cassio/projects/soc_stock_0_30cm_lac"
 run   <- file.path(trial, "outputs", results_from)
@@ -32,6 +38,7 @@ kept <- file.path(run, "vignette")
 dir.create(kept, showWarnings = FALSE)
 
 # ── 1. The selection: the spatial design's configurations ─────────────────────
+if ("selection" %in% figures) {
 bc  <- csv(file.path(run, "tuning", "spatial", "comparison", "comparison_by_config.csv"))
 sel <- readRDS(file.path(run, "tuning", "spatial", "comparison", "selection.rds"))$config_id[1]
 best <- which.max(bc$val_ccc_mean)
@@ -79,8 +86,10 @@ txt(.755, .395, sprintf("CCC %.3f, %.1fM parameters", bc$val_ccc_mean[chosen],
                         bc$n_params[chosen] / 1e6), .88, C["muted"])
 mark_source("trial_selection", results_from, run)
 finish()
+}
 
 # ── 2. The five designs on the one test set ───────────────────────────────────
+if ("designs" %in% figures) {
 meta <- csv(file.path(run, "patches", "patch_meta.csv"))
 test <- lapply(names(designs), function(d) {
   fr <- file.path(run, "final_model", d)
@@ -133,8 +142,10 @@ for (k in seq_len(nrow(paired))) {
 txt(bx0, by0 - .03, "95% interval from whole 100 km blocks", .62, C["muted"])
 mark_source("trial_designs", results_from, run)
 finish()
+}
 
 # ── 3. The maps: median, interval width, applicability ────────────────────────
+if ("maps" %in% figures) {
 md <- file.path(run, "maps", "spatial")
 r_med <- terra::rast(file.path(md, "ensemble_median.vrt"))
 # The bands carry their calibration in their name since 2026-10-05
@@ -161,8 +172,10 @@ rect(.73, .07, .745, .084, col = "#DADFDA", border = NA); txt(.75, .077, "outsid
 rect(.82, .07, .835, .084, col = C["olive"], border = NA); txt(.84, .077, "inside the AOA", .66, C["muted"])
 mark_source("trial_maps", results_from, run)
 finish()
+}
 
 # ── 4. What the model learned, by theme ───────────────────────────────────────
+if ("importance" %in% figures) {
 imp_file <- file.path(kept, "importance.rds")
 if (!file.exists(imp_file)) {
   fr <- file.path(run, "final_model", "spatial")
@@ -222,5 +235,79 @@ for (k in seq_along(top)) {
 }
 mark_source("trial_importance", results_from, run)
 finish()
+}
 
-message("Result figures drawn from '", results_from, "' into ", fig)
+# ── 5. The intervals on the one test set ──────────────────────────────────────
+if ("intervals" %in% figures) {
+#
+# Do the 90% intervals keep their promise? Each design's three calibrations --
+# cv, split, CV+ -- at both widths, by point, as dsm_final() checked them on
+# the test set (04's intervals_summary.csv): the coverage, left, against the
+# 90% promised, and the mean width, right, which is what the coverage costs.
+# The rest -- by block, inside and outside the AOA, by level and ecoregion --
+# is in the comparison's intervals.csv, and the text reads it.
+iv <- csv(file.path(run, "final_model", "intervals_summary.csv"))
+iv <- iv[iv$level == "pi90" & iv$weighting == "point", ]
+meth <- c(cv = "cv residuals", split = "split (calibration set)", cv_plus = "CV+ (fold models)")
+start("trial_intervals", 1800, 1300)
+heading("UNCERTAINTY / THE APPLICATION", "Do the 90% intervals keep their promise?",
+        sprintf("Coverage and mean width on the same %s test profiles. Open: constant width; filled: following the level and the DI.",
+                format(max(iv$n_test, na.rm = TRUE), big.mark = ",")))
+ax0 <- .27; ax1 <- .60; bx0 <- .68; bx1 <- .95
+y_top <- .78; y_bot <- .13
+n_rows <- length(designs) * length(meth)
+gap <- .6                                   # between designs, in rows
+step <- (y_top - y_bot) / (n_rows - 1 + gap * (length(designs) - 1))
+row_y <- function(i, j) y_top - ((i - 1) * length(meth) + (j - 1) + (i - 1) * gap) * step
+cov_lim <- c(min(.6, floor(min(iv$coverage, na.rm = TRUE) * 20) / 20), 1)
+wid_lim <- c(0, max(iv$mean_width[is.finite(iv$mean_width)], na.rm = TRUE) * 1.08)
+xc <- function(v) ax0 + (v - cov_lim[1]) / diff(cov_lim) * (ax1 - ax0)
+xw <- function(v) bx0 + (v - wid_lim[1]) / diff(wid_lim) * (bx1 - bx0)
+for (v in seq(cov_lim[1], 1, by = .1)) {
+  segments(xc(v), y_bot - .02, xc(v), y_top + .02, col = C["line"], lwd = .8)
+  txt(xc(v), y_bot - .045, sprintf("%.0f%%", 100 * v), .66, C["muted"], adj = .5)
+}
+segments(xc(.9), y_bot - .02, xc(.9), y_top + .03, col = C["olive"], lty = 2, lwd = 1.5)
+txt(xc(.9), y_top + .045, "promised 90%", .66, C["olive"], TRUE, adj = .5)
+for (v in pretty(wid_lim, 4)) if (v >= wid_lim[1] && v <= wid_lim[2]) {
+  segments(xw(v), y_bot - .02, xw(v), y_top + .02, col = C["line"], lwd = .8)
+  txt(xw(v), y_bot - .045, format(v, big.mark = ","), .66, C["muted"], adj = .5)
+}
+txt((ax0 + ax1) / 2, y_bot - .085, "Coverage of the test profiles", .8, adj = .5)
+txt((bx0 + bx1) / 2, y_bot - .085, "Mean width (t/ha)", .8, adj = .5)
+for (i in seq_along(designs)) {
+  d <- names(designs)[i]
+  txt(.035, row_y(i, 2), designs[[d]], .8, bold = TRUE)
+  for (j in seq_along(meth)) {
+    y <- row_y(i, j)
+    txt(ax0 - .012, y, meth[[j]], .58, C["muted"], adj = 1)
+    # The holdout has no CV+, and an empty row would read as a missing value.
+    if (!any(iv$design == d & iv$method == names(meth)[j])) {
+      txt(ax0 + .008, y, "none: one fold, and CV+ needs two", .58, C["muted"])
+      next
+    }
+    for (w in c("constant", "level_di")) {
+      r <- iv[iv$design == d & iv$method == names(meth)[j] & iv$width == w, , drop = FALSE]
+      if (nrow(r) != 1L) next
+      filled <- identical(w, "level_di")
+      co <- if (filled) C["earth"] else C["blue"]
+      if (is.finite(r$coverage)) {
+        points(xc(r$coverage), y, pch = 21, bg = if (filled) co else "white", col = co, cex = 1.1, lwd = 1.3)
+      }
+      if (is.finite(r$mean_width)) {
+        points(xw(r$mean_width), y, pch = 21, bg = if (filled) co else "white", col = co, cex = 1.1, lwd = 1.3)
+      }
+    }
+  }
+}
+# The key, stacked under the design names: side by side it ran into the
+# coverage axis's title (the smoke's figure, 2026-10-05).
+points(.04, .07, pch = 21, bg = "white", col = C["blue"], cex = 1.1, lwd = 1.3)
+txt(.052, .07, "constant width", .62, C["muted"])
+points(.04, .035, pch = 21, bg = C["earth"], col = C["earth"], cex = 1.1, lwd = 1.3)
+txt(.052, .035, "width by the level and the DI", .62, C["muted"])
+mark_source("trial_intervals", results_from, run)
+finish()
+}
+
+message("Result figures (", paste(figures, collapse = ", "), ") drawn from '", results_from, "' into ", fig)
