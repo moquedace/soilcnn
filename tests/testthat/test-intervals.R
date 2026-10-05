@@ -87,6 +87,24 @@ test_that("a scale fitted on other points leaves every point to calibrate q", {
                                           scale = sc), "lacks")
 })
 
+test_that("by group, one point per group fits the scale on the half a point would", {
+  # Groups of one point are points: the same half fits the scale and the same
+  # half calibrates q, so the interval is the one by point -- not the same
+  # method over another random half.
+  set.seed(6)
+  level <- runif(120, 1, 4); di <- runif(120)
+  obs <- exp(level + rnorm(120, 0, 0.1 + 0.3 * di)); pred <- exp(level)
+  X <- data.frame(level = pred, di = di)
+  by_point <- conformal_scaled_calibrate(obs, pred, X, alpha = 0.1)
+  by_group <- conformal_scaled_calibrate(obs, pred, X, alpha = 0.1, group = seq_along(obs))
+  expect_equal(by_group$coef, by_point$coef)
+  expect_equal(by_group$q, by_point$q)
+  expect_equal(by_group$weighting, "group")
+  # groups of two take whole groups, and so another half
+  by_pair <- conformal_scaled_calibrate(obs, pred, X, alpha = 0.1, group = rep(1:60, each = 2))
+  expect_false(isTRUE(all.equal(by_pair$coef, by_point$coef)))
+})
+
 test_that("CV+ is the order statistics of the fold models' values, both bounds", {
   set.seed(5)
   n_k <- c(30, 25, 40, 1, 34)

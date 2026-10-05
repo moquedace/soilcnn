@@ -1291,6 +1291,11 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
   calr$pos <- pos_of(calr$sample_id)
   notes <- character(0)
   note  <- function(...) notes <<- c(notes, paste0(...))
+  # A plan without groups gives each point its own: by group is then by point,
+  # and its rows say so by being equal.
+  if (!anyDuplicated(groups)) {
+    note("the tuning plan has no groups (one point each): by group is by point")
+  }
 
   # THE DISSIMILARITY, measured as a map pixel's is: the final model's
   # scaling, against the points of the tuning plan (aoa_reference()).

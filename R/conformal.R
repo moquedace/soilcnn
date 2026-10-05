@@ -596,8 +596,12 @@ conformal_scaled_calibrate <- function(obs, pred, covariates, alpha = 0.1,
            "fitted on and the quantile needs others to be taken on.", call. = FALSE)
     }
     # By point, the draw it always was; by group, whole groups, so no group
-    # is fitted on and calibrated on at once.
-    idx_fit <- if (is.null(g)) {
+    # is fitted on and calibrated on at once. Groups of one point each ARE
+    # points, and take the points' draw: weighted by group they must give what
+    # they give by point, not the same method over another random half (the
+    # smoke of 2026-10-05: 0.707 by point and 0.902 by "group" in a design
+    # without groups, all of the difference the half drawn).
+    idx_fit <- if (is.null(g) || !anyDuplicated(g)) {
       with_local_seed(seed, sort(sample.int(n, max(2L, floor(fit_frac * n)))))
     } else {
       .draw_groups_for_frac(g, fit_frac, seed)
