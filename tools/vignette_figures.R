@@ -196,32 +196,10 @@ txt(.64,.246,"Validation and applicability must\naccount for where observations 
 txt(.04,.065,"Profile locations over the bio1 valid footprint. Lambert azimuthal equal-area (spherical), centred at 75 W / 15 S; equal x/y scale.",.77,C["muted"])
 finish()
 
-sm <- csv(file.path(trial,"smoke/patches/patch_meta.csv"))
-methods<-c("spatial","knndm","random","holdout","region")
-plans<-lapply(methods,function(d)readRDS(file.path(trial,"smoke/tuning",d,"fold_plan.rds")))
-if(any(vapply(plans,function(p)p$n_rows!=nrow(sm),logical(1)))) stop("Fold plan / metadata mismatch")
-testsets<-lapply(plans,function(p)sm$sample_id[p$folds[[1]]$test])
-if(!all(vapply(testsets,function(ids)setequal(ids,testsets[[1]]),logical(1)))) stop("Test sets are not shared")
-start("designs",1800,1800)
-heading("05 / VALIDATION GEOMETRY","Same observations, different validation questions","Fold 1 of each design, from a test run on 1% of the profiles. The geometry only; no model results.")
-names<-c("Spatial blocks","kNNDM","Random folds","Holdout","Ecoregions")
-for(i in 1:5) {
-  j<-(i-1)%%2; row<-(i-1)%/%2; x<-.045+j*.49; y<-.535-row*.235
-  txt(x,y+.255,paste0(letters[i],"   ",names[i]),1.07,bold=TRUE)
-  p<-plans[[i]]; f<-p$folds[[1]]; role<-rep("out",nrow(sm))
-  role[f$train]<-"train"; role[f$validation]<-"validation"; role[f$test]<-"test"
-  map(x+.04,y,x+.275,y+.235,sm,role)
-  txt(x+.302,y+.159,paste0(length(f$train)," train"),.74,C["muted"])
-  txt(x+.302,y+.125,paste0(length(f$validation)," validate"),.74,C["blue"])
-  txt(x+.302,y+.091,paste0(length(f$test)," test"),.74,C["earth"])
-}
-legend(.55,.255,legend=c("Training","Validation","Shared test set","Not used in this fold"),
-       col=c(C["train"],C["blue"],C["earth"],C["muted"]),pch=c(16,16,17,1),bty="n",cex=.9,y.intersp=1.7)
-txt(.535,.095,paste0(nrow(sm)," profiles / fold 1\nOne test set for all five designs"),.79,C["muted"])
-txt(.04,.03,"Spatial plan: 0.1-degree blocks; buffer 0.0337 degrees. Maps: spherical Lambert azimuthal equal-area, 75 W / 15 S; equal x/y scale.",.72,C["muted"])
-finish()
+# The validation geometry (designs.png) is drawn from a run's own fold plans,
+# calibration set included, by tools/vignette_designs.R: sourced at the end.
 writeLines(c("soilcnn vignette figures",paste("Source:",trial),paste("Full profiles:",nrow(meta)),
-             paste("Example sample ID:",meta$sample_id[here]),"Validation panels: stored smoke plans, fold 1; shared test IDs verified.",
+             paste("Example sample ID:",meta$sample_id[here]),"Validation panels: tools/vignette_designs.R, its record in designs.source.",
              "No trained predictions displayed. Raster ranges are shared across scales within each channel."),file.path(records,"figure_sources.txt"))
 message("Editorial figures written to ",fig)
 
@@ -235,3 +213,8 @@ source(file.path(root,"tools/vignette_selection.R"), local = TRUE)
 
 # Full-plan detail, independent of trained checkpoints.
 source(file.path(root,"tools/vignette_buffer.R"), local = TRUE)
+
+# The five designs' fold 1, from a run's plans (sample10 unless plans_from says
+# otherwise); in an environment of its own, as it brings its own helpers. Last,
+# because it stops until the run has all five plans.
+source(file.path(root,"tools/vignette_designs.R"), local = new.env())
