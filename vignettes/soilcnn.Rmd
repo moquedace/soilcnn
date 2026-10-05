@@ -40,7 +40,7 @@ honest:
 - spatial folds with a buffer;
 - a frozen test set;
 - a noise floor measured from the seeds;
-- conformal intervals calibrated on held-out residuals;
+- conformal intervals, calibrated three ways and each checked on the test set;
 - the area where the map may be believed.
 
 This vignette walks the whole chain, from preparation to interpretation.
@@ -170,11 +170,12 @@ its nearest training point is distributed like the distance from a map pixel to
 its nearest training point. It needs a sample of where the map will be drawn,
 and it needs the CAST and sf packages.
 
-The five panels below show the plans of a test run on 267 profiles (1% of
-the application), with one test set shared by all five designs. Each panel is
-fold 1: training, validation, test, and the profiles that fold leaves out.
-They illustrate how the designs split the data, not how the models perform.
-The spatial blocks here are 0.1 degree; the full run uses 1-degree blocks.
+The five panels below show the plans of [DRAFT: a test run on 267 profiles,
+1% of the application], with one test set and one calibration set shared by
+all five designs. Each panel is fold 1: training, validation, calibration,
+test, and the profiles that fold leaves out. They illustrate how the designs
+split the data, not how the models perform. The spatial blocks here are
+[DRAFT: 0.1 degree; the full run uses 1-degree blocks].
 
 ```{r, eval = TRUE, echo = FALSE, out.width = "100%", fig.cap = "Figure 5. Validation geometry: fold 1 of each design, with one test set and one calibration set for all five. Hollow points are not used in this fold. All panels use the same equal-area projection and extent."}
 knitr::include_graphics("figures/designs.png")
@@ -190,7 +191,7 @@ The exclusion buffer is easier to see locally. The next illustration uses
 fold 1 of the full spatial plan, whose buffer is 0.0337 degrees (about
 3.7 km, the width of a 15 x 15 window) in the Chebyshev metric. The shaded
 square protects one validation location; every validation and test location
-has one.
+has one, and so does every calibration location when the plan carves one.
 
 ```{r, eval = TRUE, echo = FALSE, out.width = "100%", fig.cap = "Figure 6. The buffer in the full spatial plan. Grey training points stay outside the shaded exclusion zone; hollow points were removed from training by a buffer."}
 knitr::include_graphics("figures/buffer.png")
@@ -398,7 +399,7 @@ the numbers has changed.
 
 A map has a value at every pixel, including pixels whose predictor combination
 the model never met, and nothing in the raster tells them apart. The
-cross-validated error does not describe those pixels. The `di_*` and `aoa_*`
+cross-validated error does not describe those pixels. The DI and AOA
 bands (Meyer & Pebesma, 2021) say where it does, and they belong beside the
 map, not in a footnote.
 
@@ -470,14 +471,15 @@ SHAP, which splits each prediction among the themes, ranks them almost the
 same way under every validation design (Spearman 0.92 to 0.98 between the
 designs' rankings [DRAFT: smoke numbers]): the ranking of themes is stable
 across these designs. Similar rankings alone do not establish that the models
-learned the same spatial relationships. Permutation, which scores what the skill loses when a theme is
-broken, agrees less (0.50 to 0.91 [DRAFT: smoke numbers]), most of all
-between the holdout and region designs: where correlated themes can stand in
-for one another, the drop from breaking one depends on what the model leaned
-on, and that is the part a design changes. Climate, vegetation productivity,
-the spectral bands and soil properties lead under both [DRAFT: smoke ranking];
-relief follows; the categorical maps of land-use change and FAO soil classes
-show no detectable contribution in these provisional model-specific
+learned the same spatial relationships. Permutation, which scores what the
+skill loses when a theme is broken, agrees less (0.50 to 0.91 [DRAFT: smoke
+numbers]), most of all between the holdout and region designs [DRAFT: which
+pair]: where correlated themes can stand in for one another, the drop from
+breaking one depends on what the model leaned on, and that is the part a
+design changes. Climate, vegetation productivity, the spectral bands and soil
+properties lead under both [DRAFT: smoke ranking]; relief follows [DRAFT:
+check]; the categorical maps of land-use change and FAO soil classes [DRAFT:
+check] show no detectable contribution in these provisional model-specific
 diagnostics. That does not establish that those themes are uninformative in
 other models, regions or samples. Read each ranking as a description of the
 fitted model, and agreement between designs as evidence of ranking stability
