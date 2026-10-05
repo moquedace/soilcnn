@@ -35,3 +35,7 @@ First release.
   (`block_bootstrap()`, `equal_area_blocks()`, `spatial_correlogram()`).
 * A small synthetic landscape for examples and tests (`example_landscape()`,
   `example_run()`).
+* Every final model and every map records the soilcnn version that made it
+  -- with its GitHub commit, when installed from there -- beside the versions
+  of torch and R (terra, for a map) and the commit of the project it was
+  written into.

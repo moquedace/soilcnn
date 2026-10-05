@@ -245,6 +245,9 @@ ok["the_record_says_what_each_band_is"] <-
   file.exists(file.path(map2$run_dir, "calibration.csv")) &&
   file.exists(file.path(map2$run_dir, "prediction_manifest.csv")) &&
   all(nzchar(map2$bands$meaning))
+ok["the_manifest_names_the_soilcnn_that_made_the_map"] <-
+  is.character(map2$manifest$soilcnn_version) &&
+  startsWith(map2$manifest$soilcnn_version, as.character(utils::packageVersion("soilcnn")))
 
 # ── 3. one worker and two: identical, bit for bit ─────────────────────────────
 map1 <- mp(run_id = "map_one", probe = FALSE)

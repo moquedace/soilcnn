@@ -52,6 +52,20 @@
   trimws(out[1])
 }
 
+#' The soilcnn that is running: its version, and the commit it was installed
+#' from when that was GitHub (remotes and pak write it as RemoteSha).
+#'
+#' A run's numbers are traced back by it, beside the torch and R versions:
+#' git_commit names the project a run was written into, not the package that
+#' computed it.
+#' @noRd
+.soilcnn_version <- function() {
+  v   <- as.character(utils::packageVersion("soilcnn"))
+  sha <- tryCatch(utils::packageDescription("soilcnn")$RemoteSha, error = function(e) NULL)
+  if (is.null(sha) || is.na(sha[1]) || !nzchar(sha[1])) v else
+    paste0(v, " (", substr(sha[1], 1L, 7L), ")")
+}
+
 #' Record which config was chosen, and when.
 #'
 #' Writes the selection into the run directory so a later test-set report can

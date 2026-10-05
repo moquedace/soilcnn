@@ -398,6 +398,7 @@ dsm_final <- function(tuning, data = NULL, config = "auto",
     validation_frac = validation_frac, refit_method = refit$method, n_train = n_train,
     n_validation = length(index$validation), n_test = length(index$test),
     n_calibration = length(index$calibration), interval_methods = intervals,
+    soilcnn_version = .soilcnn_version(),
     torch_version = as.character(utils::packageVersion("torch")),
     r_version = R.version.string, git_commit = .git_commit_at(run_dir),
     fitted_by = "dsm_final()", finished_at = Sys.time())

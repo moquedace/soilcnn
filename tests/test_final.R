@@ -158,6 +158,10 @@ ok["the_ensemble_the_interval_and_the_mean_factor_are_written"] <-
 ok["the_run_records_its_threads_and_workers"] <-
   identical(sm$threads_per_unit, 1L) && identical(sm$n_workers, 2L) &&
   identical(sm$seeds_fitted, 1:3)
+# The package that computed it, beside torch and R: git_commit is the
+# project's, and says nothing of which soilcnn ran.
+ok["the_run_records_the_soilcnn_that_made_it"] <- is.character(sm$soilcnn_version) &&
+  startsWith(sm$soilcnn_version, as.character(utils::packageVersion("soilcnn")))
 ok["the_choice_is_frozen_in_the_tuning_run"] <- {
   s <- readRDS(file.path(fit$run_dir, "comparison", "selection.rds"))
   identical(s$config_id, fin$selected_config_ids)
@@ -297,8 +301,8 @@ file.copy(rd, old, recursive = TRUE)
 old_rd <- file.path(old, basename(rd))
 s04 <- readRDS(file.path(old_rd, "comparison", "final_run_summary.rds"))
 s04[c("threads_per_unit", "n_workers", "training", "fitted_by", "validation_frac",
-      "n_train", "n_validation", "n_test", "torch_version", "r_version",
-      "git_commit", "finished_at")] <- NULL
+      "n_train", "n_validation", "n_test", "soilcnn_version", "torch_version",
+      "r_version", "git_commit", "finished_at")] <- NULL
 saveRDS(s04, file.path(old_rd, "comparison", "final_run_summary.rds"))
 unlink(file.path(old_rd, c("final_report.md", "selected_hyperparameters.csv", "run_spec.rds")))
 unlink(file.path(old_rd, cid, "units"), recursive = TRUE)

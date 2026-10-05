@@ -558,6 +558,7 @@ dsm_predict <- function(final, data, rasters = NULL, qc_table = NULL, extent = N
     peak_gb_per_worker = run_info$peak_gb, map_minutes = run_info$minutes,
     minutes_this_call = minutes,
     valid_px_per_s = sum(unit_tbl$n_valid) / max(1e-9, sum(unit_tbl$total_s)),
+    soilcnn_version = .soilcnn_version(),
     torch_version = as.character(utils::packageVersion("torch")),
     terra_version = as.character(utils::packageVersion("terra")),
     git_commit = .git_commit_at(run_dir), finished_at = as.character(Sys.time()))
