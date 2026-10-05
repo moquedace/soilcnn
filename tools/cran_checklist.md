@@ -4,6 +4,9 @@ Not in cran-comments.md: submit_cran() sends that file to the reviewers.
 
 When the sample10 run is done (03 -> 06 of the trial, then 07_importance.R):
 
+0. Before 07: install the latest soilcnn from GitHub -- 06 is done, no
+   worker of the run is left. The run's 8a8270f draws 07's SHAP map in one
+   pass, but a map read back from 07's cache (a second run) needs b0c20e0.
 1. Figures from the run, each looked at before it is kept:
    `tools/vignette_results.R` with `results_from <- "sample10"` (all five;
    the importance figure reads 07's outputs, so 07 runs first),
