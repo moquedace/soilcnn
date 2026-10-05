@@ -14,7 +14,10 @@ there to keep the result honest:
 - conformal intervals calibrated on held-out residuals;
 - the area where the map may be believed.
 
-This vignette walks the whole chain. Each step is one call.
+This vignette walks the whole chain, from preparation to interpretation.
+The numbered sections explain the reusable workflow; headings marked
+**Application example** show how it is used for SOC stocks in Latin
+America and the Caribbean. Results marked DRAFT remain provisional.
 
 ![Figure 1. The workflow keeps data preparation, validation, tuning and
 final prediction explicit.](figures/workflow.png)
@@ -134,7 +137,8 @@ This is the most consequential line of the chain.
 
 ``` r
 
-cv <- spatial_cv(k = 5, block_size = "auto", buffer = "auto", test_frac = 0.15)
+cv <- spatial_cv(k = 5, block_size = "auto", buffer = "auto", test_frac = 0.15,
+                 calibration_frac = 0.15)
 ```
 
 “auto” means *measured*:
@@ -142,6 +146,12 @@ cv <- spatial_cv(k = 5, block_size = "auto", buffer = "auto", test_frac = 0.15)
 - the block size comes from how these points are spread;
 - the buffer is the largest window times the resolution. That is the
   exact distance at which two patches stop sharing a pixel.
+
+`calibration_frac` sets aside a second held-out set, carved like the
+test set in whole blocks and behind the same buffer: no fold trains or
+validates on it, and the final model only predicts it. Its residuals
+calibrate the split conformal intervals of Section 7. Leave it at 0, the
+default, and the intervals are calibrated on the folds alone.
 
 The other designs are one line each, and everything downstream is
 unchanged:
@@ -227,7 +237,7 @@ and every pair. The batch sizes are ones the smallest fold can fill. The
 predictions are scored in native units through the inverse of the
 store’s own transform.
 
-### Choosing a supported level of complexity
+### Tutorial example: choosing a supported level of complexity
 
 The best validation mean is not necessarily the selected model. For CCC,
 [`one_se()`](https://moquedace.github.io/soilcnn/reference/one_se.md)
@@ -250,6 +260,20 @@ The simulated values illustrate how to read the selection. For a
 completed run, use `fit$by_config` for the actual means, standard errors
 and parameter counts; the frozen test set stays outside this decision.
 
+### Application example: model selection
+
+In the application, the spatial design’s thirty configurations fall as
+in Figure 8. The best mean, \[DRAFT: config and CCC\], is not the
+choice: its standard error puts the threshold at \[DRAFT: value\], and
+\[DRAFT: n\] configurations reach it. The rule takes the smallest of
+them, \[DRAFT: config, windows and parameters\], \[DRAFT: k\] times
+fewer parameters than the best for a CCC \[DRAFT: difference\] lower.
+The seed noise floor is \[DRAFT: value\]; interpret it as training
+variability, separately from the uncertainty of the paired difference
+between configurations.
+
+*Figure 8 is drawn from the application run once it completes.*
+
 ## 5. The baselines that give the number a scale
 
 Train them under the same plan, so the comparison is between models and
@@ -264,9 +288,14 @@ rf_point   <- dsm_train(data, model = "rf", resampling = plan,
                         features = "centre", tune_length = 4, output_dir = "outputs/tuning")
 ```
 
-The gap between `rf_context` and the CNN is what the spatial
-*arrangement* of the neighbourhood is worth. If it is smaller than the
-noise floor, the convolution is only averaging.
+Compare the CNN with `rf_context` to assess whether learning spatial
+arrangement adds predictive skill beyond neighbourhood summaries. A
+small gap does not establish how the convolution works: it indicates
+that an additional gain has not been demonstrated under this design.
+Evaluate the paired difference on the same profiles, with uncertainty
+estimated by whole spatial blocks. Variation between seeds provides a
+separate check on training stability; it is not the uncertainty of that
+paired difference.
 
 The same plan runs any of caret’s ~230 methods:
 
@@ -295,6 +324,23 @@ refuses to run before
 [`freeze_selection()`](https://moquedace.github.io/soilcnn/reference/freeze_selection.md),
 and it prints both timestamps.
 
+### Application example: validation designs on one test set
+
+The five designs of the application, each carried to its final model,
+meet on one test set (Figure 9). The profiles come in clusters, so the
+interval of a difference in error is drawn from whole blocks
+([`block_bootstrap()`](https://moquedace.github.io/soilcnn/reference/block_bootstrap.md)),
+not from profiles one by one. Every design’s model errs by \[DRAFT:
+range\] t/ha on the same profiles; against the spatial design the
+differences are \[DRAFT: range\] t/ha, and \[DRAFT: which\] intervals
+exclude zero. What the designs differ in more is what they promised: the
+cross-validated CCC of the random folds was \[DRAFT: value\] against
+\[DRAFT: value\] on the test set, while the spatial blocks’ \[DRAFT:
+value\] held (\[DRAFT: value\]). A design is judged by how close its
+estimate comes to the test, not by how good the estimate looks.
+
+*Figure 9 is drawn from the application run once it completes.*
+
 ## 7. Refit the chosen configuration
 
 ``` r
@@ -304,16 +350,56 @@ final <- dsm_final(fit, seeds = 10)
 
 [`dsm_final()`](https://moquedace.github.io/soilcnn/reference/dsm_final.md)
 refits the configuration the tuning run selects under ten seeds, side by
-side. It calibrates the conformal intervals and the smearing factor on
-the tuning run’s cross-validated residuals. It writes `final_report.md`,
-which declares every hyperparameter of the chosen network and whether
-the search chose it.
+side. It writes `final_report.md`, which declares every hyperparameter
+of the chosen network and whether the search chose it.
+
+It also calibrates the conformal intervals, three ways, and checks each
+on the test set:
+
+- `cv`: on the tuning run’s cross-validated residuals. It costs nothing
+  and promises nothing, since the configuration was chosen on those
+  folds.
+- `split`: split conformal, on the calibration set. Coverage is at least
+  the level asked for, for points exchangeable with that set (Lei et
+  al. 2018).
+- `cv_plus`: CV+, with each fold’s own model at the new point (Barber et
+  al. 2021). Coverage is at least `1 - 2 alpha - sqrt(2/n)`, and close
+  to the level in practice. It costs one more pass of the network per
+  fold model.
+
+Each method is computed at a constant width and at one that grows with
+the predicted level and the dissimilarity index. The quantile can also
+weigh every block alike instead of every point (Dunn et al. 2023): a
+dense survey then stops setting the width for everyone. Clustered
+profiles, and a configuration chosen on the folds, bend all three
+guarantees. So the test set is the judge, reading coverage overall, by
+block, inside and outside the area of applicability, and by level:
+
+``` r
+
+final$per_config[[1]]$intervals$summary
+```
+
+### Application example: coverage and interval width
+
+In the application, the five designs’ final models were checked on the
+same test profiles (Figure 10). \[DRAFT: which calibration came closest
+to 90%, by design\]. The split intervals, calibrated on points no model
+trained on, covered \[DRAFT: range\]; the cross-validated ones \[DRAFT:
+range\], and CV+ \[DRAFT: range\]. The width that follows the level and
+the dissimilarity index cost \[DRAFT: how much\] against the constant
+one, and held its coverage in the \[DRAFT: lowest and highest\] fifths
+of the predicted stock. Outside the area of applicability the coverage
+fell to \[DRAFT: value\]: there no calibration speaks for the pixel.
+
+*Figure 10 is drawn from the application run once it completes.*
 
 ## 8. The map
 
 ``` r
 
-map <- dsm_predict(final, data, extent = c(-56, -50.5, -15, -13.8))
+map <- dsm_predict(final, data, extent = c(-56, -50.5, -15, -13.8),
+                   intervals = c("cv", "split"))
 map
 ```
 
@@ -321,8 +407,12 @@ The map is one VRT per band:
 
 - the ensemble median, mean, sd, mad, min and max over the seeds;
 - the smeared mean;
-- the 90% conformal intervals;
+- the 90% conformal intervals, one pair of bands per calibration and
+  width, e.g. `pi90_split_level_di_lower`;
 - the dissimilarity index and the area of applicability.
+
+`intervals = "cv_plus"` adds the CV+ bands. Every fold model then
+predicts every pixel, so the map costs several times more network time.
 
 `bands.csv`, beside the bands, says what each one is.
 
@@ -335,7 +425,7 @@ producing a plausible map. Drop `extent` for the whole grid. The run
 resumes where it stopped, and it refuses to continue if anything that
 changes the numbers has changed.
 
-## Where the map may be believed
+### Where the map may be believed
 
 A map has a value at every pixel, including pixels whose predictor
 combination the model never met, and nothing in the raster tells them
@@ -343,7 +433,7 @@ apart. The cross-validated error does not describe those pixels. The
 `di_*` and `aoa_*` bands (Meyer & Pebesma, 2021) say where it does, and
 they belong beside the map, not in a footnote.
 
-### Reading the final maps together
+### Application example: reading the final maps together
 
 Interpret the predicted stock together with the width of its calibrated
 90% interval and its area of applicability. A wide interval indicates
@@ -351,8 +441,16 @@ less precise predictions; a pixel outside the AOA has predictor
 conditions beyond the applicability criterion derived from validation.
 The two diagnostics describe different aspects of reliability.
 
-The maps of the application will be shown here once its full run is
-complete.
+*Figure 11 is drawn from the application run once it completes.*
+
+The median ranges over \[DRAFT: range\] t/ha, with the highest stocks in
+\[DRAFT: regions\] and the lowest in \[DRAFT: regions\]. The interval is
+widest where the stock is high and where the dissimilarity index is
+high, as the scaled calibration intends: \[DRAFT: width range\] t/ha.
+\[DRAFT: share\]% of the area lies inside the AOA; the pixels outside
+are \[DRAFT: where – e.g. the landscapes with few profiles\], and there
+the interval’s coverage is not known, however narrow it is drawn. On the
+test profiles the 90% interval covered \[DRAFT: value\]%.
 
 ## 9. What the model learned
 
@@ -398,8 +496,29 @@ Every model must first give back, point by point, the predictions its
 run wrote, and a refit must first train a seed again and get them back.
 An importance measured on another model would look just as plausible.
 
-The application’s importances will be shown here once its full run is
-complete.
+### Application example: importance by theme
+
+*Figure 12 is drawn from the application run once it completes.*
+
+The two methods answer different questions, and the application shows
+it. SHAP, which splits each prediction among the themes, ranks them
+almost the same way under every validation design (Spearman 0.92 to 0.98
+between the designs’ rankings \[DRAFT: smoke numbers\]): the ranking of
+themes is stable across these designs. Similar rankings alone do not
+establish that the models learned the same spatial relationships.
+Permutation, which scores what the skill loses when a theme is broken,
+agrees less (0.50 to 0.91 \[DRAFT: smoke numbers\]), most of all between
+the holdout and region designs: where correlated themes can stand in for
+one another, the drop from breaking one depends on what the model leaned
+on, and that is the part a design changes. Climate, vegetation
+productivity, the spectral bands and soil properties lead under both
+\[DRAFT: smoke ranking\]; relief follows; the categorical maps of
+land-use change and FAO soil classes show no detectable contribution in
+these provisional model-specific diagnostics. That does not establish
+that those themes are uninformative in other models, regions or samples.
+Read each ranking as a description of the fitted model, and agreement
+between designs as evidence of ranking stability under the validation
+choices examined.
 
 ## About the illustrations
 
@@ -407,8 +526,10 @@ Profile locations come from the full SOC 0-30 cm application at 250 m.
 The input-patch illustration uses separate high-resolution raster crops
 at one of its profiles. The continental validation panels come from the
 plans of a test run on 1% of the profiles; the local buffer detail comes
-from the full spatial plan. The model-selection plot uses simulated
-values. No prediction maps or performance figures are presented. The
-scripts that draw the figures are in the package’s [GitHub
-repository](https://github.com/moquedace/soilcnn), under `tools/`; they
-read data and fold plans, and fit no model.
+from the full spatial plan. The model-selection plot of Figure 7 uses
+simulated values. Figures 8 to 12 come from the application run on a
+tenth of the profiles, in whole blocks stratified by region: its
+selection, its five designs on one test set, its intervals, its maps and
+its importances. The scripts that draw the figures are in the package’s
+[GitHub repository](https://github.com/moquedace/soilcnn), under
+`tools/`; they read data and fold plans, and fit no model.

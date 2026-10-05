@@ -20,3 +20,8 @@ table { border-collapse:collapse; width:100%; font-size:15px; margin:24px 0; }
 th,td { border-bottom:1px solid #dce4e3; padding:12px; text-align:left; }
 th { color:var(--blue); background:#f3f6f5; }
 @media(max-width:650px) { body { margin:25px auto; padding:0 18px 40px; font-size:16px; } h1 { font-size:32px; } h2 { font-size:24px; } pre { padding:15px; } }
+
+/* Navigation and an explicit boundary between instructions and case results. */
+#TOC { background: #f3f6f5; padding: 18px 24px; border-left: 3px solid #60734f; margin: 26px 0 36px; }
+#TOC ul { margin: 6px 0; }
+h3 { margin-top: 2em; color: #253840; border-left: 3px solid #60734f; padding-left: 12px; }

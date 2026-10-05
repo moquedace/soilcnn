@@ -75,7 +75,11 @@ is there to keep the result honest:</p>
 <li>conformal intervals calibrated on held-out residuals;</li>
 <li>the area where the map may be believed.</li>
 </ul>
-<p>This vignette walks the whole chain. Each step is one call.</p>
+<p>This vignette walks the whole chain, from preparation to
+interpretation. The numbered sections explain the reusable workflow;
+headings marked <strong>Application example</strong> show how it is used
+for SOC stocks in Latin America and the Caribbean. Results marked DRAFT
+remain provisional.</p>
 <div class="figure">
 <img src="figures/workflow.png" class="r-plt" alt="Figure 1. The workflow keeps data preparation, validation, tuning and final prediction explicit." width="100%"><p class="caption">
 Figure 1. The workflow keeps data preparation, validation, tuning and
@@ -174,13 +178,20 @@ whose manifest says the extraction did not finish.</p>
 </h2>
 <p>This is the most consequential line of the chain.</p>
 <div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="va">cv</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/spatial_cv.html">spatial_cv</a></span><span class="op">(</span>k <span class="op">=</span> <span class="fl">5</span>, block_size <span class="op">=</span> <span class="st">"auto"</span>, buffer <span class="op">=</span> <span class="st">"auto"</span>, test_frac <span class="op">=</span> <span class="fl">0.15</span><span class="op">)</span></span></code></pre></div>
+<code class="sourceCode R"><span><span class="va">cv</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/spatial_cv.html">spatial_cv</a></span><span class="op">(</span>k <span class="op">=</span> <span class="fl">5</span>, block_size <span class="op">=</span> <span class="st">"auto"</span>, buffer <span class="op">=</span> <span class="st">"auto"</span>, test_frac <span class="op">=</span> <span class="fl">0.15</span>,</span>
+<span>                 calibration_frac <span class="op">=</span> <span class="fl">0.15</span><span class="op">)</span></span></code></pre></div>
 <p>“auto” means <em>measured</em>:</p>
 <ul>
 <li>the block size comes from how these points are spread;</li>
 <li>the buffer is the largest window times the resolution. That is the
 exact distance at which two patches stop sharing a pixel.</li>
 </ul>
+<p><code>calibration_frac</code> sets aside a second held-out set,
+carved like the test set in whole blocks and behind the same buffer: no
+fold trains or validates on it, and the final model only predicts it.
+Its residuals calibrate the split conformal intervals of Section 7.
+Leave it at 0, the default, and the intervals are calibrated on the
+folds alone.</p>
 <p>The other designs are one line each, and everything downstream is
 unchanged:</p>
 <div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
@@ -250,7 +261,7 @@ alone, and every pair. The batch sizes are ones the smallest fold can
 fill. The predictions are scored in native units through the inverse of
 the store’s own transform.</p>
 <div class="section level3">
-<h3 id="choosing-a-supported-level-of-complexity">Choosing a supported level of complexity<a class="anchor" aria-label="anchor" href="#choosing-a-supported-level-of-complexity"></a>
+<h3 id="tutorial-example-choosing-a-supported-level-of-complexity">Tutorial example: choosing a supported level of complexity<a class="anchor" aria-label="anchor" href="#tutorial-example-choosing-a-supported-level-of-complexity"></a>
 </h3>
 <p>The best validation mean is not necessarily the selected model. For
 CCC, <code><a href="../reference/one_se.html">one_se()</a></code> subtracts the best configuration’s standard
@@ -271,6 +282,21 @@ completed run, use <code>fit$by_config</code> for the actual means,
 standard errors and parameter counts; the frozen test set stays outside
 this decision.</p>
 </div>
+<div class="section level3">
+<h3 id="application-example-model-selection">Application example: model selection<a class="anchor" aria-label="anchor" href="#application-example-model-selection"></a>
+</h3>
+<p>In the application, the spatial design’s thirty configurations fall
+as in Figure 8. The best mean, [DRAFT: config and CCC], is not the
+choice: its standard error puts the threshold at [DRAFT: value], and
+[DRAFT: n] configurations reach it. The rule takes the smallest of them,
+[DRAFT: config, windows and parameters], [DRAFT: k] times fewer
+parameters than the best for a CCC [DRAFT: difference] lower. The seed
+noise floor is [DRAFT: value]; interpret it as training variability,
+separately from the uncertainty of the paired difference between
+configurations.</p>
+<p><em>Figure 8 is drawn from the application run once it
+completes.</em></p>
+</div>
 </div>
 <div class="section level2">
 <h2 id="the-baselines-that-give-the-number-a-scale">5. The baselines that give the number a scale<a class="anchor" aria-label="anchor" href="#the-baselines-that-give-the-number-a-scale"></a>
@@ -283,9 +309,14 @@ and not between experiments:</p>
 <span>                        output_dir <span class="op">=</span> <span class="st">"outputs/tuning"</span><span class="op">)</span></span>
 <span><span class="va">rf_point</span>   <span class="op">&lt;-</span> <span class="fu"><a href="../reference/dsm_train.html">dsm_train</a></span><span class="op">(</span><span class="va">data</span>, model <span class="op">=</span> <span class="st">"rf"</span>, resampling <span class="op">=</span> <span class="va">plan</span>,</span>
 <span>                        features <span class="op">=</span> <span class="st">"centre"</span>, tune_length <span class="op">=</span> <span class="fl">4</span>, output_dir <span class="op">=</span> <span class="st">"outputs/tuning"</span><span class="op">)</span></span></code></pre></div>
-<p>The gap between <code>rf_context</code> and the CNN is what the
-spatial <em>arrangement</em> of the neighbourhood is worth. If it is
-smaller than the noise floor, the convolution is only averaging.</p>
+<p>Compare the CNN with <code>rf_context</code> to assess whether
+learning spatial arrangement adds predictive skill beyond neighbourhood
+summaries. A small gap does not establish how the convolution works: it
+indicates that an additional gain has not been demonstrated under this
+design. Evaluate the paired difference on the same profiles, with
+uncertainty estimated by whole spatial blocks. Variation between seeds
+provides a separate check on training stability; it is not the
+uncertainty of that paired difference.</p>
 <p>The same plan runs any of caret’s ~230 methods:</p>
 <div class="sourceCode" id="cb9"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="../reference/caret_available.html">caret_available</a></span><span class="op">(</span><span class="st">"^xgb"</span><span class="op">)</span></span>
@@ -304,6 +335,23 @@ score the test set:</p>
 <span><span class="fu"><a href="../reference/score_test_grid.html">score_test_grid</a></span><span class="op">(</span><span class="va">fit</span><span class="op">$</span><span class="va">run_dir</span>, <span class="va">data</span>, device <span class="op">=</span> <span class="fu"><a href="../reference/setup_torch_device.html">setup_torch_device</a></span><span class="op">(</span><span class="op">)</span><span class="op">)</span></span></code></pre></div>
 <p><code><a href="../reference/score_test_grid.html">score_test_grid()</a></code> refuses to run before
 <code><a href="../reference/freeze_selection.html">freeze_selection()</a></code>, and it prints both timestamps.</p>
+<div class="section level3">
+<h3 id="application-example-validation-designs-on-one-test-set">Application example: validation designs on one test set<a class="anchor" aria-label="anchor" href="#application-example-validation-designs-on-one-test-set"></a>
+</h3>
+<p>The five designs of the application, each carried to its final model,
+meet on one test set (Figure 9). The profiles come in clusters, so the
+interval of a difference in error is drawn from whole blocks
+(<code><a href="../reference/block_bootstrap.html">block_bootstrap()</a></code>), not from profiles one by one. Every
+design’s model errs by [DRAFT: range] t/ha on the same profiles; against
+the spatial design the differences are [DRAFT: range] t/ha, and [DRAFT:
+which] intervals exclude zero. What the designs differ in more is what
+they promised: the cross-validated CCC of the random folds was [DRAFT:
+value] against [DRAFT: value] on the test set, while the spatial blocks’
+[DRAFT: value] held ([DRAFT: value]). A design is judged by how close
+its estimate comes to the test, not by how good the estimate looks.</p>
+<p><em>Figure 9 is drawn from the application run once it
+completes.</em></p>
+</div>
 </div>
 <div class="section level2">
 <h2 id="refit-the-chosen-configuration">7. Refit the chosen configuration<a class="anchor" aria-label="anchor" href="#refit-the-chosen-configuration"></a>
@@ -311,25 +359,69 @@ score the test set:</p>
 <div class="sourceCode" id="cb11"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">final</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/dsm_final.html">dsm_final</a></span><span class="op">(</span><span class="va">fit</span>, seeds <span class="op">=</span> <span class="fl">10</span><span class="op">)</span></span></code></pre></div>
 <p><code><a href="../reference/dsm_final.html">dsm_final()</a></code> refits the configuration the tuning run
-selects under ten seeds, side by side. It calibrates the conformal
-intervals and the smearing factor on the tuning run’s cross-validated
-residuals. It writes <code>final_report.md</code>, which declares every
-hyperparameter of the chosen network and whether the search chose
-it.</p>
+selects under ten seeds, side by side. It writes
+<code>final_report.md</code>, which declares every hyperparameter of the
+chosen network and whether the search chose it.</p>
+<p>It also calibrates the conformal intervals, three ways, and checks
+each on the test set:</p>
+<ul>
+<li>
+<code>cv</code>: on the tuning run’s cross-validated residuals. It
+costs nothing and promises nothing, since the configuration was chosen
+on those folds.</li>
+<li>
+<code>split</code>: split conformal, on the calibration set.
+Coverage is at least the level asked for, for points exchangeable with
+that set (Lei et al. 2018).</li>
+<li>
+<code>cv_plus</code>: CV+, with each fold’s own model at the new
+point (Barber et al. 2021). Coverage is at least
+<code>1 - 2 alpha - sqrt(2/n)</code>, and close to the level in
+practice. It costs one more pass of the network per fold model.</li>
+</ul>
+<p>Each method is computed at a constant width and at one that grows
+with the predicted level and the dissimilarity index. The quantile can
+also weigh every block alike instead of every point (Dunn et al. 2023):
+a dense survey then stops setting the width for everyone. Clustered
+profiles, and a configuration chosen on the folds, bend all three
+guarantees. So the test set is the judge, reading coverage overall, by
+block, inside and outside the area of applicability, and by level:</p>
+<div class="sourceCode" id="cb12"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="va">final</span><span class="op">$</span><span class="va">per_config</span><span class="op">[[</span><span class="fl">1</span><span class="op">]</span><span class="op">]</span><span class="op">$</span><span class="va">intervals</span><span class="op">$</span><span class="va">summary</span></span></code></pre></div>
+<div class="section level3">
+<h3 id="application-example-coverage-and-interval-width">Application example: coverage and interval width<a class="anchor" aria-label="anchor" href="#application-example-coverage-and-interval-width"></a>
+</h3>
+<p>In the application, the five designs’ final models were checked on
+the same test profiles (Figure 10). [DRAFT: which calibration came
+closest to 90%, by design]. The split intervals, calibrated on points no
+model trained on, covered [DRAFT: range]; the cross-validated ones
+[DRAFT: range], and CV+ [DRAFT: range]. The width that follows the level
+and the dissimilarity index cost [DRAFT: how much] against the constant
+one, and held its coverage in the [DRAFT: lowest and highest] fifths of
+the predicted stock. Outside the area of applicability the coverage fell
+to [DRAFT: value]: there no calibration speaks for the pixel.</p>
+<p><em>Figure 10 is drawn from the application run once it
+completes.</em></p>
+</div>
 </div>
 <div class="section level2">
 <h2 id="the-map">8. The map<a class="anchor" aria-label="anchor" href="#the-map"></a>
 </h2>
-<div class="sourceCode" id="cb12"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="va">map</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/dsm_predict.html">dsm_predict</a></span><span class="op">(</span><span class="va">final</span>, <span class="va">data</span>, extent <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="op">-</span><span class="fl">56</span>, <span class="op">-</span><span class="fl">50.5</span>, <span class="op">-</span><span class="fl">15</span>, <span class="op">-</span><span class="fl">13.8</span><span class="op">)</span><span class="op">)</span></span>
+<div class="sourceCode" id="cb13"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="va">map</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/dsm_predict.html">dsm_predict</a></span><span class="op">(</span><span class="va">final</span>, <span class="va">data</span>, extent <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="op">-</span><span class="fl">56</span>, <span class="op">-</span><span class="fl">50.5</span>, <span class="op">-</span><span class="fl">15</span>, <span class="op">-</span><span class="fl">13.8</span><span class="op">)</span>,</span>
+<span>                   intervals <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"cv"</span>, <span class="st">"split"</span><span class="op">)</span><span class="op">)</span></span>
 <span><span class="va">map</span></span></code></pre></div>
 <p>The map is one VRT per band:</p>
 <ul>
 <li>the ensemble median, mean, sd, mad, min and max over the seeds;</li>
 <li>the smeared mean;</li>
-<li>the 90% conformal intervals;</li>
+<li>the 90% conformal intervals, one pair of bands per calibration and
+width, e.g. <code>pi90_split_level_di_lower</code>;</li>
 <li>the dissimilarity index and the area of applicability.</li>
 </ul>
+<p><code>intervals = "cv_plus"</code> adds the CV+ bands. Every fold
+model then predicts every pixel, so the map costs several times more
+network time.</p>
 <p><code>bands.csv</code>, beside the bands, says what each one is.</p>
 <p>Before it maps, <code><a href="../reference/dsm_predict.html">dsm_predict()</a></code> runs a <em>probe</em>. It
 predicts the profiles’ own pixels through the whole chain and compares
@@ -338,18 +430,18 @@ a wrong scaling stops the run in seconds instead of producing a
 plausible map. Drop <code>extent</code> for the whole grid. The run
 resumes where it stopped, and it refuses to continue if anything that
 changes the numbers has changed.</p>
-</div>
-<div class="section level2">
-<h2 id="where-the-map-may-be-believed">Where the map may be believed<a class="anchor" aria-label="anchor" href="#where-the-map-may-be-believed"></a>
-</h2>
+<div class="section level3">
+<h3 id="where-the-map-may-be-believed">Where the map may be believed<a class="anchor" aria-label="anchor" href="#where-the-map-may-be-believed"></a>
+</h3>
 <p>A map has a value at every pixel, including pixels whose predictor
 combination the model never met, and nothing in the raster tells them
 apart. The cross-validated error does not describe those pixels. The
 <code>di_*</code> and <code>aoa_*</code> bands (Meyer &amp; Pebesma,
 2021) say where it does, and they belong beside the map, not in a
 footnote.</p>
+</div>
 <div class="section level3">
-<h3 id="reading-the-final-maps-together">Reading the final maps together<a class="anchor" aria-label="anchor" href="#reading-the-final-maps-together"></a>
+<h3 id="application-example-reading-the-final-maps-together">Application example: reading the final maps together<a class="anchor" aria-label="anchor" href="#application-example-reading-the-final-maps-together"></a>
 </h3>
 <p>Interpret the predicted stock together with the width of its
 calibrated 90% interval and its area of applicability. A wide interval
@@ -357,14 +449,22 @@ indicates less precise predictions; a pixel outside the AOA has
 predictor conditions beyond the applicability criterion derived from
 validation. The two diagnostics describe different aspects of
 reliability.</p>
-<p>The maps of the application will be shown here once its full run is
-complete.</p>
+<p><em>Figure 11 is drawn from the application run once it
+completes.</em></p>
+<p>The median ranges over [DRAFT: range] t/ha, with the highest stocks
+in [DRAFT: regions] and the lowest in [DRAFT: regions]. The interval is
+widest where the stock is high and where the dissimilarity index is
+high, as the scaled calibration intends: [DRAFT: width range] t/ha.
+[DRAFT: share]% of the area lies inside the AOA; the pixels outside are
+[DRAFT: where – e.g. the landscapes with few profiles], and there the
+interval’s coverage is not known, however narrow it is drawn. On the
+test profiles the 90% interval covered [DRAFT: value]%.</p>
 </div>
 </div>
 <div class="section level2">
 <h2 id="what-the-model-learned">9. What the model learned<a class="anchor" aria-label="anchor" href="#what-the-model-learned"></a>
 </h2>
-<div class="sourceCode" id="cb13"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb14"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">themes</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/utils/read.table.html" class="external-link">read.csv2</a></span><span class="op">(</span><span class="st">"importance_themes.csv"</span><span class="op">)</span><span class="op">[</span>, <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"channel"</span>, <span class="st">"variable"</span><span class="op">)</span><span class="op">]</span></span>
 <span><span class="va">perm</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/dsm_importance.html">dsm_importance</a></span><span class="op">(</span><span class="va">final</span>, <span class="va">data</span>, groups <span class="op">=</span> <span class="va">themes</span><span class="op">)</span></span>
 <span><span class="va">shap</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/dsm_importance.html">dsm_importance</a></span><span class="op">(</span><span class="va">final</span>, <span class="va">data</span>, <span class="fu"><a href="../reference/shap_importance.html">shap_importance</a></span><span class="op">(</span><span class="op">)</span>, groups <span class="op">=</span> <span class="va">themes</span><span class="op">)</span></span>
@@ -404,8 +504,31 @@ what their models learned.</p>
 run wrote, and a refit must first train a seed again and get them back.
 An importance measured on another model would look just as
 plausible.</p>
-<p>The application’s importances will be shown here once its full run is
-complete.</p>
+<div class="section level3">
+<h3 id="application-example-importance-by-theme">Application example: importance by theme<a class="anchor" aria-label="anchor" href="#application-example-importance-by-theme"></a>
+</h3>
+<p><em>Figure 12 is drawn from the application run once it
+completes.</em></p>
+<p>The two methods answer different questions, and the application shows
+it. SHAP, which splits each prediction among the themes, ranks them
+almost the same way under every validation design (Spearman 0.92 to 0.98
+between the designs’ rankings [DRAFT: smoke numbers]): the ranking of
+themes is stable across these designs. Similar rankings alone do not
+establish that the models learned the same spatial relationships.
+Permutation, which scores what the skill loses when a theme is broken,
+agrees less (0.50 to 0.91 [DRAFT: smoke numbers]), most of all between
+the holdout and region designs: where correlated themes can stand in for
+one another, the drop from breaking one depends on what the model leaned
+on, and that is the part a design changes. Climate, vegetation
+productivity, the spectral bands and soil properties lead under both
+[DRAFT: smoke ranking]; relief follows; the categorical maps of land-use
+change and FAO soil classes show no detectable contribution in these
+provisional model-specific diagnostics. That does not establish that
+those themes are uninformative in other models, regions or samples. Read
+each ranking as a description of the fitted model, and agreement between
+designs as evidence of ranking stability under the validation choices
+examined.</p>
+</div>
 </div>
 <div class="section level2">
 <h2 id="about-the-illustrations">About the illustrations<a class="anchor" aria-label="anchor" href="#about-the-illustrations"></a>
@@ -414,9 +537,12 @@ complete.</p>
 m. The input-patch illustration uses separate high-resolution raster
 crops at one of its profiles. The continental validation panels come
 from the plans of a test run on 1% of the profiles; the local buffer
-detail comes from the full spatial plan. The model-selection plot uses
-simulated values. No prediction maps or performance figures are
-presented. The scripts that draw the figures are in the package’s <a href="https://github.com/moquedace/soilcnn" class="external-link">GitHub repository</a>, under
+detail comes from the full spatial plan. The model-selection plot of
+Figure 7 uses simulated values. Figures 8 to 12 come from the
+application run on a tenth of the profiles, in whole blocks stratified
+by region: its selection, its five designs on one test set, its
+intervals, its maps and its importances. The scripts that draw the
+figures are in the package’s <a href="https://github.com/moquedace/soilcnn" class="external-link">GitHub repository</a>, under
 <code>tools/</code>; they read data and fold plans, and fit no
 model.</p>
 </div>
