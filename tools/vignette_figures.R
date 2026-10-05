@@ -85,7 +85,7 @@ start("workflow",1800,1000)
 heading("01 / WORKFLOW","From soil observations to a defensible map","One shared dataset. An explicit validation design. Predictions with calibrated intervals and applicability.")
 verbs<-c("Prepare","Load","Validate","Tune","Refit","Predict")
 calls<-c("dsm_prepare()","dsm_load()","spatial_cv() + alternatives","dsm_train()","dsm_final()","dsm_predict()")
-detail<-c("Profiles + aligned rasters\nRaw multiscale patches","Store + extraction recipe\nConsistency checks","Training / validation / test\nSpatial separation","Configurations x folds x seeds\nSelection + model baselines","Selected configuration\nEnsemble + calibration","Property + interval bands\nDissimilarity + applicability")
+detail<-c("Profiles + aligned rasters\nRaw multiscale patches","Store + extraction recipe\nConsistency checks","Train / validate / calibrate / test\nSpatial separation","Configurations x folds x seeds\nSelection + model baselines","Selected configuration\nEnsemble + calibration","Property + interval bands\nDissimilarity + applicability")
 for(i in 1:6) {
   j<-(i-1)%%3; row<-(i-1)%/%3; x<-.04+j*.315; y<-.49-row*.34
   box(x,y,x+.285,y+.27,if(i==3) "#F7F0E9" else C["pale"])
@@ -97,7 +97,11 @@ for(i in 1:6) {
 }
 segments(.958,.625,.976,.625,col=C["muted"]); segments(.976,.625,.976,.465,col=C["muted"])
 segments(.976,.465,.025,.465,col=C["muted"]); segments(.025,.465,.025,.285,col=C["muted"]); arrow(.025,.285,.038,.285)
-txt(.04,.064,"The test set stays outside tuning. Scaling is fitted on training rows. The extraction store is reused.",.82,C["muted"])
+box(.04,.027,.955,.115,C["pale"])
+txt(.058,.083,"07  Interpret",1.05,bold=TRUE)
+txt(.25,.083,"dsm_importance() + importance_map()",.85,C["blue"])
+txt(.058,.049,"Theme rankings, neighbourhood context and spatial effects; read with uncertainty and applicability.",.77,C["muted"])
+arrow(.812,.145,.812,.118)
 finish()
 
 start("patches",1800,1620)

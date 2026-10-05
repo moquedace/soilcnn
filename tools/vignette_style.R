@@ -64,6 +64,7 @@ raster_panel <- function(r, x0, y0, x1, y1, palette, zlim = NULL, classes = NULL
   m <- terra::as.matrix(p, wide = TRUE)
   if (is.null(classes)) {
     zlim <- zlim %||% stats::quantile(m, c(.02, .98), na.rm = TRUE, names = FALSE)
+    if (diff(zlim) == 0) zlim <- zlim + c(-1, 1) * max(abs(zlim[1]) * 1e-6, 1e-9)
     k <- 1 + floor((pmin(pmax(m, zlim[1]), zlim[2]) - zlim[1]) / diff(zlim) * (length(palette) - 1))
     col <- palette[k]
   } else {
@@ -80,11 +81,28 @@ raster_panel <- function(r, x0, y0, x1, y1, palette, zlim = NULL, classes = NULL
               interpolate = FALSE)
   invisible(zlim)
 }
-colour_bar <- function(x0, y, w, palette, zlim, label, digits = 0) {
+colour_bar <- function(x0, y, w, palette, zlim, label, digits = NULL) {
+  if (is.null(digits)) digits <- range_digits(zlim)
   n <- length(palette)
   rect(x0 + (seq_len(n) - 1) * w / n, y, x0 + seq_len(n) * w / n, y + .014,
        col = palette, border = NA)
   txt(x0, y - .02, format(round(zlim[1], digits), nsmall = digits), .62, C["muted"])
   txt(x0 + w, y - .02, format(round(zlim[2], digits), nsmall = digits), .62, C["muted"], adj = 1)
+  if (zlim[1] < 0 && zlim[2] > 0) {
+    zx <- x0 + w * (-zlim[1]) / diff(zlim)
+    segments(zx, y, zx, y + .014, col = C["ink"], lwd = .7)
+    txt(zx, y - .02, "0", .62, C["muted"], adj = .5)
+  }
   txt(x0 + w / 2, y + .034, label, .7, C["muted"], adj = .5)
 }
+
+# Resolve small ranges without printing misleading identical endpoints.
+range_digits <- function(x) {
+  span <- diff(range(x, na.rm = TRUE))
+  if (!is.finite(span) || span == 0) return(3L)
+  as.integer(min(9, max(0, 1 - floor(log10(span)))))
+}
+fmt_value <- function(x, significant = 3L) {
+  format(signif(x, significant), scientific = abs(x) > 0 & abs(x) < 1e-4, trim = TRUE)
+}
+`%||%` <- function(a, b) if (is.null(a)) b else a
