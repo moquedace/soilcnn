@@ -12,8 +12,9 @@ C <- c(ink = "#253840", muted = "#63767D", blue = "#246589", olive = "#60734F",
        earth = "#AB6645", pale = "#F3F6F5", line = "#DCE4E3", train = "#A9B6BA")
 if (.Platform$OS.type == "windows") windowsFonts(editorial = windowsFont("Segoe UI"))
 font <- if (.Platform$OS.type == "windows") "editorial" else "sans"
-start <- function(name, w = 1800, h = 1100) {
-  png(file.path(fig, paste0(name, ".png")), w, h, res = 180,
+# `dir`: the vignette's figures unless a rehearsal draws elsewhere.
+start <- function(name, w = 1800, h = 1100, dir = fig) {
+  png(file.path(dir, paste0(name, ".png")), w, h, res = 180,
       type = if (.Platform$OS.type == "windows") "windows" else "cairo")
   par(mar = rep(0, 4), family = font, fg = C["ink"], col = C["ink"], xpd = NA)
   plot.new(); plot.window(c(0, 1), c(0, 1), xaxs = "i", yaxs = "i")

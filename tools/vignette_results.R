@@ -15,6 +15,7 @@
 #
 #   results_from <- "smoke"   # before source(), or leave it to the default
 #   figures <- "intervals"    # some of them only; rm(figures) for all five
+#   maps_from <- "maps/check_tile"   # the maps figure rehearsed on 05a's tile
 #   source("D:/usuario_armazenamento/cassio/projects/soilcnn/tools/vignette_results.R")
 #
 # Reads the run's files directly, not 00_settings.R, which a running stage of
@@ -25,6 +26,12 @@ if (!exists("results_from")) results_from <- "smoke"
 # Which figures: all five, or some -- figures <- "intervals" draws that one,
 # from a run that has not mapped the region or measured the importance yet.
 if (!exists("figures")) figures <- c("selection", "designs", "maps", "importance", "intervals")
+# Where the spatial design's map is in the run -- "maps", 05b's region, by
+# default. maps_from <- "maps/check_tile" rehearses the maps figure on 05a's
+# tile before 05b's days end: drawn into <run>/vignette/, never into the
+# vignette's figures, and with no record.
+if (!exists("maps_from")) maps_from <- "maps"
+rehearsal <- !identical(maps_from, "maps")
 if (!exists("root")) root <- "D:/usuario_armazenamento/cassio/projects/soilcnn"
 trial <- "D:/usuario_armazenamento/cassio/projects/soc_stock_0_30cm_lac"
 run   <- file.path(trial, "outputs", results_from)
@@ -146,22 +153,38 @@ finish()
 
 # ── 3. The maps: median, interval width, applicability ────────────────────────
 if ("maps" %in% figures) {
-md <- file.path(run, "maps", "spatial")
+md <- file.path(run, maps_from, "spatial")
 r_med <- terra::rast(file.path(md, "ensemble_median.vrt"))
-# The bands carry their calibration in their name since 2026-10-05
-# (pi90_cv_constant_*); a map from before has the old names.
-band_vrt <- function(now, before) {
-  f <- file.path(md, paste0(now, ".vrt"))
-  if (file.exists(f)) f else file.path(md, paste0(before, ".vrt"))
+# A band by what it is, from the map's bands.csv, as 06_compare.R finds them:
+# the file names carry the calibration source (aoa_block, ..._block), and a
+# map from before 2026-10-05 has no width column -- its method WAS the width,
+# and its intervals were all cv.
+bands <- csv(file.path(md, "bands.csv"))
+if (!"width" %in% names(bands)) {
+  bands$width  <- bands$method
+  bands$method <- ifelse(bands$kind == "interval", "cv", NA)
 }
-r_wid <- terra::rast(band_vrt("pi90_cv_constant_upper_block", "pi90_constant_upper_block")) -
-  terra::rast(band_vrt("pi90_cv_constant_lower_block", "pi90_constant_lower_block"))
-r_aoa <- terra::rast(file.path(md, "aoa_block.vrt"))
+band_vrt <- function(kind, method = NA, width = NA, side = NA) {
+  hit <- bands$kind == kind & (is.na(method) | bands$method %in% method) &
+    (is.na(width) | bands$width %in% width) & (is.na(side) | bands$side %in% side) &
+    (kind != "interval" | bands$label %in% "pi90")
+  if (sum(hit) != 1L) stop("The map has ", sum(hit), " band(s) of kind '", kind, "' here: bands.csv says which.")
+  file.path(md, paste0(bands$band[hit], ".vrt"))
+}
+# The width the text reads: the interval that follows the level and the DI
+# (a constant one is flat, but where the floor at 0 cuts it), calibrated on
+# the calibration set where the map carries it -- split, the one with a
+# guarantee -- and on the folds otherwise.
+shown <- if (any(bands$method %in% "split")) "split" else "cv"
+r_wid <- terra::rast(band_vrt("interval", shown, "level_di", "upper")) -
+  terra::rast(band_vrt("interval", shown, "level_di", "lower"))
+r_aoa <- terra::rast(band_vrt("aoa"))
 pal_med <- grDevices::hcl.colors(80, "YlGnBu", rev = TRUE)
 pal_wid <- grDevices::hcl.colors(80, "YlOrBr", rev = TRUE)
-start("trial_maps", 2400, 1150)
+start("trial_maps", 2400, 1150, dir = if (rehearsal) kept else fig)
 heading("THE MAP / THE APPLICATION", "What the map says, and where it may be believed",
-        "The spatial design's final model: the ensemble median, the width of its 90% conformal interval, and the area of applicability.")
+        sprintf("The spatial design's final model: the ensemble median, the width of its 90%% %s interval, which follows the level and the DI, and the area of applicability.",
+                if (shown == "split") "split conformal" else "cross-validated"))
 z1 <- raster_panel(r_med, .02, .14, .33, .80, pal_med)
 z2 <- raster_panel(r_wid, .345, .14, .655, .80, pal_wid)
 raster_panel(r_aoa, .67, .14, .98, .80, c("#DADFDA", C[["olive"]]), classes = c(0, 1),
@@ -170,8 +193,9 @@ colour_bar(.08, .07, .19, pal_med, z1, "SOC stock, 0-30 cm (t/ha)")
 colour_bar(.405, .07, .19, pal_wid, z2, "90% interval width (t/ha)")
 rect(.73, .07, .745, .084, col = "#DADFDA", border = NA); txt(.75, .077, "outside", .66, C["muted"])
 rect(.82, .07, .835, .084, col = C["olive"], border = NA); txt(.84, .077, "inside the AOA", .66, C["muted"])
-mark_source("trial_maps", results_from, run)
+if (!rehearsal) mark_source("trial_maps", results_from, run)
 finish()
+if (rehearsal) message("The maps figure, rehearsed on ", maps_from, ": ", file.path(kept, "trial_maps.png"))
 }
 
 # ── 4. What the model learned, by theme ───────────────────────────────────────
@@ -310,4 +334,9 @@ mark_source("trial_intervals", results_from, run)
 finish()
 }
 
-message("Result figures (", paste(figures, collapse = ", "), ") drawn from '", results_from, "' into ", fig)
+# A rehearsed maps figure said where it went; it is not one of these.
+into_vignette <- if (rehearsal) setdiff(figures, "maps") else figures
+if (length(into_vignette)) {
+  message("Result figures (", paste(into_vignette, collapse = ", "), ") drawn from '", results_from,
+          "' into ", fig)
+}
