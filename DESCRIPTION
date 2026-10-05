@@ -12,10 +12,13 @@ Description: A framework, built on 'torch', for mapping a soil property from
     matching, after Linnenbrink et al. (2024) <doi:10.5194/gmd-17-5897-2024>;
     tunes and selects under a noise floor and the one-standard-error rule;
     refits the selected configuration under several seeds; and predicts
-    median, mean and interval maps over rasters of any extent. The mean is the
-    median smeared after Duan (1983) <doi:10.1080/01621459.1983.10478017>, the
-    intervals are split conformal, after Lei et al. (2018)
-    <doi:10.1080/01621459.2017.1307116>, and the area of applicability of
+    median, mean and interval maps over rasters of any extent. The map's
+    centre is the ensemble median over seeds; the mean corrects its
+    back-transformation by smearing, after Duan (1983)
+    <doi:10.1080/01621459.1983.10478017>; the intervals are conformal, after
+    Lei et al. (2018) <doi:10.1080/01621459.2017.1307116>, calibrated on
+    cross-validated residuals, so their coverage is approximate and is checked
+    on the test set; and the area of applicability of
     Meyer and Pebesma (2021) <doi:10.1111/2041-210X.13650> is mapped beside
     them. What a model learned is read by permutation, by SHAP values from
     expected gradients, after Erion et al. (2021)

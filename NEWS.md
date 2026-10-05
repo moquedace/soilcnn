@@ -17,8 +17,9 @@ First release.
   `score_test_grid()`).
 * The selected configuration refitted under several seeds (`dsm_final()`),
   and maps of any extent (`dsm_predict()`): ensemble median and spread, the
-  mean by smearing (`smear()`, `smear_map()`, `smearing_check()`), split
-  conformal intervals (`conformal_calibrate()`, `conformal_scaled_calibrate()`)
+  mean by smearing (`smear()`, `smear_map()`, `smearing_check()`), conformal
+  intervals calibrated on cross-validated residuals, with coverage checked on
+  the test set (`conformal_calibrate()`, `conformal_scaled_calibrate()`)
   and the area of applicability (`aoa_reference()`, `dissimilarity_index()`).
 * Variable importance by permutation, SHAP (expected gradients, integrated
   gradients, kernel), SAGE, refits without each variable and accumulated local

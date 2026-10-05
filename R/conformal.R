@@ -549,6 +549,17 @@ print.conformal_scaled <- function(x, ...) {
 # conformal cannot fix: a held-out spatial block is not exchangeable with the
 # blocks used to calibrate. That gap is worth reporting, and this framework
 # reports it rather than tuning alpha until the number looks right.
+#
+# WHY THIS IS NOT SPLIT CONFORMAL, STRICTLY. The configuration was chosen on
+# these same folds, and the residuals are applied to a refit on more data, so
+# the calibration points are not a set nothing else touched. Selection on the
+# folds biases the residuals small; the larger training set of the refit biases
+# them large. Neither bias is bounded, so the finite-sample guarantee is gone
+# and the coverage is an estimate, which is why it is always measured on the
+# test rows. Kept over a separate calibration split because, with a few
+# thousand clustered points, setting one aside costs the model more than the
+# guarantee is worth; the alternatives with a guarantee (CV+ / jackknife+,
+# Barber et al. 2021) need every fold's model at prediction time.
 
 #' Cross-validated residuals from a tuning run, for calibration.
 #'

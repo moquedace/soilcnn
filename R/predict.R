@@ -1072,7 +1072,7 @@ print.dsm_prediction <- function(x, ...) {
       if ("interval_constant" %in% want) {
         for (side in c("lower", "upper")) {
           add(sprintf("%s_constant_%s_%s", iv$label, side, s$name), "interval",
-              sprintf("%s bound of the %g%% split-conformal interval, constant width (+/- %.4g), calibrated on '%s' cross-validated residuals", side, lvl, iv$constant$q, s$name),
+              sprintf("%s bound of the %g%% conformal interval, constant width (+/- %.4g), calibrated on '%s' cross-validated residuals", side, lvl, iv$constant$q, s$name),
               source = s$name, alpha = iv$alpha, label = iv$label, method = "constant", side = side)
         }
       }

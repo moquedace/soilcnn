@@ -371,8 +371,9 @@ iv  <- conformal_interval(cal, test$pred, lower_limit = 0)
 picp_report(test$obs, iv$lower, iv$upper, group = test$block, alpha = 0.1)
 ```
 
-Split conformal gives `P(y ∈ interval) ≥ 1 − α` with no distributional
-assumption, from one pass over held-out residuals. `dsm_final()` calibrates on
+Split conformal, on a calibration set nothing else touched, gives
+`P(y ∈ interval) ≥ 1 − α` with no distributional assumption. `dsm_final()`
+departs from that on purpose, and the guarantee becomes approximate: it calibrates on
 the tuning run's **cross-validated** residuals — every point predicted once, as
 validation, somewhere — and checks coverage on the **test** rows, which neither
 trained nor calibrated anything: a coverage measured on the points that
