@@ -125,6 +125,31 @@ under a different predictor set, window set, target or resolution. A store
 written by `dsm_prepare()` carries its own tables and recipe, so
 `dsm_load(store)` needs nothing else.
 
+### Without data of your own
+
+The package ships a small synthetic landscape -- 80 x 80 cells, eight
+predictors, 160 profiles in clusters, a stock drawn from vegetation, clay,
+temperature, geology and the topographic position of each cell -- and a run
+fitted on it in about a minute, kept for the session:
+
+```r
+ex  <- example_landscape()     # the rasters' folder and the profiles
+run <- example_run()           # store, tuning and final model, in tempdir()
+run$final
+dsm_importance(run$final, run$data)
+```
+
+Every help page's example starts from one of the two.
+
+### A smaller run first
+
+`dsm_prepare(subsample = list(frac = 0.1, block_size = 0.5, strata = 5))`
+keeps a tenth of the points in whole blocks, so the clusters the validation
+must face stay whole, and `strata` keeps every region: each 5-degree square
+keeps its points up to one common quota, so the cut falls where the data are
+densest. The store records it, and a subsampled run is never mistaken for a
+full one.
+
 ### One line decides who trains and who scores
 
 ```r
