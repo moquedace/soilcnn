@@ -85,14 +85,14 @@ prove the choice preceded it. Call it at the moment the choice is made.</p>
     <h2 id="ref-examples">Examples<a class="anchor" aria-label="anchor" href="#ref-examples"></a></h2>
     <div class="sourceCode"><pre class="sourceCode r"><code><span class="r-in"><span><span class="va">run_dir</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/file.path.html" class="external-link">file.path</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/tempfile.html" class="external-link">tempdir</a></span><span class="op">(</span><span class="op">)</span>, <span class="st">"tuning_example"</span><span class="op">)</span></span></span>
 <span class="r-in"><span><span class="fu">freeze_selection</span><span class="op">(</span><span class="va">run_dir</span>, <span class="st">"cfg_002"</span>, note <span class="op">=</span> <span class="st">"one_se on the cross-validation"</span><span class="op">)</span></span></span>
-<span class="r-msg co"><span class="r-pr">#&gt;</span> Selection frozen: cfg_002 (one_se on val_ccc) -&gt; /tmp/RtmpYGKv6p/tuning_example/comparison/selection.rds</span>
-<span class="r-msg co"><span class="r-pr">#&gt;</span>   NOTE: no git commit recorded -- /tmp/RtmpYGKv6p/tuning_example/comparison is not inside a git work tree.</span>
+<span class="r-msg co"><span class="r-pr">#&gt;</span> Selection frozen: cfg_002 (one_se on val_ccc) -&gt; /tmp/RtmpYXfljx/tuning_example/comparison/selection.rds</span>
+<span class="r-msg co"><span class="r-pr">#&gt;</span>   NOTE: no git commit recorded -- /tmp/RtmpYXfljx/tuning_example/comparison is not inside a git work tree.</span>
 <span class="r-msg co"><span class="r-pr">#&gt;</span>   The record still fixes WHAT was chosen and WHEN; it cannot fix against which state of the code.</span>
 <span class="r-in"><span><span class="co"># the same choice again is accepted; another is refused</span></span></span>
 <span class="r-in"><span><span class="kw"><a href="https://rdrr.io/r/base/try.html" class="external-link">try</a></span><span class="op">(</span><span class="fu">freeze_selection</span><span class="op">(</span><span class="va">run_dir</span>, <span class="st">"cfg_005"</span><span class="op">)</span><span class="op">)</span></span></span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> Error : This run already has a frozen selection (cfg_002, 2026-10-05 16:13:08).</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> Error : This run already has a frozen selection (cfg_002, 2026-10-05 18:53:57).</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span>   Re-freezing a different config would destroy the ordering the file exists to prove.</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span>   Delete /tmp/RtmpYGKv6p/tuning_example/comparison/selection.rds deliberately if the first selection was genuinely wrong, and record why in the log.</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>   Delete /tmp/RtmpYXfljx/tuning_example/comparison/selection.rds deliberately if the first selection was genuinely wrong, and record why in the log.</span>
 </code></pre></div>
     </div>
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>
