@@ -59,6 +59,32 @@ if (identical(results_from, "smoke")) {
   say("THE SMOKE'S MODELS NEVER LEARNED: these numbers test the script, not the text.")
 }
 
+# ── Figure 5: the validation geometry (section 3) ─────────────────────────────
+#
+# The paragraph above Figure 5 names the plans' profiles, their share of the
+# application and the spatial blocks' size: the run's own, once
+# tools/vignette_designs.R draws the figure from its plans.
+part("Figure 5 -- the validation geometry (section 3)", {
+  files <- file.path(run, "tuning", designs, "fold_plan.rds")
+  if (!all(file.exists(files))) {
+    stop("no fold plan yet for: ", paste(designs[!file.exists(files)], collapse = ", "), " (03)")
+  }
+  plans <- lapply(files, readRDS)
+  n <- plans[[1]]$n_rows
+  # 25,887: the completed extraction store, as the vignette's section 1 says.
+  mark("profiles, and their share", sprintf("%s profiles (%s of the 25,887)",
+                                            format(n, big.mark = ","), pct(n / 25887)))
+  sp <- plans[[1]]$params
+  mark("block size (the spatial plan)", sprintf("%s degrees%s", format(signif(sp$block_size, 3)),
+                                                if (isTRUE(sp$block_size_auto)) ", measured (auto)" else ""))
+  mark("buffer (the spatial plan)", sprintf("%s degrees", format(signif(sp$buffer, 3))))
+  for (i in seq_along(designs)) {
+    p <- plans[[i]]; f <- p$folds[[1]]
+    say(sprintf("    %-8s fold 1: %d train, %d validate, %d calibrate, %d test", designs[i],
+                length(f$train), length(f$validation), length(p$calibration), length(f$test)))
+  }
+})
+
 # ── Figure 8: the selection (section 4) ───────────────────────────────────────
 part("Figure 8 -- the configurations the spatial design tried (section 4)", {
   tun  <- file.path(run, "tuning", "spatial")
