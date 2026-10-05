@@ -5,6 +5,7 @@
 #
 #   results_from <- "smoke"           # the run: "sample10" when it is done
 #   maps_from <- "maps/check_tile"    # optional: 05a's tiles stand in for 05b's maps
+#   results_dir <- "<a run folder>"   # optional: a run outside outputs/
 #   source("D:/usuario_armazenamento/cassio/projects/soilcnn/tools/vignette_numbers.R")
 #
 # Reads the run's files: 03's tuning comparison, 04's intervals, 06's
@@ -17,7 +18,7 @@
 if (!exists("results_from")) results_from <- "smoke"
 if (!exists("maps_from")) maps_from <- "maps"
 trial <- "D:/usuario_armazenamento/cassio/projects/soc_stock_0_30cm_lac"
-run   <- file.path(trial, "outputs", results_from)
+run   <- if (exists("results_dir")) results_dir else file.path(trial, "outputs", results_from)
 stopifnot(dir.exists(run))
 suppressMessages(library(soilcnn))
 csv <- function(p) utils::read.csv2(p, stringsAsFactors = FALSE)
@@ -85,8 +86,8 @@ part("Figure 8 -- the configurations the spatial design tried (section 4)", {
   mark("value (the noise floor)", sprintf("%s, the median sd between seeds (widest range %s; %d config x fold)",
                                           ccc_text(nf$median_sd), ccc_text(nf$max_range), nf$n_comparable))
   if (is.finite(nf$median_sd)) {
-    say("  check: the difference is ", if (gap <= nf$median_sd) "within" else "ABOVE",
-        " the noise floor (the text: 'a difference the seeds alone produce')")
+    say("  check: the gap between the best and the choice is ",
+        if (gap <= nf$median_sd) "within" else "ABOVE", " the seeds' noise floor")
   }
 })
 

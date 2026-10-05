@@ -6,7 +6,7 @@
 #   trial_maps        the median, the width of the 90% interval and the AOA
 #   trial_importance  permutation against SHAP by theme, and SHAP maps
 #   trial_intervals   the three interval calibrations on the one test set:
-#                     coverage against the 90% promised, and mean width
+#                     coverage against the nominal 90%, and mean width
 #
 # Drawn from the SMOKE run while the real one runs -- for the layout only: its
 # models never learned, every figure says so across its face, and its record
@@ -16,6 +16,8 @@
 #   results_from <- "smoke"   # before source(), or leave it to the default
 #   figures <- "intervals"    # some of them only; rm(figures) for all five
 #   maps_from <- "maps/check_tile"   # the maps figure rehearsed on 05a's tile
+#   results_dir <- "<a run folder>"  # a run outside outputs/, e.g. an archived one
+#   importance_cache <- "<file.rds>" # importance computed before, elsewhere
 #   source("D:/usuario_armazenamento/cassio/projects/soilcnn/tools/vignette_results.R")
 #
 # Reads the run's files directly, not 00_settings.R, which a running stage of
@@ -34,10 +36,18 @@ if (!exists("maps_from")) maps_from <- "maps"
 rehearsal <- !identical(maps_from, "maps")
 if (!exists("root")) root <- "D:/usuario_armazenamento/cassio/projects/soilcnn"
 trial <- "D:/usuario_armazenamento/cassio/projects/soc_stock_0_30cm_lac"
-run   <- file.path(trial, "outputs", results_from)
+# results_dir, and not run_dir: a run_dir left in the session by anything else
+# would draw the figures from another run, and say nothing.
+run   <- if (exists("results_dir")) results_dir else file.path(trial, "outputs", results_from)
 stopifnot(dir.exists(run))
 base::source(file.path(root, "tools", "vignette_style.R"))
-suppressMessages(library(soilcnn))
+if (requireNamespace("soilcnn", quietly = TRUE)) {
+  suppressMessages(library(soilcnn))
+} else {
+  # Plot cached results without loading the model-training runtime.
+  base::source(file.path(root, "R", "metrics.R"))
+  base::source(file.path(root, "R", "block_bootstrap.R"))
+}
 csv <- function(p) utils::read.csv2(p, stringsAsFactors = FALSE)
 designs <- c(spatial = "Spatial blocks", knndm = "kNNDM", random = "Random folds",
              holdout = "Holdout", region = "Ecoregions")
@@ -85,12 +95,11 @@ for (i in seq_len(nrow(bc))) {
          col = co, cex = if (i %in% c(best, chosen)) 1.3 else .9, lwd = 1.4)
 }
 txt(.755, .70, paste("Best mean /", bc$config_id[best]), 1.03, C["blue"], TRUE)
-txt(.755, .655, sprintf("CCC %.3f, SE %.3f", bc$val_ccc_mean[best], bc$val_ccc_se[best]), .88, C["muted"])
+txt(.755, .655, paste0("CCC ", fmt_value(bc$val_ccc_mean[best]), ", SE ", fmt_value(bc$val_ccc_se[best])), .88, C["muted"])
 txt(.755, .57, "One-SE threshold", 1.03, C["olive"], TRUE)
-txt(.755, .525, sprintf("%.3f", threshold), .88, C["muted"])
+txt(.755, .525, fmt_value(threshold), .88, C["muted"])
 txt(.755, .44, paste("Selected /", sel), 1.03, C["earth"], TRUE)
-txt(.755, .395, sprintf("CCC %.3f, %.1fM parameters", bc$val_ccc_mean[chosen],
-                        bc$n_params[chosen] / 1e6), .88, C["muted"])
+txt(.755, .395, paste0("CCC ", fmt_value(bc$val_ccc_mean[chosen]), ", ", fmt_value(bc$n_params[chosen] / 1e6), "M parameters"), .88, C["muted"])
 mark_source("trial_selection", results_from, run)
 finish()
 }
@@ -200,7 +209,7 @@ if (rehearsal) message("The maps figure, rehearsed on ", maps_from, ": ", file.p
 
 # ── 4. What the model learned, by theme ───────────────────────────────────────
 if ("importance" %in% figures) {
-imp_file <- file.path(kept, "importance.rds")
+imp_file <- if (exists("importance_cache")) importance_cache else file.path(kept, "importance.rds")
 if (!file.exists(imp_file)) {
   fr <- file.path(run, "final_model", "spatial")
   data <- dsm_load(file.path(run, "patches"), verbose = FALSE)
@@ -219,44 +228,44 @@ if (!file.exists(imp_file)) {
                shap_files = file.path(kept, "shap_maps", "shap.tif")), imp_file)
 }
 imp <- readRDS(imp_file)
+if (!file.exists(imp$shap_files)) imp$shap_files <- file.path(dirname(imp_file), "shap_maps", "shap.tif")
 both <- merge(imp$perm[, c("variable", "importance")], imp$shap[, c("variable", "importance")],
               by = "variable", suffixes = c("_perm", "_shap"))
-both$perm_share <- pmax(both$importance_perm, 0) / max(both$importance_perm, na.rm = TRUE)
-both$shap_share <- both$importance_shap / max(both$importance_shap, na.rm = TRUE)
-both <- utils::head(both[order(-both$shap_share), ], 10)
+both <- utils::head(both[order(-both$importance_shap), ], 10)
 shap_maps <- terra::rast(imp$shap_files)
 top <- utils::head(both$variable[both$variable %in% names(shap_maps)], 3)
-start("trial_importance", 2200, 1150)
-heading("WHAT THE MODEL LEARNED / THE APPLICATION", "Two readings of importance, by theme",
-        "Left: mean |SHAP| and the drop in CCC under permutation, each as a share of its largest. Right: SHAP over the map for the three leading themes.")
-# The bars: a narrow column, light rules, the two readings side by side.
-lab_x <- .19; bar_x <- .2; bar_w <- .17
-y_top <- .76; step <- .062
-for (g in c(0, .5, 1)) segments(bar_x + g * bar_w, y_top + .04, bar_x + g * bar_w,
-                                y_top - (nrow(both) - .4) * step, col = C["line"], lwd = .8)
-for (k in seq_len(nrow(both))) {
-  y <- y_top - (k - 1) * step
-  txt(lab_x, y, gsub("_", " ", both$variable[k]), .68, adj = 1)
-  rect(bar_x, y + .003, bar_x + bar_w * both$shap_share[k], y + .017,
-       col = C["blue"], border = NA)
-  rect(bar_x, y - .015, bar_x + bar_w * both$perm_share[k], y - .001,
-       col = grDevices::adjustcolor(C["earth"], .75), border = NA)
+start("trial_importance", 2200, 1800)
+heading("INTERPRETATION / THE APPLICATION", "Importance and its spatial expression",
+        "Aligned rankings in original units; signed SHAP maps below share one symmetric colour scale.")
+for (panel in 1:2) {
+  x0 <- if (panel == 1) .20 else .64; x1 <- x0 + .30
+  vals <- if (panel == 1) both$importance_perm else both$importance_shap
+  rr <- range(c(0, vals), na.rm = TRUE); if (diff(rr) == 0) rr <- c(-.001, .001)
+  rr <- rr + c(-.04, .08) * diff(rr)
+  xp <- function(v) x0 + (v - rr[1]) / diff(rr) * (x1 - x0)
+  txt(x0, .79, if (panel == 1) "A / Permutation: change in CCC" else "B / Mean |SHAP| (log1p units)", .92, bold = TRUE)
+  for (v in pretty(rr, 4)) if (v >= rr[1] && v <= rr[2]) {
+    segments(xp(v), .49, xp(v), .76, col = C["line"])
+    txt(xp(v), .47, fmt_value(v), .66, C["muted"], adj = .5)
+  }
+  segments(xp(0), .49, xp(0), .76, col = C["muted"], lty = 2)
+  for (k in seq_len(nrow(both))) {
+    y <- .747 - (k - 1) * .026
+    if (panel == 1) txt(x0 - .014, y, gsub("_", " ", both$variable[k]), .72, adj = 1)
+    segments(xp(0), y, xp(vals[k]), y, col = C["line"], lwd = 2)
+    points(xp(vals[k]), y, pch = 16, cex = .95, col = if (panel == 1) C["earth"] else C["blue"])
+  }
 }
-rect(bar_x, .1, bar_x + .012, .112, col = C["blue"], border = NA)
-txt(bar_x + .017, .106, "mean |SHAP|", .62, C["muted"])
-rect(bar_x + .1, .1, bar_x + .112, .112, col = grDevices::adjustcolor(C["earth"], .75), border = NA)
-txt(bar_x + .117, .106, "permutation", .62, C["muted"])
-# The maps: a soft diverging scale on the figures' own blue and earth, beige
-# at zero, each map on its own symmetric range.
-pal_shap <- grDevices::colorRampPalette(c("#1F5673", "#6E9DB5", "#F2EEE6", "#C99372", "#8C4A2F"))(80)
+pal_shap <- grDevices::colorRampPalette(c("#1F5673", "#6E9DB5", "#F2EEE6", "#C99372", "#8C4A2F"))(81)
+zl <- max(vapply(top, function(n) max(abs(stats::quantile(terra::values(shap_maps[[n]]), c(.02, .98), na.rm = TRUE))), numeric(1)))
+if (!is.finite(zl) || zl == 0) zl <- 1e-9
 for (k in seq_along(top)) {
-  bx0 <- .42 + (k - 1) * .19
-  lay <- shap_maps[[top[k]]]
-  zl <- max(abs(stats::quantile(terra::values(lay), c(.02, .98), na.rm = TRUE)))
-  raster_panel(lay, bx0, .17, bx0 + .18, .79, pal_shap, zlim = c(-zl, zl), smooth = 2L)
-  txt(bx0 + .09, .81, gsub("_", " ", top[k]), .82, bold = TRUE, adj = .5)
-  colour_bar(bx0 + .02, .09, .14, pal_shap, c(-zl, zl), "SHAP (log1p units)", digits = 2)
+  bx0 <- .035 + (k - 1) * .32
+  raster_panel(shap_maps[[top[k]]], bx0, .105, bx0 + .30, .42, pal_shap, zlim = c(-zl, zl), smooth = 2L)
+  txt(bx0 + .15, .435, gsub("_", " ", top[k]), .92, bold = TRUE, adj = .5)
 }
+colour_bar(.34, .055, .32, pal_shap, c(-zl, zl), "Signed SHAP (log1p units)")
+txt(.04, .014, "Common limits: largest theme-specific 2-98% range; values beyond limits clipped. Display: 2 x 2 means. Blue lowers; earth raises.", .64, C["muted"])
 mark_source("trial_importance", results_from, run)
 finish()
 }
@@ -278,7 +287,9 @@ heading("UNCERTAINTY / THE APPLICATION", "Do the 90% intervals keep their promis
         sprintf("Coverage and mean width on the same %s test profiles. Open: constant width; filled: following the level and the DI.",
                 format(max(iv$n_test, na.rm = TRUE), big.mark = ",")))
 ax0 <- .27; ax1 <- .60; bx0 <- .68; bx1 <- .95
-y_top <- .78; y_bot <- .13
+y_top <- .75; y_bot <- .13
+txt((ax0 + ax1) / 2, .81, "A / Observed coverage", .94, bold = TRUE, adj = .5)
+txt((bx0 + bx1) / 2, .81, "B / Mean interval width", .94, bold = TRUE, adj = .5)
 n_rows <- length(designs) * length(meth)
 gap <- .6                                   # between designs, in rows
 step <- (y_top - y_bot) / (n_rows - 1 + gap * (length(designs) - 1))
@@ -292,7 +303,8 @@ for (v in seq(cov_lim[1], 1, by = .1)) {
   txt(xc(v), y_bot - .045, sprintf("%.0f%%", 100 * v), .66, C["muted"], adj = .5)
 }
 segments(xc(.9), y_bot - .02, xc(.9), y_top + .03, col = C["olive"], lty = 2, lwd = 1.5)
-txt(xc(.9), y_top + .045, "promised 90%", .66, C["olive"], TRUE, adj = .5)
+# Beside the line, under panel A's title: centred above it, the two met.
+txt(xc(.9) + .006, y_top + .03, "nominal 90%", .62, C["olive"], TRUE, adj = 0)
 for (v in pretty(wid_lim, 4)) if (v >= wid_lim[1] && v <= wid_lim[2]) {
   segments(xw(v), y_bot - .02, xw(v), y_top + .02, col = C["line"], lwd = .8)
   txt(xw(v), y_bot - .045, format(v, big.mark = ","), .66, C["muted"], adj = .5)
@@ -301,7 +313,13 @@ txt((ax0 + ax1) / 2, y_bot - .085, "Coverage of the test profiles", .8, adj = .5
 txt((bx0 + bx1) / 2, y_bot - .085, "Mean width (t/ha)", .8, adj = .5)
 for (i in seq_along(designs)) {
   d <- names(designs)[i]
-  txt(.035, row_y(i, 2), designs[[d]], .8, bold = TRUE)
+  if (i > 1) {
+    sy <- (row_y(i - 1, 3) + row_y(i, 1)) / 2
+    segments(.035, sy, .95, sy, col = C["line"], lwd = .8)
+  }
+  txt(.035, row_y(i, 2) + .009, designs[[d]], .8, bold = TRUE)
+  nn <- unique(iv$n_test[iv$design == d])
+  txt(.035, row_y(i, 2) - .016, paste0("n = ", paste(nn, collapse = "/")), .6, C["muted"])
   for (j in seq_along(meth)) {
     y <- row_y(i, j)
     txt(ax0 - .012, y, meth[[j]], .58, C["muted"], adj = 1)
@@ -330,6 +348,7 @@ points(.04, .07, pch = 21, bg = "white", col = C["blue"], cex = 1.1, lwd = 1.3)
 txt(.052, .07, "constant width", .62, C["muted"])
 points(.04, .035, pch = 21, bg = C["earth"], col = C["earth"], cex = 1.1, lwd = 1.3)
 txt(.052, .035, "width by the level and the DI", .62, C["muted"])
+txt(.68, .014, "Descriptive estimates; no profile-independent confidence intervals.", .59, C["muted"])
 mark_source("trial_intervals", results_from, run)
 finish()
 }
