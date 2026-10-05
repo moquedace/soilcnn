@@ -39,7 +39,12 @@ An `importance_map`, a list: `shap` (one layer per variable: the mean
 SHAP value of the points in each cell, in the network's units),
 `dominant` (in each cell, the variable with the largest mean \|SHAP\|,
 as the number in `legend`), `legend`, `prediction` (the mean prediction,
-native units) and `files`.
+native units) and `files`. The three rasters are packed with
+[`terra::wrap()`](https://rspatial.github.io/terra/reference/wrap.html),
+so the map survives
+[`base::saveRDS()`](https://rdrr.io/r/base/readRDS.html);
+[`terra::unwrap()`](https://rspatial.github.io/terra/reference/wrap.html)
+gives each as a `SpatRaster`.
 [`plot()`](https://rdrr.io/r/graphics/plot.default.html) draws it.
 
 ## Examples

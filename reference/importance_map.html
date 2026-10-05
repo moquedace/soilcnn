@@ -77,7 +77,9 @@ prediction.tif); NULL to only return them.</p></dd>
 SHAP value of the points in each cell, in the network's units), <code>dominant</code>
 (in each cell, the variable with the largest mean |SHAP|, as the number in
 <code>legend</code>), <code>legend</code>, <code>prediction</code> (the mean prediction, native units)
-and <code>files</code>. <code><a href="https://rdrr.io/r/graphics/plot.default.html" class="external-link">plot()</a></code> draws it.</p>
+and <code>files</code>. The three rasters are packed with <code><a href="https://rspatial.github.io/terra/reference/wrap.html" class="external-link">terra::wrap()</a></code>, so the map
+survives <code><a href="https://rdrr.io/r/base/readRDS.html" class="external-link">base::saveRDS()</a></code>; <code><a href="https://rspatial.github.io/terra/reference/wrap.html" class="external-link">terra::unwrap()</a></code> gives each as a <code>SpatRaster</code>.
+<code><a href="https://rdrr.io/r/graphics/plot.default.html" class="external-link">plot()</a></code> draws it.</p>
     </div>
 
     <div class="section level2">
