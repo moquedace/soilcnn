@@ -1032,7 +1032,10 @@ print.dsm_prediction <- function(x, ...) {
     }
     aref <- aoa_reference(inp$points, inp$predictors, inp$qc_table, inp$scaling, plan,
                           weights = weights)
-    tab <- dplyr::inner_join(res, dplyr::select(aref$cv, sample_id, fold, di = cv_di),
+    # By name, not bare: `fold` is too common a variable in this package to be
+    # declared in R/globals.R, where R CMD check would stop looking at it.
+    tab <- dplyr::inner_join(res, dplyr::select(aref$cv, dplyr::all_of(c("sample_id", "fold")),
+                                                di = "cv_di"),
                              by = "sample_id")
     pos <- match(as.character(tab$sample_id), as.character(inp$points$sample_id))
     grp <- if (identical(weighting, "group")) .plan_groups(plan)[pos] else NULL
