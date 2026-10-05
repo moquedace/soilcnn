@@ -496,8 +496,10 @@ back-transformed estimates the conditional *median* of the stock, which sits
 below its conditional *mean*. On the SOC project's test set the gap was -24.4%
 (its graphical evaluation found it). So `dsm_predict()` writes the smeared
 mean beside the median, using Duan's estimator calibrated on the tuning run's
-cross-validated residuals (`R/smearing.R`). The median is the right map of a
-typical value; the smeared mean is the one that may be summed over an area.
+cross-validated residuals -- and, when the plan carves a calibration set, a
+second on its residuals (`smeared_mean_split`; `R/smearing.R`). The median is
+the right map of a typical value; the smeared mean is the one that may be
+summed over an area.
 
 ### What the ensemble uncertainty represents
 SD and MAD between seeds measure **epistemic uncertainty due to training stochasticity**:
