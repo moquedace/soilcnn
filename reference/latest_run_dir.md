@@ -83,7 +83,7 @@ Sys.setFileTime(file.path(base, "run_a", "comparison", "comparison_ranked.csv"),
                 Sys.time() - 3600)
 dir.create(file.path(base, "run_c"), showWarnings = FALSE)   # started, never finished
 latest_run_dir(base, "run_", require_file = "comparison/comparison_ranked.csv")
-#> run resolved to: run_b  (newest of 2 finished, 2026-10-05 04:46)
+#> run resolved to: run_b  (newest of 2 finished, 2026-10-05 06:38)
 #>   skipped as unfinished: run_c
 #> [1] "run_b"
 ```

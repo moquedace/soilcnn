@@ -49,6 +49,8 @@
 <span>  crs <span class="op">=</span> <span class="fl">4326</span>,</span>
 <span>  project_to <span class="op">=</span> <span class="st">"+proj=moll +lon_0=0 +datum=WGS84 +units=m"</span>,</span>
 <span>  seed <span class="op">=</span> <span class="fl">42L</span>,</span>
+<span>  calibration_ids <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  hold_out_calibration <span class="op">=</span> <span class="cn">FALSE</span>,</span>
 <span>  <span class="va">...</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
@@ -93,6 +95,16 @@ use the coordinates as they are (correct only if already projected).</p></dd>
 
 <dt id="arg-seed">seed<a class="anchor" aria-label="anchor" href="#arg-seed"></a></dt>
 <dd><p>Seed, for the sampling kNNDM does internally.</p></dd>
+
+
+<dt id="arg-calibration-ids">calibration_ids<a class="anchor" aria-label="anchor" href="#arg-calibration-ids"></a></dt>
+<dd><p>Frozen calibration-set sample_ids, as <code>test_ids</code>.</p></dd>
+
+
+<dt id="arg-hold-out-calibration">hold_out_calibration<a class="anchor" aria-label="anchor" href="#arg-hold-out-calibration"></a></dt>
+<dd><p>Carve a calibration set for the intervals as the
+test set is carved: kNNDM in k + 1 folds over what the test left, one
+held out. FALSE by default.</p></dd>
 
 
 <dt id="arg--">...<a class="anchor" aria-label="anchor" href="#arg--"></a></dt>

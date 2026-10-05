@@ -17,7 +17,9 @@ random_folds(
   test_frac = 0,
   test_ids = NULL,
   seed = 42L,
-  group = "auto"
+  group = "auto",
+  calibration_frac = 0,
+  calibration_ids = NULL
 )
 ```
 
@@ -50,6 +52,18 @@ random_folds(
   "auto" keeps the rows of one profile_id together when the table
   repeats profiles; NULL or "row" makes each row its own unit; a column
   name, or a vector with one label per row, names the groups.
+
+- calibration_frac:
+
+  Share of ALL the points held out as a calibration set for the
+  intervals, carved after the test set by the same criterion; 0 for
+  none. It trains nothing and chooses nothing: dsm_final() predicts it
+  and calibrates its "split" interval there.
+
+- calibration_ids:
+
+  Sample ids that ARE the calibration set, in place of
+  `calibration_frac`, as `test_ids` is for the test set.
 
 ## Value
 

@@ -47,7 +47,9 @@
 <span>  alpha <span class="op">=</span> <span class="fl">0.1</span>,</span>
 <span>  fit_frac <span class="op">=</span> <span class="fl">0.5</span>,</span>
 <span>  floor_frac <span class="op">=</span> <span class="fl">0.05</span>,</span>
-<span>  seed <span class="op">=</span> <span class="fl">42L</span></span>
+<span>  seed <span class="op">=</span> <span class="fl">42L</span>,</span>
+<span>  scale <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  group <span class="op">=</span> <span class="cn">NULL</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -71,7 +73,8 @@ fitted by least squares on |obs - pred|.</p></dd>
 
 <dt id="arg-fit-frac">fit_frac<a class="anchor" aria-label="anchor" href="#arg-fit-frac"></a></dt>
 <dd><p>Share of the points the scale is fitted on; the rest
-calibrate q. One half each is the textbook split.</p></dd>
+calibrate q. One half each is the textbook split. Not used when <code>scale</code>
+is given.</p></dd>
 
 
 <dt id="arg-floor-frac">floor_frac<a class="anchor" aria-label="anchor" href="#arg-floor-frac"></a></dt>
@@ -83,6 +86,18 @@ claim a certainty the data never gave.</p></dd>
 
 <dt id="arg-seed">seed<a class="anchor" aria-label="anchor" href="#arg-seed"></a></dt>
 <dd><p>Seed of the split.</p></dd>
+
+
+<dt id="arg-scale">scale<a class="anchor" aria-label="anchor" href="#arg-scale"></a></dt>
+<dd><p>NULL: the scale is fitted on <code>fit_frac</code> of these points and
+q taken on the rest. A <code>conformal_scale</code> from <code><a href="conformal_scale_fit.html">conformal_scale_fit()</a></code>,
+fitted on OTHER points: every point here then calibrates q.</p></dd>
+
+
+<dt id="arg-group">group<a class="anchor" aria-label="anchor" href="#arg-group"></a></dt>
+<dd><p>Optional group of each point, as in
+<code><a href="conformal_calibrate.html">conformal_calibrate()</a></code>: q weighs every group alike, and the split, when
+there is one, keeps a group on one side.</p></dd>
 
 </dl></div>
     <div class="section level2">
@@ -107,6 +122,16 @@ claim a certainty the data never gave.</p></dd>
 <span class="r-out co"><span class="r-pr">#&gt;</span>   points             : 100 fitted the scale, 100 calibrated q</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span>   rank used          : 91 of 100  (the (n+1) correction)</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span>   q                  : 3.7964 x scale</span>
+<span class="r-in"><span><span class="co"># the scale fitted on other points, and all 100 of these calibrating q</span></span></span>
+<span class="r-in"><span><span class="va">sc</span> <span class="op">&lt;-</span> <span class="fu"><a href="conformal_scale_fit.html">conformal_scale_fit</a></span><span class="op">(</span><span class="va">obs</span><span class="op">[</span><span class="fl">1</span><span class="op">:</span><span class="fl">200</span><span class="op">]</span>, <span class="va">pred</span><span class="op">[</span><span class="fl">1</span><span class="op">:</span><span class="fl">200</span><span class="op">]</span>, <span class="va">covariates</span><span class="op">[</span><span class="fl">1</span><span class="op">:</span><span class="fl">200</span>, <span class="op">]</span><span class="op">)</span></span></span>
+<span class="r-in"><span><span class="fu">conformal_scaled_calibrate</span><span class="op">(</span><span class="va">obs</span><span class="op">[</span><span class="fl">201</span><span class="op">:</span><span class="fl">300</span><span class="op">]</span>, <span class="va">pred</span><span class="op">[</span><span class="fl">201</span><span class="op">:</span><span class="fl">300</span><span class="op">]</span>, <span class="va">covariates</span><span class="op">[</span><span class="fl">201</span><span class="op">:</span><span class="fl">300</span>, <span class="op">]</span>,</span></span>
+<span class="r-in"><span>                           scale <span class="op">=</span> <span class="va">sc</span><span class="op">)</span></span></span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;conformal_scaled&gt; 90% intervals, width = q x fitted scale</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>   scale              : -2.5489 +0.2269 x level +4.8155 x di  (floor 0.0974; R2 on the fit half 0.338)</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>   points             : 200 fitted the scale (other points), 100 calibrated q</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>   rank used          : 91 of 100  (the (n+1) correction)</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>   q                  : 4.0640 x scale</span>
 </code></pre></div>
     </div>
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>

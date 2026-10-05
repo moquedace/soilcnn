@@ -59,6 +59,7 @@
 <span>  threads_per_unit <span class="op">=</span> <span class="fl">5L</span>,</span>
 <span>  max_ram_gb <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  test_ids <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  calibration_ids <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  resume <span class="op">=</span> <span class="cn">TRUE</span>,</span>
 <span>  evaluate_test <span class="op">=</span> <span class="cn">FALSE</span>,</span>
 <span>  verbose <span class="op">=</span> <span class="cn">TRUE</span>,</span>
@@ -175,6 +176,12 @@ another count is refused. 5 was measured best here (T1, T2).</p></dd>
 
 <dt id="arg-test-ids">test_ids<a class="anchor" aria-label="anchor" href="#arg-test-ids"></a></dt>
 <dd><p>Sample ids forced into the test set.</p></dd>
+
+
+<dt id="arg-calibration-ids">calibration_ids<a class="anchor" aria-label="anchor" href="#arg-calibration-ids"></a></dt>
+<dd><p>Sample ids forced into the calibration set (see
+<code>calibration_frac</code> in <code><a href="spatial_cv.html">spatial_cv()</a></code>): in no fold, kept for the "split"
+intervals <code><a href="dsm_final.html">dsm_final()</a></code> calibrates.</p></dd>
 
 
 <dt id="arg-resume">resume<a class="anchor" aria-label="anchor" href="#arg-resume"></a></dt>

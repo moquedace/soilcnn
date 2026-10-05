@@ -46,7 +46,16 @@ k = number of groups this is leave-one-group-out.</p>
 
     <div class="section level2">
     <h2 id="ref-usage">Usage<a class="anchor" aria-label="anchor" href="#ref-usage"></a></h2>
-    <div class="sourceCode"><pre class="sourceCode r"><code><span><span class="fu">region_folds</span><span class="op">(</span><span class="va">meta</span>, <span class="va">group</span>, k <span class="op">=</span> <span class="cn">NULL</span>, test_frac <span class="op">=</span> <span class="fl">0</span>, test_ids <span class="op">=</span> <span class="cn">NULL</span>, seed <span class="op">=</span> <span class="fl">42L</span><span class="op">)</span></span></code></pre></div>
+    <div class="sourceCode"><pre class="sourceCode r"><code><span><span class="fu">region_folds</span><span class="op">(</span></span>
+<span>  <span class="va">meta</span>,</span>
+<span>  <span class="va">group</span>,</span>
+<span>  k <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  test_frac <span class="op">=</span> <span class="fl">0</span>,</span>
+<span>  test_ids <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  seed <span class="op">=</span> <span class="fl">42L</span>,</span>
+<span>  calibration_frac <span class="op">=</span> <span class="fl">0</span>,</span>
+<span>  calibration_ids <span class="op">=</span> <span class="cn">NULL</span></span>
+<span><span class="op">)</span></span></code></pre></div>
     </div>
 
     <div class="section level2">
@@ -77,6 +86,18 @@ k = number of groups this is leave-one-group-out.</p>
 <dt id="arg-seed">seed<a class="anchor" aria-label="anchor" href="#arg-seed"></a></dt>
 <dd><p>Seed for this split only; the training seeds do not
 move it.</p></dd>
+
+
+<dt id="arg-calibration-frac">calibration_frac<a class="anchor" aria-label="anchor" href="#arg-calibration-frac"></a></dt>
+<dd><p>Share of ALL the points held out as a calibration
+set for the intervals, carved after the test set by the same criterion;
+0 for none. It trains nothing and chooses nothing: dsm_final() predicts
+it and calibrates its "split" interval there.</p></dd>
+
+
+<dt id="arg-calibration-ids">calibration_ids<a class="anchor" aria-label="anchor" href="#arg-calibration-ids"></a></dt>
+<dd><p>Sample ids that ARE the calibration set, in place of
+<code>calibration_frac</code>, as <code>test_ids</code> is for the test set.</p></dd>
 
 </dl></div>
     <div class="section level2">

@@ -12,7 +12,9 @@ conformal_scaled_calibrate(
   alpha = 0.1,
   fit_frac = 0.5,
   floor_frac = 0.05,
-  seed = 42L
+  seed = 42L,
+  scale = NULL,
+  group = NULL
 )
 ```
 
@@ -35,7 +37,7 @@ conformal_scaled_calibrate(
 - fit_frac:
 
   Share of the points the scale is fitted on; the rest calibrate q. One
-  half each is the textbook split.
+  half each is the textbook split. Not used when `scale` is given.
 
 - floor_frac:
 
@@ -47,6 +49,20 @@ conformal_scaled_calibrate(
 - seed:
 
   Seed of the split.
+
+- scale:
+
+  NULL: the scale is fitted on `fit_frac` of these points and q taken on
+  the rest. A `conformal_scale` from
+  [`conformal_scale_fit()`](https://moquedace.github.io/soilcnn/reference/conformal_scale_fit.md),
+  fitted on OTHER points: every point here then calibrates q.
+
+- group:
+
+  Optional group of each point, as in
+  [`conformal_calibrate()`](https://moquedace.github.io/soilcnn/reference/conformal_calibrate.md):
+  q weighs every group alike, and the split, when there is one, keeps a
+  group on one side.
 
 ## Value
 
@@ -70,4 +86,14 @@ cal
 #>   points             : 100 fitted the scale, 100 calibrated q
 #>   rank used          : 91 of 100  (the (n+1) correction)
 #>   q                  : 3.7964 x scale
+# the scale fitted on other points, and all 100 of these calibrating q
+sc <- conformal_scale_fit(obs[1:200], pred[1:200], covariates[1:200, ])
+conformal_scaled_calibrate(obs[201:300], pred[201:300], covariates[201:300, ],
+                           scale = sc)
+#> 
+#> <conformal_scaled> 90% intervals, width = q x fitted scale
+#>   scale              : -2.5489 +0.2269 x level +4.8155 x di  (floor 0.0974; R2 on the fit half 0.338)
+#>   points             : 200 fitted the scale (other points), 100 calibrated q
+#>   rank used          : 91 of 100  (the (n+1) correction)
+#>   q                  : 4.0640 x scale
 ```

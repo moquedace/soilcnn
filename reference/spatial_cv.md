@@ -12,7 +12,8 @@ spatial_cv(
   test_frac = 0.15,
   max_share = 0.1,
   buffer_metric = c("chebyshev", "euclidean"),
-  seed = 42L
+  seed = 42L,
+  calibration_frac = 0
 )
 ```
 
@@ -52,6 +53,13 @@ spatial_cv(
 
   Seed for this split only; the training seeds do not move it.
 
+- calibration_frac:
+
+  Share of ALL the points held out as a calibration set for the
+  intervals, carved after the test set by the same criterion; 0 for
+  none. It trains nothing and chooses nothing: dsm_final() predicts it
+  and calibrates its "split" interval there.
+
 ## Value
 
 A `resample_spec`. resolve_resampling() turns it into folds against the
@@ -69,4 +77,16 @@ spatial_cv(k = 5, block_size = "auto", buffer = "auto")
 #>   max_share       0.1
 #>   buffer_metric   chebyshev
 #>   seed            42
+#>   calibration_frac 0
+# 15% of the points held out to calibrate split conformal intervals
+spatial_cv(k = 5, calibration_frac = 0.15)
+#> <resample_spec> spatial
+#>   k               5
+#>   block_size      auto
+#>   buffer          auto
+#>   test_frac       0.15
+#>   max_share       0.1
+#>   buffer_metric   chebyshev
+#>   seed            42
+#>   calibration_frac 0.15
 ```

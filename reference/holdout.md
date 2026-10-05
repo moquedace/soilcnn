@@ -13,7 +13,9 @@ holdout(
   test_frac = 0.15,
   test_ids = NULL,
   seed = 42L,
-  group = "auto"
+  group = "auto",
+  calibration_frac = 0,
+  calibration_ids = NULL
 )
 ```
 
@@ -47,6 +49,18 @@ holdout(
   repeats profiles; NULL or "row" makes each row its own unit; a column
   name, or a vector with one label per row, names the groups.
 
+- calibration_frac:
+
+  Share of ALL the points held out as a calibration set for the
+  intervals, carved after the test set by the same criterion; 0 for
+  none. It trains nothing and chooses nothing: dsm_final() predicts it
+  and calibrates its "split" interval there.
+
+- calibration_ids:
+
+  Sample ids that ARE the calibration set, in place of
+  `calibration_frac`, as `test_ids` is for the test set.
+
 ## Value
 
 A `fold_plan` with one fold.
@@ -64,4 +78,13 @@ holdout(meta, validation_frac = 0.2, test_frac = 0.2)
 #>    fold n_train n_validation n_test
 #>   <int>   <int>        <int>  <int>
 #> 1     1     103           25     32
+# with a calibration set for the intervals beside the test set
+holdout(meta, validation_frac = 0.2, test_frac = 0.2, calibration_frac = 0.15)
+#> <fold_plan> holdout | 1 fold(s) | 160 rows in the store
+#>   params: k=1 | validation_frac=0.2 | test_frac=0.2 | n_test=32 | calibration_frac=0.15 | n_calibration=24 | calibration_frozen=FALSE | seed=42 | grouping=every row is its own unit (no profile_id column)
+#> # A tibble: 1 × 5
+#>    fold n_train n_validation n_test n_calibration
+#>   <int>   <int>        <int>  <int>         <int>
+#> 1     1      84           20     32            24
+#>   calibration set: 24 point(s) in no fold -- they calibrate the "split" interval and nothing else
 ```

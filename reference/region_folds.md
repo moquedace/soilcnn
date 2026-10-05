@@ -7,7 +7,16 @@ number of groups this is leave-one-group-out.
 ## Usage
 
 ``` r
-region_folds(meta, group, k = NULL, test_frac = 0, test_ids = NULL, seed = 42L)
+region_folds(
+  meta,
+  group,
+  k = NULL,
+  test_frac = 0,
+  test_ids = NULL,
+  seed = 42L,
+  calibration_frac = 0,
+  calibration_ids = NULL
+)
 ```
 
 ## Arguments
@@ -36,6 +45,18 @@ region_folds(meta, group, k = NULL, test_frac = 0, test_ids = NULL, seed = 42L)
 - seed:
 
   Seed for this split only; the training seeds do not move it.
+
+- calibration_frac:
+
+  Share of ALL the points held out as a calibration set for the
+  intervals, carved after the test set by the same criterion; 0 for
+  none. It trains nothing and chooses nothing: dsm_final() predicts it
+  and calibrates its "split" interval there.
+
+- calibration_ids:
+
+  Sample ids that ARE the calibration set, in place of
+  `calibration_frac`, as `test_ids` is for the test set.
 
 ## Value
 

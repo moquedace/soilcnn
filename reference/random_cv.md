@@ -7,7 +7,13 @@ points and the gap is the spatial optimism.
 ## Usage
 
 ``` r
-random_cv(k = 5L, test_frac = 0.15, group = "auto", seed = 42L)
+random_cv(
+  k = 5L,
+  test_frac = 0.15,
+  group = "auto",
+  seed = 42L,
+  calibration_frac = 0
+)
 ```
 
 ## Arguments
@@ -31,6 +37,13 @@ random_cv(k = 5L, test_frac = 0.15, group = "auto", seed = 42L)
   Seed for the partition only (see with_local_seed): a fixed plan
   reproduces even when the training seeds change.
 
+- calibration_frac:
+
+  Share of ALL the points held out as a calibration set for the
+  intervals, carved after the test set by the same criterion; 0 for
+  none. It trains nothing and chooses nothing: dsm_final() predicts it
+  and calibrates its "split" interval there.
+
 ## Value
 
 A `resample_spec`, as spatial_cv() returns.
@@ -44,4 +57,5 @@ random_cv(k = 10)
 #>   test_frac       0.15
 #>   group           auto
 #>   seed            42
+#>   calibration_frac 0
 ```

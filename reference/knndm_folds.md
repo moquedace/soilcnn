@@ -14,6 +14,8 @@ knndm_folds(
   crs = 4326,
   project_to = "+proj=moll +lon_0=0 +datum=WGS84 +units=m",
   seed = 42L,
+  calibration_ids = NULL,
+  hold_out_calibration = FALSE,
   ...
 )
 ```
@@ -57,6 +59,16 @@ knndm_folds(
 - seed:
 
   Seed, for the sampling kNNDM does internally.
+
+- calibration_ids:
+
+  Frozen calibration-set sample_ids, as `test_ids`.
+
+- hold_out_calibration:
+
+  Carve a calibration set for the intervals as the test set is carved:
+  kNNDM in k + 1 folds over what the test left, one held out. FALSE by
+  default.
 
 - ...:
 

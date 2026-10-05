@@ -52,7 +52,9 @@ split.</p>
 <span>  test_frac <span class="op">=</span> <span class="fl">0.15</span>,</span>
 <span>  test_ids <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  seed <span class="op">=</span> <span class="fl">42L</span>,</span>
-<span>  group <span class="op">=</span> <span class="st">"auto"</span></span>
+<span>  group <span class="op">=</span> <span class="st">"auto"</span>,</span>
+<span>  calibration_frac <span class="op">=</span> <span class="fl">0</span>,</span>
+<span>  calibration_ids <span class="op">=</span> <span class="cn">NULL</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -88,6 +90,18 @@ move it.</p></dd>
 the table repeats profiles; NULL or "row" makes each row its own unit; a
 column name, or a vector with one label per row, names the groups.</p></dd>
 
+
+<dt id="arg-calibration-frac">calibration_frac<a class="anchor" aria-label="anchor" href="#arg-calibration-frac"></a></dt>
+<dd><p>Share of ALL the points held out as a calibration
+set for the intervals, carved after the test set by the same criterion;
+0 for none. It trains nothing and chooses nothing: dsm_final() predicts
+it and calibrates its "split" interval there.</p></dd>
+
+
+<dt id="arg-calibration-ids">calibration_ids<a class="anchor" aria-label="anchor" href="#arg-calibration-ids"></a></dt>
+<dd><p>Sample ids that ARE the calibration set, in place of
+<code>calibration_frac</code>, as <code>test_ids</code> is for the test set.</p></dd>
+
 </dl></div>
     <div class="section level2">
     <h2 id="value">Value<a class="anchor" aria-label="anchor" href="#value"></a></h2>
@@ -106,6 +120,15 @@ column name, or a vector with one label per row, names the groups.</p></dd>
 <span class="r-out co"><span class="r-pr">#&gt;</span>    fold n_train n_validation n_test</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span>   <span style="color: #949494; font-style: italic;">&lt;int&gt;</span>   <span style="color: #949494; font-style: italic;">&lt;int&gt;</span>        <span style="color: #949494; font-style: italic;">&lt;int&gt;</span>  <span style="color: #949494; font-style: italic;">&lt;int&gt;</span></span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> <span style="color: #BCBCBC;">1</span>     1     103           25     32</span>
+<span class="r-in"><span><span class="co"># with a calibration set for the intervals beside the test set</span></span></span>
+<span class="r-in"><span><span class="fu">holdout</span><span class="op">(</span><span class="va">meta</span>, validation_frac <span class="op">=</span> <span class="fl">0.2</span>, test_frac <span class="op">=</span> <span class="fl">0.2</span>, calibration_frac <span class="op">=</span> <span class="fl">0.15</span><span class="op">)</span></span></span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;fold_plan&gt; holdout | 1 fold(s) | 160 rows in the store</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>   params: k=1 | validation_frac=0.2 | test_frac=0.2 | n_test=32 | calibration_frac=0.15 | n_calibration=24 | calibration_frozen=FALSE | seed=42 | grouping=every row is its own unit (no profile_id column)</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> <span style="color: #949494;"># A tibble: 1 × 5</span></span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>    fold n_train n_validation n_test n_calibration</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>   <span style="color: #949494; font-style: italic;">&lt;int&gt;</span>   <span style="color: #949494; font-style: italic;">&lt;int&gt;</span>        <span style="color: #949494; font-style: italic;">&lt;int&gt;</span>  <span style="color: #949494; font-style: italic;">&lt;int&gt;</span>         <span style="color: #949494; font-style: italic;">&lt;int&gt;</span></span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> <span style="color: #BCBCBC;">1</span>     1      84           20     32            24</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>   calibration set: 24 point(s) in no fold -- they calibrate the "split" interval and nothing else</span>
 </code></pre></div>
     </div>
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>

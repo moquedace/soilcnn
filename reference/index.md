@@ -49,6 +49,10 @@
 - [`conformal_interval()`](https://moquedace.github.io/soilcnn/reference/conformal_interval.md)
   : Turn predictions into intervals.
 
+- [`conformal_scale_fit()`](https://moquedace.github.io/soilcnn/reference/conformal_scale_fit.md)
+  : Fit the scale of an interval: \|residual\| on covariates that say
+  how wrong.
+
 - [`conformal_scaled_calibrate()`](https://moquedace.github.io/soilcnn/reference/conformal_scaled_calibrate.md)
   : Calibrate an interval whose width is a fitted scale.
 
@@ -58,6 +62,12 @@
 - [`context_importance()`](https://moquedace.github.io/soilcnn/reference/context_importance.md)
   : Context importance: how far from the point, and at which scale, the
   model reads.
+
+- [`cv_plus_calibrate()`](https://moquedace.github.io/soilcnn/reference/cv_plus_calibrate.md)
+  : Calibrate a CV+ interval from the folds of a cross-validation.
+
+- [`cv_plus_interval()`](https://moquedace.github.io/soilcnn/reference/cv_plus_interval.md)
+  : Turn the fold models' predictions into CV+ intervals.
 
 - [`cv_residuals()`](https://moquedace.github.io/soilcnn/reference/cv_residuals.md)
   : Cross-validated residuals from a tuning run, for calibration.

@@ -24,6 +24,7 @@ dsm_train(
   threads_per_unit = 5L,
   max_ram_gb = NULL,
   test_ids = NULL,
+  calibration_ids = NULL,
   resume = TRUE,
   evaluate_test = FALSE,
   verbose = TRUE,
@@ -140,6 +141,14 @@ dsm_train(
 - test_ids:
 
   Sample ids forced into the test set.
+
+- calibration_ids:
+
+  Sample ids forced into the calibration set (see `calibration_frac` in
+  [`spatial_cv()`](https://moquedace.github.io/soilcnn/reference/spatial_cv.md)):
+  in no fold, kept for the "split" intervals
+  [`dsm_final()`](https://moquedace.github.io/soilcnn/reference/dsm_final.md)
+  calibrates.
 
 - resume:
 

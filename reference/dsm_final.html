@@ -55,6 +55,8 @@
 <span>  threads_per_unit <span class="op">=</span> <span class="fl">5L</span>,</span>
 <span>  max_ram_gb <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  conformal_alpha <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">0.1</span>, <span class="fl">0.05</span><span class="op">)</span>,</span>
+<span>  intervals <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"cv"</span>, <span class="st">"split"</span>, <span class="st">"cv_plus"</span><span class="op">)</span>,</span>
+<span>  strata <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  output_dir <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  run_id <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  resume <span class="op">=</span> <span class="cn">TRUE</span>,</span>
@@ -133,6 +135,28 @@ available at the start (read with the ps package).</p></dd>
 
 <dt id="arg-conformal-alpha">conformal_alpha<a class="anchor" aria-label="anchor" href="#arg-conformal-alpha"></a></dt>
 <dd><p>Miscoverage levels of the intervals: 0.1 is 90%.</p></dd>
+
+
+<dt id="arg-intervals">intervals<a class="anchor" aria-label="anchor" href="#arg-intervals"></a></dt>
+<dd><p>Which interval calibrations to make and check on the test
+set (each at a constant width and at a width fitted on the level and the
+dissimilarity index; "cv" and "split" also with every group weighing
+alike):</p><ul><li><p>"cv": on the tuning run's cross-validated residuals – no data spent,
+no guarantee, the configuration having been chosen on those folds;</p></li>
+<li><p>"split": split conformal, on the calibration set the tuning plan held
+out (<code>calibration_frac</code> in <code><a href="spatial_cv.html">spatial_cv()</a></code> and the others) – coverage at
+least 1 - alpha for points exchangeable with it (Lei et al. 2018);</p></li>
+<li><p>"cv_plus": CV+ (Barber et al. 2021), the tuning run's fold models at
+each point – at least 1 - 2 alpha - sqrt(2/n) for an algorithm fixed
+in advance, which a configuration chosen on the folds is only nearly.
+A method the runs cannot support is left out and said so.</p></li>
+</ul></dd>
+
+
+<dt id="arg-strata">strata<a class="anchor" aria-label="anchor" href="#arg-strata"></a></dt>
+<dd><p>NULL, or a named list of labels, one per point of the store
+(e.g. <code>list(ecoregion = eco)</code>), to read the test coverage within, beside
+the area of applicability and the fifths of the predicted level.</p></dd>
 
 
 <dt id="arg-output-dir">output_dir<a class="anchor" aria-label="anchor" href="#arg-output-dir"></a></dt>

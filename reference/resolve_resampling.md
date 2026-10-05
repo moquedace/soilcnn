@@ -6,7 +6,14 @@ it: `plan <- resolve_resampling(spatial_cv(k = 5), data); print(plan)`.
 ## Usage
 
 ``` r
-resolve_resampling(spec, data, test_ids = NULL, windows = NULL, verbose = TRUE)
+resolve_resampling(
+  spec,
+  data,
+  test_ids = NULL,
+  windows = NULL,
+  verbose = TRUE,
+  calibration_ids = NULL
+)
 ```
 
 ## Arguments
@@ -32,6 +39,12 @@ resolve_resampling(spec, data, test_ids = NULL, windows = NULL, verbose = TRUE)
 - verbose:
 
   Print the block size that `block_size = "auto"` chose.
+
+- calibration_ids:
+
+  Sample ids to force into the calibration set, in place of the
+  `calibration_frac` of `spec`: several designs then calibrate their
+  "split" intervals on the same points.
 
 ## Value
 

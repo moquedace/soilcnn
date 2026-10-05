@@ -15,6 +15,8 @@ dsm_predict(
   calibration = NULL,
   aoa_weights = NULL,
   alpha = 0.1,
+  intervals = NULL,
+  weighting = c("point", "group"),
   clamp = NULL,
   bands = NULL,
   engine = c("auto", "patch"),
@@ -89,6 +91,24 @@ dsm_predict(
 - alpha:
 
   Miscoverage of the intervals: 0.1 is 90%.
+
+- intervals:
+
+  Which intervals the map carries (see
+  [`dsm_final()`](https://moquedace.github.io/soilcnn/reference/dsm_final.md),
+  which checks all of them on the test set): "cv", calibrated on each
+  source's cross-validated residuals; "split", split conformal on the
+  final run's calibration set; "cv_plus", CV+ with each source's fold
+  models – which predicts every pixel once more per fold model, the
+  map's dearest band by far. NULL: "cv", and "split" when the final run
+  has a calibration set.
+
+- weighting:
+
+  "point" (every calibration point weighs the same) or "group" (every
+  group of the plan does – block, region, profile; see
+  [`conformal_calibrate()`](https://moquedace.github.io/soilcnn/reference/conformal_calibrate.md)),
+  for the "cv" and "split" intervals. CV+ is by point.
 
 - clamp:
 

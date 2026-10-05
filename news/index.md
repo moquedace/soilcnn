@@ -17,7 +17,8 @@ First release.
   [`holdout_cv()`](https://moquedace.github.io/soilcnn/reference/holdout_cv.md),
   [`region_cv()`](https://moquedace.github.io/soilcnn/reference/region_cv.md)),
   with buffers that keep training patches from touching validation and
-  test patches.
+  test patches, and an optional calibration set carved beside the test
+  set by the same criterion (`calibration_frac`).
 - Tuning of a dual-branch convolutional network over the plan
   ([`dsm_train()`](https://moquedace.github.io/soilcnn/reference/dsm_train.md)),
   a seed noise floor and the one-standard-error rule
@@ -37,13 +38,23 @@ First release.
   ([`smear()`](https://moquedace.github.io/soilcnn/reference/smear.md),
   [`smear_map()`](https://moquedace.github.io/soilcnn/reference/smear_map.md),
   [`smearing_check()`](https://moquedace.github.io/soilcnn/reference/smearing_check.md)),
-  conformal intervals calibrated on cross-validated residuals, with
-  coverage checked on the test set
-  ([`conformal_calibrate()`](https://moquedace.github.io/soilcnn/reference/conformal_calibrate.md),
-  [`conformal_scaled_calibrate()`](https://moquedace.github.io/soilcnn/reference/conformal_scaled_calibrate.md))
   and the area of applicability
   ([`aoa_reference()`](https://moquedace.github.io/soilcnn/reference/aoa_reference.md),
   [`dissimilarity_index()`](https://moquedace.github.io/soilcnn/reference/dissimilarity_index.md)).
+- Conformal intervals calibrated three ways, every one checked on the
+  test set by
+  [`dsm_final()`](https://moquedace.github.io/soilcnn/reference/dsm_final.md)
+  – overall, by group, inside and outside the area of applicability, and
+  by level: on the cross-validated residuals; split conformal on the
+  calibration set; and CV+ with the tuning run’s fold models at each
+  pixel
+  ([`conformal_calibrate()`](https://moquedace.github.io/soilcnn/reference/conformal_calibrate.md),
+  [`conformal_scaled_calibrate()`](https://moquedace.github.io/soilcnn/reference/conformal_scaled_calibrate.md),
+  [`conformal_scale_fit()`](https://moquedace.github.io/soilcnn/reference/conformal_scale_fit.md),
+  [`cv_plus_calibrate()`](https://moquedace.github.io/soilcnn/reference/cv_plus_calibrate.md),
+  [`cv_plus_interval()`](https://moquedace.github.io/soilcnn/reference/cv_plus_interval.md)).
+  Each at a constant width or one that grows with the level and the
+  dissimilarity index, and with points or whole groups weighing alike.
 - Variable importance by permutation, SHAP (expected gradients,
   integrated gradients, kernel), SAGE, refits without each variable and
   accumulated local effects

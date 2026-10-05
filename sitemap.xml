@@ -22,9 +22,12 @@
 <url><loc>https://moquedace.github.io/soilcnn/reference/conformal_calibrate.html</loc></url>
 <url><loc>https://moquedace.github.io/soilcnn/reference/conformal_cv.html</loc></url>
 <url><loc>https://moquedace.github.io/soilcnn/reference/conformal_interval.html</loc></url>
+<url><loc>https://moquedace.github.io/soilcnn/reference/conformal_scale_fit.html</loc></url>
 <url><loc>https://moquedace.github.io/soilcnn/reference/conformal_scaled_calibrate.html</loc></url>
 <url><loc>https://moquedace.github.io/soilcnn/reference/conformal_scaled_interval.html</loc></url>
 <url><loc>https://moquedace.github.io/soilcnn/reference/context_importance.html</loc></url>
+<url><loc>https://moquedace.github.io/soilcnn/reference/cv_plus_calibrate.html</loc></url>
+<url><loc>https://moquedace.github.io/soilcnn/reference/cv_plus_interval.html</loc></url>
 <url><loc>https://moquedace.github.io/soilcnn/reference/cv_residuals.html</loc></url>
 <url><loc>https://moquedace.github.io/soilcnn/reference/cv_residuals_for_config.html</loc></url>
 <url><loc>https://moquedace.github.io/soilcnn/reference/di_reference.html</loc></url>
@@ -72,7 +75,9 @@
 <url><loc>https://moquedace.github.io/soilcnn/reference/print.caret_fitted.html</loc></url>
 <url><loc>https://moquedace.github.io/soilcnn/reference/print.check_ledger.html</loc></url>
 <url><loc>https://moquedace.github.io/soilcnn/reference/print.conformal_cal.html</loc></url>
+<url><loc>https://moquedace.github.io/soilcnn/reference/print.conformal_scale.html</loc></url>
 <url><loc>https://moquedace.github.io/soilcnn/reference/print.conformal_scaled.html</loc></url>
+<url><loc>https://moquedace.github.io/soilcnn/reference/print.cv_plus_cal.html</loc></url>
 <url><loc>https://moquedace.github.io/soilcnn/reference/print.di_reference.html</loc></url>
 <url><loc>https://moquedace.github.io/soilcnn/reference/print.dsm_data.html</loc></url>
 <url><loc>https://moquedace.github.io/soilcnn/reference/print.dsm_final.html</loc></url>

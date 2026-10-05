@@ -50,6 +50,8 @@
 <span>  calibration <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  aoa_weights <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  alpha <span class="op">=</span> <span class="fl">0.1</span>,</span>
+<span>  intervals <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  weighting <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"point"</span>, <span class="st">"group"</span><span class="op">)</span>,</span>
 <span>  clamp <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  bands <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  engine <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"auto"</span>, <span class="st">"patch"</span><span class="op">)</span>,</span>
@@ -124,6 +126,22 @@ resumed with other weights is refused.</p></dd>
 
 <dt id="arg-alpha">alpha<a class="anchor" aria-label="anchor" href="#arg-alpha"></a></dt>
 <dd><p>Miscoverage of the intervals: 0.1 is 90%.</p></dd>
+
+
+<dt id="arg-intervals">intervals<a class="anchor" aria-label="anchor" href="#arg-intervals"></a></dt>
+<dd><p>Which intervals the map carries (see <code><a href="dsm_final.html">dsm_final()</a></code>, which
+checks all of them on the test set): "cv", calibrated on each source's
+cross-validated residuals; "split", split conformal on the final run's
+calibration set; "cv_plus", CV+ with each source's fold models – which
+predicts every pixel once more per fold model, the map's dearest band by
+far. NULL: "cv", and "split" when the final run has a calibration set.</p></dd>
+
+
+<dt id="arg-weighting">weighting<a class="anchor" aria-label="anchor" href="#arg-weighting"></a></dt>
+<dd><p>"point" (every calibration point weighs the same) or
+"group" (every group of the plan does – block, region, profile; see
+<code><a href="conformal_calibrate.html">conformal_calibrate()</a></code>), for the "cv" and "split" intervals. CV+ is by
+point.</p></dd>
 
 
 <dt id="arg-clamp">clamp<a class="anchor" aria-label="anchor" href="#arg-clamp"></a></dt>
