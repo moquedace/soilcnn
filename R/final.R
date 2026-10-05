@@ -42,6 +42,8 @@
 #   <run>/<config>/models/seed%04d_best.pt    one checkpoint per seed
 #   <run>/<config>/predictor_scaling.csv      the scaling the weights expect
 #   <run>/<config>/ensemble_predictions.csv, conformal_90.rds, smearing.rds
+#   <run>/<config>/intervals/                every interval calibration, and
+#                                            its coverage on the test set
 #   <run>/run_spec.rds                       what the seeds' numbers depend on,
 #                                            written before the first seed; a
 #                                            resume is held to it
@@ -119,6 +121,22 @@
 #' @param max_ram_gb RAM the workers may use in total. NULL for 70% of what is
 #'   available at the start (read with the ps package).
 #' @param conformal_alpha Miscoverage levels of the intervals: 0.1 is 90%.
+#' @param intervals Which interval calibrations to make and check on the test
+#'   set (each at a constant width and at a width fitted on the level and the
+#'   dissimilarity index; "cv" and "split" also with every group weighing
+#'   alike):
+#'   * "cv": on the tuning run's cross-validated residuals -- no data spent,
+#'     no guarantee, the configuration having been chosen on those folds;
+#'   * "split": split conformal, on the calibration set the tuning plan held
+#'     out (`calibration_frac` in [spatial_cv()] and the others) -- coverage at
+#'     least 1 - alpha for points exchangeable with it (Lei et al. 2018);
+#'   * "cv_plus": CV+ (Barber et al. 2021), the tuning run's fold models at
+#'     each point -- at least 1 - 2 alpha - sqrt(2/n) for an algorithm fixed
+#'     in advance, which a configuration chosen on the folds is only nearly.
+#'   A method the runs cannot support is left out and said so.
+#' @param strata NULL, or a named list of labels, one per point of the store
+#'   (e.g. `list(ecoregion = eco)`), to read the test coverage within, beside
+#'   the area of applicability and the fifths of the predicted level.
 #' @param output_dir Where runs go. NULL for final_model/ beside the tuning
 #'   run's directory.
 #' @param run_id     NULL for `final_<timestamp>`. Give an existing one with
@@ -144,12 +162,14 @@ dsm_final <- function(tuning, data = NULL, config = "auto",
                       training = list(),
                       transform = NULL, n_cores = NULL, threads_per_unit = 5L,
                       max_ram_gb = NULL, conformal_alpha = c(0.1, 0.05),
+                      intervals = c("cv", "split", "cv_plus"), strata = NULL,
                       output_dir = NULL, run_id = NULL, resume = TRUE,
                       verbose = TRUE) {
 
   t_start <- Sys.time()
   say  <- function(...) if (verbose) message(...)
   rule <- match.arg(rule)
+  intervals <- match.arg(intervals, several.ok = TRUE)
 
   # ── 0. the arguments, all checked before anything trains ──────────────────
   if (inherits(tuning, "dsm_fit")) {
@@ -196,6 +216,14 @@ dsm_final <- function(tuning, data = NULL, config = "auto",
   }
   if (!is.numeric(conformal_alpha) || any(conformal_alpha <= 0 | conformal_alpha >= 1)) {
     stop("conformal_alpha must be numbers in (0, 1), e.g. c(0.1, 0.05).", call. = FALSE)
+  }
+  if (!is.null(strata)) {
+    n_pts <- nrow(data$store$meta)
+    if (!is.list(strata) || is.null(names(strata)) || any(!nzchar(names(strata))) ||
+        any(lengths(strata) != n_pts)) {
+      stop("strata must be a named list of labels, one per point of the store (",
+           n_pts, "), e.g. list(ecoregion = eco).", call. = FALSE)
+    }
   }
 
   # ── 1. what the tuning run left ───────────────────────────────────────────
@@ -339,6 +367,11 @@ dsm_final <- function(tuning, data = NULL, config = "auto",
       config_id = cid, seeds = seeds, tuning_dir = tuning_dir,
       conformal_alpha = conformal_alpha, transform_name = data$transform$name %||% "none",
       verbose = verbose)
+    asm$intervals <- .final_intervals(
+      config_id = cid, ens = asm$ensemble, tuning_dir = tuning_dir,
+      tuning_plan = tuning_plan, data = data, scaling = scaling, transform = transform,
+      clamp = training$clamp, alpha = conformal_alpha, methods = intervals, strata = strata,
+      cfg_out_dir = file.path(run_dir, cid), write = TRUE, verbose = verbose)
     per_config[[cid]] <- asm
     all_seed_results <- dplyr::bind_rows(all_seed_results, asm$seed_rows)
   }
@@ -364,6 +397,7 @@ dsm_final <- function(tuning, data = NULL, config = "auto",
     threads_per_unit = tpu, n_workers = run_info$n_workers, training = training,
     validation_frac = validation_frac, refit_method = refit$method, n_train = n_train,
     n_validation = length(index$validation), n_test = length(index$test),
+    n_calibration = length(index$calibration), interval_methods = intervals,
     torch_version = as.character(utils::packageVersion("torch")),
     r_version = R.version.string, git_commit = .git_commit_at(run_dir),
     fitted_by = "dsm_final()", finished_at = Sys.time())
@@ -379,7 +413,8 @@ dsm_final <- function(tuning, data = NULL, config = "auto",
     n_workers = run_info$n_workers, peak_gb = run_info$peak_gb,
     per_worker_gb_estimate = run_info$per_worker_gb_estimate,
     split = c(train = n_train, validation = length(index$validation),
-              test = length(index$test)),
+              test = length(index$test),
+              if (length(index$calibration)) c(calibration = length(index$calibration))),
     refit_method = refit$method,
     target = data$target_col, fitted_by = "dsm_final()",
     minutes = as.numeric(difftime(Sys.time(), t_start, units = "mins"))),
@@ -419,6 +454,17 @@ print.dsm_final <- function(x, ...) {
     if (nrow(s) == 1L && is.finite(s$ccc_mean)) {
       cat(sprintf("\n    test, mean +/- sd over %d seeds: CCC %.4f +/- %.4f | MAE %.3f +/- %.3f | RMSE %.3f +/- %.3f\n",
                   s$n_seeds, s$ccc_mean, s$ccc_sd, s$mae_mean, s$mae_sd, s$rmse_mean, s$rmse_sd))
+    }
+    iv <- x$per_config[[cid]]$intervals$summary
+    if (!is.null(iv) && nrow(iv) > 0L) {
+      first <- iv[iv$level == iv$level[1], , drop = FALSE]
+      cat(sprintf("    intervals at %s, coverage on the test set (point | group-weighted):\n",
+                  sub("^pi", "", first$level[1])))
+      for (i in seq_len(nrow(first))) {
+        cat(sprintf("      %-8s %-9s by %-6s %5.1f%% | %5.1f%%   mean width %.4g\n",
+                    first$method[i], first$width[i], first$weighting[i],
+                    100 * first$coverage[i], 100 * first$coverage_by_group[i], first$mean_width[i]))
+      }
     }
   }
   cat("\n  report     : ", x$report_file, "\n", sep = "")
@@ -486,6 +532,10 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
       seeds = seeds, tuning_dir = tuning_dir, conformal_alpha = conformal_alpha,
       transform_name = if (file.exists(file.path(run_dir, cid, "smearing.rds"))) "log1p" else "none",
       verbose = FALSE, write = FALSE)
+    # The intervals need the store and the fold models; what dsm_final()
+    # computed of them is read back, not computed again.
+    ip <- file.path(run_dir, cid, "intervals", "intervals.rds")
+    if (file.exists(ip)) per_config[[cid]]$intervals <- readRDS(ip)
     all_seed_results <- dplyr::bind_rows(all_seed_results, per_config[[cid]]$seed_rows)
   }
 
@@ -507,7 +557,8 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
     n_workers = summ$n_workers %||% 0L, peak_gb = NA_real_,
     per_worker_gb_estimate = NA_real_,
     split = c(train = n_role("train"), validation = n_role("validation"),
-              test = n_role("test")),
+              test = n_role("test"),
+              if (n_role("calibration") > 0L) c(calibration = n_role("calibration"))),
     target = summ$target %||% basename(dirname(run_dir)),
     fitted_by = summ$fitted_by %||% "stage 04, before dsm_final() existed",
     minutes = NA_real_),
@@ -1077,9 +1128,12 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
                     best_epoch = best_epoch,
                     runtime_min = rec$runtime_min %||% NA_real_)
     pa <- safe_read_csv2(file.path(cfg_dir, "predictions", paste0(sl, "_pred_all.csv")))
+    # The calibration set's rows too, when the plan carved one: their
+    # residuals calibrate the "split" interval and its smearing factor.
     seed_preds[[length(seed_preds) + 1L]] <- pa %>%
-      dplyr::filter(.data$dataset_role %in% c("validation", "test")) %>%
-      dplyr::select(sample_id, dataset_role, obs, pred) %>%
+      dplyr::filter(.data$dataset_role %in% c("validation", "test", "calibration")) %>%
+      dplyr::select(sample_id, dataset_role, obs, pred,
+                    dplyr::any_of(c("obs_transform", "pred_transform"))) %>%
       dplyr::mutate(seed = s)
   }
   seed_rows <- dplyr::bind_rows(seed_rows)
@@ -1142,37 +1196,424 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
   # The mean surface beside the median one (R/smearing.R): one scalar,
   # calibrated on the same out-of-fold residuals. Only a log1p model needs it.
   sm <- NULL
+  sm_split <- NULL
   smear_test <- NULL
   if (identical(transform_name, "log1p")) {
     sm <- smearing_from_run(tuning_dir, config_id)
     if (!is.null(sm)) {
       if (verbose) print(sm)
       if (write) safe_save_rds(sm, file.path(cfg_out_dir, "smearing.rds"), compress = FALSE)
-      tst <- dplyr::filter(preds, .data$dataset_role == "test") %>%
-        dplyr::group_by(.data$sample_id) %>%
-        dplyr::summarise(obs = dplyr::first(.data$obs),
-                         pred = stats::median(.data$pred), .groups = "drop")
-      if (nrow(tst) > 0L) {
-        corrected <- smear(log1p(tst$pred), sm, lower_limit = 0)
-        smear_test <- dplyr::bind_rows(
-          dplyr::mutate(calc_metrics(tst$obs, tst$pred), surface = "median (inverse)", .before = 1),
-          dplyr::mutate(calc_metrics(tst$obs, corrected), surface = "mean (smeared)", .before = 1))
-        smear_test$total_pct_vs_obs <- c(100 * (sum(tst$pred) / sum(tst$obs) - 1),
-                                         100 * (sum(corrected) / sum(tst$obs) - 1))
-        if (verbose) {
-          message("\n-- [", config_id, "] back-transform, on the test set --")
-          print(smear_test)
-        }
-      }
     } else {
       say("\nSmearing: the tuning run wrote no transform-space residuals, so no mean surface.")
+    }
+    # THE CALIBRATION SET'S FACTOR, when the plan carved one: the residuals of
+    # the deployed ensemble itself, on points nothing trained on -- the
+    # cleaner of the two estimates, the cross-validated one being the fold
+    # models'. One residual per point, as smearing_from_run() takes them.
+    if (all(c("obs_transform", "pred_transform") %in% names(preds))) {
+      cal_t <- dplyr::filter(preds, .data$dataset_role == "calibration") %>%
+        dplyr::group_by(.data$sample_id) %>%
+        dplyr::summarise(obs_transform = dplyr::first(.data$obs_transform),
+                         pred_transform = stats::median(.data$pred_transform), .groups = "drop")
+      if (nrow(cal_t) >= 30L) {
+        sm_split <- smearing_factor(cal_t$obs_transform, cal_t$pred_transform, transform = "log1p")
+        if (verbose) {
+          message("\n-- [", config_id, "] smearing on the calibration set --")
+          print(sm_split)
+        }
+        if (write) safe_save_rds(sm_split, file.path(cfg_out_dir, "smearing_split.rds"),
+                                 compress = FALSE)
+      }
+    }
+    tst <- dplyr::filter(preds, .data$dataset_role == "test") %>%
+      dplyr::group_by(.data$sample_id) %>%
+      dplyr::summarise(obs = dplyr::first(.data$obs),
+                       pred = stats::median(.data$pred), .groups = "drop")
+    if (nrow(tst) > 0L && (!is.null(sm) || !is.null(sm_split))) {
+      surf <- list(`median (inverse)` = tst$pred)
+      if (!is.null(sm)) surf[["mean (smeared, cross-validation)"]] <- smear(log1p(tst$pred), sm, lower_limit = 0)
+      if (!is.null(sm_split)) surf[["mean (smeared, calibration set)"]] <- smear(log1p(tst$pred), sm_split, lower_limit = 0)
+      smear_test <- dplyr::bind_rows(lapply(names(surf), function(nm)
+        dplyr::mutate(calc_metrics(tst$obs, surf[[nm]]), surface = nm, .before = 1)))
+      smear_test$total_pct_vs_obs <- vapply(surf, function(v) 100 * (sum(v) / sum(tst$obs) - 1),
+                                            numeric(1))
+      if (verbose) {
+        message("\n-- [", config_id, "] back-transform, on the test set --")
+        print(smear_test)
+      }
     }
   }
 
   ens_test <- if (nrow(chk_rows) > 0L) calc_metrics(chk_rows$obs, chk_rows$pred) else NULL
   list(seed_rows = seed_rows, ensemble = ens, ensemble_test = ens_test,
        conformal = conformal, calibration_source = cal_source, smearing = sm,
-       smear_test = smear_test)
+       smearing_split = sm_split, smear_test = smear_test)
+}
+
+# ── the intervals: three calibrations, two widths, two weightings, one test ──
+#
+# WHY EVERY METHOD, EVERY TIME. Each calibration rests on its own assumption
+# (R/conformal.R): "cv" on the fold models' residuals standing in for the
+# final model's, "split" on the calibration set being exchangeable with the
+# points it speaks for, "cv_plus" on the fold models standing for an
+# algorithm fixed in advance. None holds exactly for clustered profiles and a
+# configuration chosen on the folds, and which comes closest is a question the
+# test set answers, not the theory. So every method the run allows is
+# calibrated, at both widths and both weightings, and every one is checked on
+# the same test points: overall, every group weighing alike, inside and
+# outside the area of applicability, by fifth of the predicted level, and by
+# any strata given.
+#
+# The test set is not used to choose among them here: the table reports, and
+# which bands a map carries is the caller's choice, in dsm_predict().
+#
+# NOTHING IS DROPPED IN SILENCE. A calibration the data cannot support -- too
+# few groups for the weighting, too few points to fit a scale -- is left out
+# and named in `notes`, printed and written; an infinite interval stays in the
+# table, with its coverage of 1, because that is the answer.
+.final_intervals <- function(config_id, ens, tuning_dir, tuning_plan, data, scaling,
+                             transform, clamp, alpha, methods, strata = NULL,
+                             cfg_out_dir = NULL, write = TRUE, verbose = TRUE) {
+  say <- function(...) if (verbose) message(...)
+  meta <- data$store$meta
+  n_store <- nrow(meta)
+  pos_of <- function(ids) match(as.character(ids), as.character(meta$sample_id))
+  groups <- .plan_groups(tuning_plan)
+  if (length(groups) != n_store) groups <- as.character(seq_len(n_store))
+
+  tst <- ens[ens$dataset_role == "test", , drop = FALSE]
+  if (nrow(tst) == 0L) {
+    say("\n-- [", config_id, "] intervals not checked: the plan holds no test set.")
+    return(NULL)
+  }
+  tst$pos  <- pos_of(tst$sample_id)
+  calr <- ens[ens$dataset_role == "calibration", , drop = FALSE]
+  calr$pos <- pos_of(calr$sample_id)
+  notes <- character(0)
+  note  <- function(...) notes <<- c(notes, paste0(...))
+
+  # THE DISSIMILARITY, measured as a map pixel's is: the final model's
+  # scaling, against the points of the tuning plan (aoa_reference()).
+  aref <- NULL
+  qc <- .final_qc_table(data)
+  predictors <- as.character(data$store$predictors)
+  if (is.null(qc)) {
+    note("no qc_table.csv in the store: no dissimilarity index, so no level+DI interval and no AOA strata")
+  } else {
+    aref <- tryCatch(aoa_reference(data$points, predictors, qc, scaling, tuning_plan),
+                     error = function(e) {
+                       note("no dissimilarity index (", conditionMessage(e), "): no level+DI ",
+                            "interval and no AOA strata")
+                       NULL
+                     })
+  }
+  di_at <- function(pos) {
+    if (is.null(aref) || length(pos) == 0L) return(rep(NA_real_, length(pos)))
+    aoa_di(aref, data$points[pos, predictors, drop = FALSE])
+  }
+  tst$di  <- di_at(tst$pos)
+  calr$di <- di_at(calr$pos)
+
+  # THE CROSS-VALIDATED RESIDUALS, each with its fold, its group and the DI
+  # its fold model faced.
+  cv <- cv_residuals(tuning_dir, config_id)
+  if (is.null(cv)) {
+    note("the tuning run wrote no validation predictions for ", config_id,
+         ": no cv or cv_plus interval")
+  } else {
+    cv$pos <- pos_of(cv$sample_id)
+    fold_of <- rep(NA_integer_, n_store)
+    for (j in seq_along(tuning_plan$folds)) fold_of[tuning_plan$folds[[j]]$validation] <- j
+    cv$fold  <- fold_of[cv$pos]
+    cv$group <- groups[cv$pos]
+    cv$di <- if (is.null(aref)) rep(NA_real_, nrow(cv)) else
+      aref$cv$cv_di[match(as.character(cv$sample_id), as.character(aref$cv$sample_id))]
+  }
+  # The level+DI scale, fitted ONCE on the cross-validated residuals: the
+  # "split" interval takes its q on the whole calibration set with it, and
+  # CV+ divides its residuals by it.
+  sc <- NULL
+  if (!is.null(cv) && any(is.finite(cv$di))) {
+    sc <- tryCatch(conformal_scale_fit(cv$obs, cv$pred, data.frame(level = cv$pred, di = cv$di)),
+                   error = function(e) {
+                     note("no level+DI scale: ", conditionMessage(e))
+                     NULL
+                   })
+  }
+  if ("split" %in% methods && nrow(calr) == 0L) {
+    note("the tuning plan carved no calibration set (calibration_frac in the resampling ",
+         "spec): no split interval")
+  }
+
+  # CV+ needs the fold models at the test points -- and two folds at least: a
+  # single split (a holdout) has one model, and CV+ with one model is the
+  # split interval with extra steps.
+  fold_pred <- NULL
+  if ("cv_plus" %in% methods && !is.null(cv) && length(unique(stats::na.omit(cv$fold))) < 2L) {
+    note("the tuning plan has one fold (a holdout): CV+ needs two at least -- no cv_plus interval")
+  } else if ("cv_plus" %in% methods && !is.null(cv)) {
+    say("\n-- [", config_id, "] CV+: the tuning run's fold models at the ", nrow(tst),
+        " test point(s) --")
+    fold_pred <- .final_fold_predictions(tuning_dir, config_id, data, tst$pos, transform,
+                                         clamp, say = say)
+    if (is.null(fold_pred)) note("the tuning run kept no model of ", config_id, ": no cv_plus interval")
+  }
+
+  # The strata the coverage is read in.
+  br <- unique(stats::quantile(tst$pred, seq(0, 1, 0.2), na.rm = TRUE, names = FALSE))
+  st <- list(level = if (length(br) > 1L) {
+    paste0("fifth ", findInterval(tst$pred, br, rightmost.closed = TRUE, all.inside = TRUE))
+  } else rep("fifth 1", nrow(tst)))
+  if (!is.null(aref)) {
+    st$aoa <- ifelse(is.na(tst$di), NA_character_,
+                     ifelse(inside_aoa(tst$di, aref$threshold), "inside", "outside"))
+  }
+  for (nm in names(strata)) st[[nm]] <- as.character(strata[[nm]])[tst$pos]
+  g_test <- groups[tst$pos]
+  ll <- clamp[1]
+  X_test <- data.frame(level = tst$pred, di = tst$di)
+
+  rows <- list(); cals <- list()
+  add <- function(method, width, weighting, a, iv, cal) {
+    key <- paste(.predict_level_label(a), method, width, weighting, sep = "_")
+    cals[[key]] <<- cal
+    rows[[length(rows) + 1L]] <<- dplyr::bind_cols(
+      tibble::tibble(config_id = config_id, level = .predict_level_label(a), alpha = a,
+                     method = method, width = width, weighting = weighting),
+      .coverage_rows(tst$obs, iv$lower, iv$upper, group = g_test, strata = st))
+  }
+  # A calibration that fails or warns is named, never dropped in silence.
+  attempt <- function(what, expr) {
+    withCallingHandlers(
+      tryCatch(expr, error = function(e) {
+        note(what, ": left out -- ", conditionMessage(e))
+        NULL
+      }),
+      warning = function(w) {
+        note(what, ": ", conditionMessage(w))
+        invokeRestart("muffleWarning")
+      })
+  }
+
+  for (a in alpha) {
+    lab <- .predict_level_label(a)
+    for (wt in c("point", "group")) {
+      if ("cv" %in% methods && !is.null(cv)) {
+        g <- if (wt == "group") cv$group else NULL
+        cal <- attempt(paste(lab, "cv constant by", wt),
+                       conformal_calibrate(cv$obs, cv$pred, alpha = a, group = g))
+        if (!is.null(cal)) add("cv", "constant", wt, a,
+                               conformal_interval(cal, tst$pred, lower_limit = ll), cal)
+        if (!is.null(sc)) {
+          cal <- attempt(paste(lab, "cv level+DI by", wt),
+                         conformal_scaled_calibrate(cv$obs, cv$pred,
+                                                    data.frame(level = cv$pred, di = cv$di),
+                                                    alpha = a, group = g))
+          if (!is.null(cal)) add("cv", "level_di", wt, a,
+                                 conformal_scaled_interval(cal, tst$pred, X_test, lower_limit = ll), cal)
+        }
+      }
+      if ("split" %in% methods && nrow(calr) >= 2L) {
+        g <- if (wt == "group") groups[calr$pos] else NULL
+        cal <- attempt(paste(lab, "split constant by", wt),
+                       conformal_calibrate(calr$obs, calr$pred, alpha = a, group = g))
+        if (!is.null(cal)) add("split", "constant", wt, a,
+                               conformal_interval(cal, tst$pred, lower_limit = ll), cal)
+        if (!is.null(aref)) {
+          # With the scale fitted on the cross-validated residuals every
+          # calibration point takes q; without one, half fit it here.
+          X_cal <- data.frame(level = calr$pred, di = calr$di)
+          cal <- attempt(paste(lab, "split level+DI by", wt),
+                         conformal_scaled_calibrate(calr$obs, calr$pred, X_cal, alpha = a,
+                                                    scale = sc, group = g))
+          if (!is.null(cal)) add("split", "level_di", wt, a,
+                                 conformal_scaled_interval(cal, tst$pred, X_test, lower_limit = ll), cal)
+        }
+      }
+    }
+    # CV+ by point only: its theorem is about exchangeable points, and a group
+    # version of it has none to stand on (docs/conformal_design.md).
+    if ("cv_plus" %in% methods && !is.null(fold_pred)) {
+      cal <- attempt(paste(lab, "cv_plus constant"),
+                     cv_plus_calibrate(cv$obs, cv$pred, cv$fold, alpha = a))
+      if (!is.null(cal)) add("cv_plus", "constant", "point", a,
+                             cv_plus_interval(cal, fold_pred, lower_limit = ll), cal)
+      if (!is.null(sc)) {
+        d_cv <- .conformal_scale(sc$coef, sc$floor, data.frame(level = cv$pred, di = cv$di))
+        cal <- attempt(paste(lab, "cv_plus level+DI"),
+                       cv_plus_calibrate(cv$obs, cv$pred, cv$fold, alpha = a, difficulty = d_cv))
+        if (!is.null(cal)) {
+          d_t <- .conformal_scale(sc$coef, sc$floor, X_test)
+          add("cv_plus", "level_di", "point", a,
+              cv_plus_interval(cal, fold_pred, difficulty = d_t, lower_limit = ll), cal)
+        }
+      }
+    }
+  }
+
+  coverage <- dplyr::bind_rows(rows)
+  summ <- .final_interval_summary(coverage)
+  if (verbose && nrow(summ) > 0L) {
+    message(sprintf("\n-- [%s] the intervals on the test set: %d point(s) in %d group(s)%s --",
+                    config_id, nrow(tst), length(unique(g_test)),
+                    if (!is.null(aref)) sprintf(", %d outside the AOA",
+                                                sum(st$aoa == "outside", na.rm = TRUE)) else ""))
+    show <- summ
+    num <- vapply(show, is.numeric, logical(1))
+    show[num] <- lapply(show[num], function(v) round(v, 3))
+    print(as.data.frame(show), row.names = FALSE)
+  }
+  if (verbose && length(notes) > 0L) {
+    message("  Notes:\n", paste0("    ", unique(notes), collapse = "\n"))
+  }
+  out <- list(coverage = coverage, summary = summ, calibrations = cals, scale = sc,
+              aoa_threshold = if (is.null(aref)) NA_real_ else as.numeric(aref$threshold),
+              n = c(cv = if (is.null(cv)) 0L else nrow(cv), split = nrow(calr), test = nrow(tst)),
+              n_test_groups = length(unique(g_test)),
+              fold_check_max_rel_diff = if (is.null(fold_pred)) NA_real_ else attr(fold_pred, "max_rel_diff"),
+              methods = methods, notes = unique(notes))
+  if (write && !is.null(cfg_out_dir)) {
+    d <- file.path(cfg_out_dir, "intervals")
+    create_output_dirs(d)
+    safe_write_csv2(coverage, file.path(d, "coverage_test.csv"))
+    safe_write_csv2(summ, file.path(d, "coverage_summary.csv"))
+    safe_save_rds(out, file.path(d, "intervals.rds"), compress = FALSE)
+  }
+  out
+}
+
+# One row per interval: what a reader compares first.
+.final_interval_summary <- function(coverage) {
+  if (is.null(coverage) || nrow(coverage) == 0L) return(tibble::tibble())
+  keys <- unique(coverage[, c("level", "method", "width", "weighting")])
+  dplyr::bind_rows(lapply(seq_len(nrow(keys)), function(i) {
+    k <- keys[i, , drop = FALSE]
+    s <- coverage[coverage$level == k$level & coverage$method == k$method &
+                    coverage$width == k$width & coverage$weighting == k$weighting, , drop = FALSE]
+    pick <- function(type, name, col) {
+      v <- s[[col]][s$stratum_type == type & s$stratum == name]
+      if (length(v)) v[1] else NA_real_
+    }
+    lv <- s$coverage[s$stratum_type == "level"]
+    tibble::tibble(
+      level = k$level, method = k$method, width = k$width, weighting = k$weighting,
+      n_test = pick("all", "points", "n"),
+      coverage = pick("all", "points", "coverage"),
+      coverage_by_group = pick("all", "groups (each weighs the same)", "coverage"),
+      coverage_inside_aoa = pick("aoa", "inside", "coverage"),
+      coverage_outside_aoa = pick("aoa", "outside", "coverage"),
+      worst_level_fifth = if (any(is.finite(lv))) min(lv, na.rm = TRUE) else NA_real_,
+      mean_width = pick("all", "points", "mean_width"))
+  }))
+}
+
+# The store's QC rules, in the model's channel order; NULL when it has none.
+.final_qc_table <- function(data) {
+  p <- file.path(data$patch_dir, data$recipe$files$qc_table %||% "qc_table.csv")
+  if (!file.exists(p)) return(NULL)
+  qc <- safe_read_csv2(p)
+  predictors <- as.character(data$store$predictors)
+  qc <- qc[match(predictors, qc$predictor), , drop = FALSE]
+  if (anyNA(qc$predictor)) return(NULL)
+  qc
+}
+
+# THE TUNING RUN'S FOLD MODELS AT GIVEN ROWS, for CV+: per fold, the median of
+# its seeds' native predictions -- the same ensemble cv_residuals() took each
+# point's residual from.
+#
+# EVERY MODEL IS HELD TO ITS OWN RUN FIRST: its predictions at (up to)
+# `n_check` of its fold's validation rows must be the ones the tuning run
+# wrote, to 1e-4, or the interval would be built from other models -- another
+# store, another scaling. And the patches are cut ONCE, unscaled, and each
+# fold's scaling applied to a copy: build_fold_cache() with a centre of 0 and
+# a scale of 1 leaves the float32 values as read, and scale_patches() then
+# does the very arithmetic a fold's cache did, so the numbers are the run's
+# -- where cutting a cache per fold would read every window from the disk
+# once per fold.
+.final_fold_predictions <- function(tuning_dir, config_id, data, rows, transform, clamp,
+                                    n_check = 32L, batch_size = 256L, say = function(...) NULL) {
+  plan <- readRDS(file.path(tuning_dir, "fold_plan.rds"))
+  grid <- readRDS(file.path(tuning_dir, "tune_grid.rds"))
+  cfg  <- grid[grid$config_id == config_id, , drop = FALSE]
+  pat  <- paste0("^", config_id, "_f([0-9]+)_s([0-9]+)_best\\.pt$")
+  files <- list.files(file.path(tuning_dir, "models"), pattern = pat)
+  if (nrow(cfg) != 1L || length(files) == 0L) return(NULL)
+  fold <- as.integer(sub(pat, "\\1", files))
+  seed <- as.integer(sub(pat, "\\2", files))
+  folds <- sort(unique(fold))
+  if (max(folds) > length(plan$folds)) {
+    stop("The tuning run holds a model of fold ", max(folds), " in a plan of ",
+         length(plan$folds), " fold(s).", call. = FALSE)
+  }
+  checks <- lapply(folds, function(k) utils::head(plan$folds[[k]]$validation, n_check))
+  all_rows <- unique(c(rows, unlist(checks)))
+  ws   <- sort(unique(unlist(cfg$window_sizes)))
+  keys <- patch_window_key(cfg$window_sizes[[1]])
+  as_read <- tibble::tibble(predictor = data$type_table$predictor, center = 0, scale = 1,
+                            degenerate = FALSE)
+  raw <- build_fold_cache(data$store, data$points, data$type_table, list(rows = all_rows), ws,
+                          scaling = as_read, verbose = FALSE)$cache$rows
+  at_rows <- match(rows, all_rows)
+  device  <- torch::torch_device("cpu")
+  out <- matrix(NA_real_, length(rows), length(folds), dimnames = list(NULL, as.character(folds)))
+  worst <- 0
+  t0 <- Sys.time()
+  for (j in seq_along(folds)) {
+    k  <- folds[j]
+    sc <- fit_scaling(data$points, data$type_table, plan$folds[[k]]$train)
+    if (any(sc$degenerate)) {
+      stop("Degenerate scaling on fold ", k, "'s training rows -- this is not the store the ",
+           "tuning run was fitted on.", call. = FALSE)
+    }
+    inputs <- lapply(keys, function(kk) scale_patches(raw[[kk]]$clone(), sc, inplace = TRUE))
+    at_chk <- match(checks[[j]], all_rows)
+    ss  <- sort(seed[fold == k])
+    nat <- matrix(NA_real_, length(rows), length(ss))
+    for (i in seq_along(ss)) {
+      model <- build_cnn_from_config(cfg, data$store$n_channels)
+      model$load_state_dict(torch::torch_load(file.path(
+        tuning_dir, "models", sprintf("%s_f%d_s%d_best.pt", config_id, k, ss[i]))))
+      model$to(device = device)
+      pt <- .importance_forward(model, inputs, batch_size)
+      pf <- file.path(tuning_dir, "predictions", sprintf("%s_f%d_s%d_pred_all.csv", config_id, k, ss[i]))
+      if (!file.exists(pf)) {
+        stop("Fold model f", k, " s", ss[i], " of ", config_id, " has no predictions to be ",
+             "checked against (", pf, ").", call. = FALSE)
+      }
+      pa <- safe_read_csv2(pf)
+      pa <- pa[pa$dataset_role == "validation", , drop = FALSE]
+      at <- match(as.character(data$store$meta$sample_id[checks[[j]]]), as.character(pa$sample_id))
+      stored <- pa$pred_transform[at]
+      dev <- max(abs(pt[at_chk] - stored) / pmax(1, abs(stored)))
+      if (anyNA(at) || !is.finite(dev) || dev > 1e-4) {
+        stop(sprintf(paste0("Fold model f%d s%d of %s does not reproduce its tuning run's own ",
+                            "predictions at its validation points (%s). The store, the scaling or ",
+                            "the checkpoint is not the run's, and a CV+ interval built from it ",
+                            "would describe other models."),
+                     k, ss[i], config_id,
+                     if (anyNA(at)) sprintf("%d of %d not among them", sum(is.na(at)), length(at))
+                     else sprintf("relative difference %.2g", dev)), call. = FALSE)
+      }
+      worst <- max(worst, dev)
+      pn <- transform(pt[at_rows])
+      if (is.finite(clamp[1])) pn <- pmax(pn, clamp[1])
+      if (is.finite(clamp[2])) pn <- pmin(pn, clamp[2])
+      nat[, i] <- pn
+      rm(model)
+    }
+    out[, j] <- if (ncol(nat) > 1L) matrixStats::rowMedians(nat) else nat[, 1]
+    rm(inputs)
+    invisible(gc(verbose = FALSE))
+  }
+  rm(raw)
+  invisible(gc(verbose = FALSE))
+  say(sprintf("  %d fold model(s) in %d fold(s), each matching its run to %.1e at its validation points (%.1f min)",
+              length(files), length(folds), worst,
+              as.numeric(difftime(Sys.time(), t0, units = "mins"))))
+  attr(out, "max_rel_diff") <- worst
+  attr(out, "n_models") <- length(files)
+  out
 }
 
 # Mean +/- sd between seeds, per config -- stage 04's table.
@@ -1364,9 +1805,12 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
     }
   }
   L <- c(L, "", "## The refit", "",
-         sprintf("- Split from the tuning plan%s: %d training, %d validation (early stopping), %d test.",
+         sprintf("- Split from the tuning plan%s: %d training, %d validation (early stopping), %d test%s.",
                  if (is.null(x$refit_method)) "" else sprintf(", by its own criterion (`%s`)", x$refit_method),
-                 x$split[["train"]], x$split[["validation"]], x$split[["test"]]),
+                 x$split[["train"]], x$split[["validation"]], x$split[["test"]],
+                 if ("calibration" %in% names(x$split)) {
+                   sprintf(", %d calibration (predicted, never trained on)", x$split[["calibration"]])
+                 } else ""),
          if (is.na(x$threads_per_unit)) {
            sprintf("- Seeds: %s. The thread count they trained with was not recorded by the stage that fitted them -- and a seed's numbers depend on it (T1).",
                    paste(x$seeds, collapse = ", "))
@@ -1400,12 +1844,43 @@ dsm_report_final <- function(run_dir, tuning_dir, conformal_alpha = c(0.1, 0.05)
       L <- c(L, sprintf("- Smearing factor: %s (the mean surface is the median one times it, on the original scale).",
                         f(pc$smearing$s)))
     }
+    if (!is.null(pc$smearing_split)) {
+      L <- c(L, sprintf("- Smearing factor on the calibration set: %s.", f(pc$smearing_split$s)))
+    }
+    iv <- pc$intervals$summary
+    if (!is.null(iv) && nrow(iv) > 0L) {
+      n <- pc$intervals$n
+      L <- c(L, "", sprintf("### `%s`: the intervals, checked on the test set", cid), "",
+             sprintf(paste0("Calibrated on %s cross-validated residual(s)%s; checked on %s test point(s) in %s ",
+                            "group(s). `cv`: the cross-validated residuals (no guarantee: the configuration ",
+                            "was chosen on those folds). `split`: split conformal on the calibration set ",
+                            "(at least 1 - alpha for points exchangeable with it). `cv_plus`: CV+, the fold ",
+                            "models at each point (at least 1 - 2 alpha - sqrt(2/n), nearly: the ",
+                            "configuration was chosen on the folds). By group: every group of the plan ",
+                            "weighs the same."),
+                     format(n[["cv"]] %||% NA, big.mark = ","),
+                     if (isTRUE(n[["split"]] > 0)) sprintf(" and %s calibration point(s)", format(n[["split"]], big.mark = ",")) else "",
+                     format(n[["test"]], big.mark = ","), format(pc$intervals$n_test_groups %||% NA, big.mark = ",")),
+             "", "| level | method | width | by | coverage | by group | inside AOA | outside AOA | worst level fifth | mean width |",
+             "|---|---|---|---|---|---|---|---|---|---|")
+      pct <- function(v) if (is.finite(v)) sprintf("%.1f%%", 100 * v) else "-"
+      for (i in seq_len(nrow(iv))) {
+        L <- c(L, sprintf("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |", iv$level[i], iv$method[i],
+                          iv$width[i], iv$weighting[i], pct(iv$coverage[i]), pct(iv$coverage_by_group[i]),
+                          pct(iv$coverage_inside_aoa[i]), pct(iv$coverage_outside_aoa[i]),
+                          pct(iv$worst_level_fifth[i]), f(iv$mean_width[i], 3)))
+      }
+      if (length(pc$intervals$notes) > 0L) {
+        L <- c(L, "", paste0("- ", pc$intervals$notes))
+      }
+    }
   }
   L <- c(L, "", "## Files", "",
          "- `selected_hyperparameters.csv` -- the tables above, one row per hyperparameter",
          "- `comparison/final_run_summary.rds` -- the choice, the seeds, the threads, the results",
          "- `<config>/models/seed####_best.pt`, `<config>/predictor_scaling.csv` -- what a map needs",
-         "- `<config>/ensemble_predictions.csv`, `conformal_##.rds`, `smearing.rds`")
+         "- `<config>/ensemble_predictions.csv`, `conformal_##.rds`, `smearing.rds`",
+         "- `<config>/intervals/coverage_test.csv` -- every interval's coverage on the test set, by stratum; `coverage_summary.csv`, one row per interval; `intervals.rds`, the calibrations")
   path <- file.path(x$run_dir, "final_report.md")
   writeLines(enc2utf8(L), path, useBytes = TRUE)
   path

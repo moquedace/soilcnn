@@ -19,6 +19,8 @@ dsm_final(
   threads_per_unit = 5L,
   max_ram_gb = NULL,
   conformal_alpha = c(0.1, 0.05),
+  intervals = c("cv", "split", "cv_plus"),
+  strata = NULL,
   output_dir = NULL,
   run_id = NULL,
   resume = TRUE,
@@ -66,6 +68,26 @@ one.}
 available at the start (read with the ps package).}
 
 \item{conformal_alpha}{Miscoverage levels of the intervals: 0.1 is 90\%.}
+
+\item{intervals}{Which interval calibrations to make and check on the test
+set (each at a constant width and at a width fitted on the level and the
+dissimilarity index; "cv" and "split" also with every group weighing
+alike):
+\itemize{
+\item "cv": on the tuning run's cross-validated residuals -- no data spent,
+no guarantee, the configuration having been chosen on those folds;
+\item "split": split conformal, on the calibration set the tuning plan held
+out (\code{calibration_frac} in \code{\link[=spatial_cv]{spatial_cv()}} and the others) -- coverage at
+least 1 - alpha for points exchangeable with it (Lei et al. 2018);
+\item "cv_plus": CV+ (Barber et al. 2021), the tuning run's fold models at
+each point -- at least 1 - 2 alpha - sqrt(2/n) for an algorithm fixed
+in advance, which a configuration chosen on the folds is only nearly.
+A method the runs cannot support is left out and said so.
+}}
+
+\item{strata}{NULL, or a named list of labels, one per point of the store
+(e.g. \code{list(ecoregion = eco)}), to read the test coverage within, beside
+the area of applicability and the fifths of the predicted level.}
 
 \item{output_dir}{Where runs go. NULL for final_model/ beside the tuning
 run's directory.}

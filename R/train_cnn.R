@@ -387,9 +387,18 @@ train_one_cnn <- function(
   } else {
     NULL
   }
+  # The calibration set (refit_split()): predicted by the final model, never
+  # trained on, never watched for stopping -- its residuals calibrate the
+  # "split" interval. Only a final refit's index carries it.
+  pred_cal <- if (!is.null(loaders$calibration)) {
+    predict_loader(model, loaders$calibration, points_valid$calibration, "calibration",
+                   transform, device, clamp)
+  } else {
+    NULL
+  }
 
   pred_all <- dplyr::mutate(
-    dplyr::bind_rows(pred_train, pred_val2, pred_test),
+    dplyr::bind_rows(pred_train, pred_val2, pred_test, pred_cal),
     model = model_name, target_version = cfg$loss_fn
   )
 
@@ -1268,6 +1277,12 @@ run_cnn_resample <- function(tune_grid, store, points, type_table, plan,
   )
   if (!is.null(test_ds)) {
     out$test <- torch::dataloader(test_ds, batch_size = bs_eval, shuffle = FALSE)
+  }
+  # The calibration set, in a final refit's cache only: predicted, never
+  # shuffled, never trained on.
+  if (!is.null(cache$calibration)) {
+    out$calibration <- torch::dataloader(make_ds("calibration"), batch_size = bs_eval,
+                                         shuffle = FALSE)
   }
   out
 }
