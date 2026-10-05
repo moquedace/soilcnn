@@ -17,12 +17,11 @@
 #   figures <- "intervals"    # some of them only; rm(figures) for all five
 #   maps_from <- "maps/check_tile"   # the maps figure rehearsed on 05a's tile
 #   results_dir <- "<a run folder>"  # a run outside outputs/, e.g. an archived one
-#   importance_cache <- "<file.rds>" # importance computed before, elsewhere
 #   source("D:/usuario_armazenamento/cassio/projects/soilcnn/tools/vignette_results.R")
 #
 # Reads the run's files directly, not 00_settings.R, which a running stage of
-# the trial re-reads. The importance is computed once, on two threads, and
-# kept in <run>/vignette/; delete that folder to compute it again.
+# the trial re-reads. The importance is 07_importance.R's, read from
+# <run>/importance/: it stops until 07 has run.
 
 if (!exists("results_from")) results_from <- "smoke"
 # Which figures: all five, or some -- figures <- "intervals" draws that one,
@@ -209,26 +208,20 @@ if (rehearsal) message("The maps figure, rehearsed on ", maps_from, ": ", file.p
 
 # ── 4. What the model learned, by theme ───────────────────────────────────────
 if ("importance" %in% figures) {
-imp_file <- if (exists("importance_cache")) importance_cache else file.path(kept, "importance.rds")
-if (!file.exists(imp_file)) {
-  fr <- file.path(run, "final_model", "spatial")
-  data <- dsm_load(file.path(run, "patches"), verbose = FALSE)
-  themes <- csv(file.path(trial, "data", "importance_themes.csv"))[, c("channel", "variable")]
-  themes <- themes[themes$channel %in% data$store$predictors, ]
-  perm <- dsm_importance(fr, data, permutation_importance(draws = 3), groups = themes,
-                         threads = 2, verbose = FALSE)
-  shap <- dsm_importance(fr, data, shap_importance(samples = 30, background = 50),
-                         groups = themes, threads = 2, verbose = FALSE)
-  pts <- importance_points(fr, data, every = 200)
-  seed1 <- readRDS(file.path(fr, "comparison", "final_run_summary.rds"))$seeds[1]
-  shap_at <- dsm_importance(fr, data, shap_importance(samples = 20, background = 50),
-                            groups = themes, at = pts, seeds = seed1, threads = 2, verbose = FALSE)
-  map <- importance_map(shap_at, output_dir = file.path(kept, "shap_maps"))
-  saveRDS(list(perm = perm$table, shap = shap$table,
-               shap_files = file.path(kept, "shap_maps", "shap.tif")), imp_file)
+# The importance 07_importance.R measured -- the spatial design's permutation
+# and SHAP on the test set, and its SHAP over the map -- read, not measured
+# again: the figure shows the numbers the text reads (07's compare_*.csv,
+# through tools/vignette_numbers.R), and the run's hours are spent once.
+imp_dir <- file.path(run, "importance")
+imp_files <- file.path(imp_dir, c("permutation_spatial.rds", "shap_spatial.rds",
+                                  file.path("shap_map_spatial", "shap.tif")))
+if (!all(file.exists(imp_files))) {
+  stop("No importance of the spatial design in ", imp_dir, " yet (missing: ",
+       paste(basename(imp_files[!file.exists(imp_files)]), collapse = ", "),
+       "): run 07_importance.R first.", call. = FALSE)
 }
-imp <- readRDS(imp_file)
-if (!file.exists(imp$shap_files)) imp$shap_files <- file.path(dirname(imp_file), "shap_maps", "shap.tif")
+imp <- list(perm = readRDS(imp_files[1])$table, shap = readRDS(imp_files[2])$table,
+            shap_files = imp_files[3])
 both <- merge(imp$perm[, c("variable", "importance")], imp$shap[, c("variable", "importance")],
               by = "variable", suffixes = c("_perm", "_shap"))
 both <- utils::head(both[order(-both$importance_shap), ], 10)
