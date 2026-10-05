@@ -97,7 +97,10 @@ example_run <- function(dir = file.path(tempdir(), "soilcnn_example"), verbose =
                    tune_grid = grid, n_seeds = 1L, output_dir = file.path(dir, "tuning"),
                    run_id = "tuning", device = setup_torch_device(n_threads = 1L, use_cuda = FALSE),
                    n_epochs = 30L, patience = 10L, print_every = 100L, verbose = verbose)
+  # 30% to stop the refit on: k = 3 blocks, so the 15 blocks of 160 points
+  # split cleanly; at the default 15% (k = 7) the largest block outweighs a fold.
   final <- dsm_final(fit, seeds = 2L, n_cores = 1L, threads_per_unit = 1L,
+                     validation_frac = 0.3,
                      training = list(n_epochs = 30L, patience = 10L, print_every = 100L),
                      output_dir = file.path(dir, "final_model"), run_id = "final",
                      verbose = verbose)
