@@ -44,8 +44,9 @@ Soil profiles (GPKG)               Rasters (a folder of aligned TIFs)
                         │
                         ▼
    dsm_final()      The config the run supports (one_se), refitted under N seeds
-                    side by side; the ensemble, the conformal interval, the
-                    smearing factor, and a declaration of every hyperparameter.
+                    side by side; the ensemble, the conformal intervals (each
+                    checked on the test set), the smearing factor, and a
+                    declaration of every hyperparameter.
                         │
                         ▼
    dsm_predict()    The map: median, mean, spread, intervals, DI and AOA bands —
@@ -429,9 +430,10 @@ entirely on anyone who sums the map:
 | mean (smeared) | +2.7% | yes |
 
 Duan's smearing estimator corrects it with one scalar, calibrated on the same
-out-of-fold **ensemble** residuals the conformal interval uses — the deployed
-prediction is the ensemble median, so the calibrated residual has to be the
-ensemble's and not one seed's.
+out-of-fold **ensemble** residuals the cross-validated interval uses — the
+deployed prediction is the ensemble median, so the calibrated residual has to
+be the ensemble's and not one seed's. With a calibration set, a second factor
+comes from its residuals (`smeared_mean_split`).
 
 **Nothing is replaced.** `dsm_predict()` writes `smeared_mean_<source>` *beside*
 `ensemble_median` and labels both, because they answer different questions: the
@@ -624,8 +626,8 @@ What the interval bands come from instead is [calibrated uncertainty](#calibrate
 |------|---------|
 | [`R/api.R`](R/api.R) | **The front end**: `dsm_load()` · the resampling specs (`spatial_cv()` and the rest) · `dsm_train()` |
 | [`R/prepare.R`](R/prepare.R) | `dsm_prepare()` — a point table and a folder of aligned rasters become a patch store, with the target transform, the predictor types and the QC rules written into it as a recipe; `dsm_load(store)` then needs nothing else |
-| [`R/final.R`](R/final.R) | `dsm_final()`: the selected config refitted under N seeds, side by side with fixed threads per seed; the ensemble, the conformal interval, the smearing factor; and `final_report.md`, which declares every hyperparameter of the chosen CNN and whether the search chose it. A resume is held to the settings its run started with |
-| [`R/predict.R`](R/predict.R) | `dsm_predict()`: the map, for a grid as large as the world at 250 m -- row bands read once through a buffer that keeps its halo, the network fully convolutional where that is exact, workers side by side and resumable; the ensemble bands, the smeared mean, the constant and the level-and-DI conformal intervals and the AOA for every calibration source given (block, kNNDM), one VRT per band; and, first, a probe that must reproduce the final model's stored predictions at the profiles |
+| [`R/final.R`](R/final.R) | `dsm_final()`: the selected config refitted under N seeds, side by side with fixed threads per seed; the ensemble, the conformal intervals (cv, split, CV+), each checked on the test set, the smearing factor; and `final_report.md`, which declares every hyperparameter of the chosen CNN and whether the search chose it. A resume is held to the settings its run started with |
+| [`R/predict.R`](R/predict.R) | `dsm_predict()`: the map, for a grid as large as the world at 250 m -- row bands read once through a buffer that keeps its halo, the network fully convolutional where that is exact, workers side by side and resumable; the ensemble bands, the smeared mean, the conformal intervals of every calibration given (cv, split, CV+), each at a constant width and one that follows the level and the DI, and the AOA, one VRT per band; and, first, a probe that must reproduce the final model's stored predictions at the profiles |
 | [`R/utils.R`](R/utils.R) | Safe I/O helpers, torch device setup, `env_*()` overrides, `latest_run_dir()` — the newest *finished* run, by time |
 | [`R/checks.R`](R/checks.R) | `check_ledger()` · `ledger_check()` · `ledger_verdict()` — a ledger whose verdict refuses to pass while a promised check is missing |
 | [`R/metrics.R`](R/metrics.R) | `ccc()` · R² · MAE · NSE · RMSE · MQI · **signed bias**, per split and per quantile group |
@@ -643,7 +645,7 @@ What the interval bands come from instead is [calibrated uncertainty](#calibrate
 | [`R/train_table.R`](R/train_table.R) | `run_table_resample()` — tabular models, same comparison table |
 | [`R/caret_adapter.R`](R/caret_adapter.R) | `caret_spec()` — borrow ~230 models, never caret's resampling |
 | [`R/aoa.R`](R/aoa.R) | Dissimilarity index · area of applicability |
-| [`R/conformal.R`](R/conformal.R) | `conformal_calibrate()` · `picp_report()` — intervals with a coverage guarantee, and the check that they keep it |
+| [`R/conformal.R`](R/conformal.R) | `conformal_calibrate()` · `conformal_scaled_calibrate()` · `conformal_scale_fit()` · `cv_plus_calibrate()` · `picp_report()` — split conformal and CV+, with points or whole groups weighing alike, at a constant width or one fitted to the level and the DI; and the check that they keep their coverage |
 | [`R/occlusion.R`](R/occlusion.R) | `occlusion_report()` — does the trained network use the neighbourhood, or only the centre pixel? |
 | [`R/smearing.R`](R/smearing.R) | `smearing_factor()` · `smear()` — the back-transform of a log-trained median, and the one surface that may be summed; `smearing_check()` measures its factors on held-out points, and `smear_map()` applies one to a median map |
 | [`R/block_bootstrap.R`](R/block_bootstrap.R) | `block_bootstrap()` · `equal_area_blocks()` · `spatial_correlogram()` — intervals on clustered test points from whole blocks of equal area, per profile and per block |
@@ -658,7 +660,7 @@ Beside `R/`:
 
 | Where | What |
 |------|---------|
-| [`DESCRIPTION`](DESCRIPTION) · [`NAMESPACE`](NAMESPACE) | The package, `soilcnn`: what it imports, and the 82 functions it exports — the `dsm_*()` front end, the resampling specs and fold constructors, the model registry, the importance methods, and the tools applied to results (AOA, conformal intervals, smearing, metrics, noise floor, occlusion, intervals by blocks). The runners underneath `dsm_train()`, the patch store's plumbing and the helpers are internal (`soilcnn:::`); `pkgload::load_all()` on the source tree makes every function visible. NAMESPACE is what roxygen2 writes from the `@export` tags, and `tests/test_package_metadata.R` checks that it still is |
+| [`DESCRIPTION`](DESCRIPTION) · [`NAMESPACE`](NAMESPACE) | The package, `soilcnn`: what it imports, and the 85 functions it exports — the `dsm_*()` front end, the resampling specs and fold constructors, the model registry, the importance methods, and the tools applied to results (AOA, conformal intervals, smearing, metrics, noise floor, occlusion, intervals by blocks). The runners underneath `dsm_train()`, the patch store's plumbing and the helpers are internal (`soilcnn:::`); `pkgload::load_all()` on the source tree makes every function visible. NAMESPACE is what roxygen2 writes from the `@export` tags, and `tests/test_package_metadata.R` checks that it still is |
 | [`tests/run_all.R`](tests/run_all.R) | 35 files: 27 fast, then 8 slow ones that train, map, prepare a store, build and install the package, and run every example of the help pages. The package is loaded once for the suite. Every accumulator is named and `.report()` refuses an empty, unnamed, NA-bearing or non-logical one. `test_sources_parse.R` runs first and is the authority on syntax. |
 | [`tests/testthat/`](tests/testthat) | The fast subset `R CMD check` runs, CRAN's too: metrics, folds, intervals, smearing, the AOA, blocks and a store of the example landscape -- no network trained, no libtorch needed. The tarball holds it and none of the suite above |
 | [`tools/check_package.R`](tools/check_package.R) | Runs `R CMD check` on a staged copy of the package's own files; `options(soilcnn.check_as_cran = TRUE)` first adds `--as-cran`, and with it the examples inside `\donttest{}`; `options(soilcnn.check_without_libtorch = TRUE)` checks as on CRAN's machines, where torch has no backend; `options(soilcnn.check_manual = TRUE)` builds the PDF manual too, with TinyTeX, installing what LaTeX misses |
