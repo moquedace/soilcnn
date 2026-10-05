@@ -7,8 +7,8 @@ Authors@R: c(
     person(c("Clara", "Glória", "Oliveira"), "Baldi", role = c("aut", "cph")))
 Description: A framework, built on 'torch', for mapping a soil property from
     point observations and a stack of aligned rasters with a convolutional
-    network that reads each point's neighbourhood. It extracts the patches;
-    resamples by spatial blocks or by k-fold nearest neighbour distance
+    network that reads the neighbourhood of each point. It extracts the
+    patches; resamples by spatial blocks or by k-fold nearest neighbour distance
     matching, after Linnenbrink et al. (2024) <doi:10.5194/gmd-17-5897-2024>;
     tunes and selects under a noise floor and the one-standard-error rule;
     refits the selected configuration under several seeds; and predicts
