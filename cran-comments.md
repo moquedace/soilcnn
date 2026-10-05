@@ -21,5 +21,8 @@
   machines: every example that needs it is guarded by
   `@examplesIf torch::torch_is_installed()`, those that train are inside
   `\donttest{}`, and the tests that CRAN runs need no backend.
+* The network itself is tested where libtorch is installed:
+  `tests/testthat/test-network.R` trains the small example run (skipped on
+  CRAN and without a backend), and the `\donttest{}` examples train it too.
 * Examples, tests and the vignette write only to `tempdir()` and use at most
   two threads.
