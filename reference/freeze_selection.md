@@ -47,12 +47,12 @@ The selection record, invisibly.
 ``` r
 run_dir <- file.path(tempdir(), "tuning_example")
 freeze_selection(run_dir, "cfg_002", note = "one_se on the cross-validation")
-#> Selection frozen: cfg_002 (one_se on val_ccc) -> /tmp/RtmpymAqcK/tuning_example/comparison/selection.rds
-#>   NOTE: no git commit recorded -- /tmp/RtmpymAqcK/tuning_example/comparison is not inside a git work tree.
+#> Selection frozen: cfg_002 (one_se on val_ccc) -> /tmp/RtmphWAvW0/tuning_example/comparison/selection.rds
+#>   NOTE: no git commit recorded -- /tmp/RtmphWAvW0/tuning_example/comparison is not inside a git work tree.
 #>   The record still fixes WHAT was chosen and WHEN; it cannot fix against which state of the code.
 # the same choice again is accepted; another is refused
 try(freeze_selection(run_dir, "cfg_005"))
-#> Error : This run already has a frozen selection (cfg_002, 2026-10-05 14:14:30).
+#> Error : This run already has a frozen selection (cfg_002, 2026-10-05 14:56:30).
 #>   Re-freezing a different config would destroy the ordering the file exists to prove.
-#>   Delete /tmp/RtmpymAqcK/tuning_example/comparison/selection.rds deliberately if the first selection was genuinely wrong, and record why in the log.
+#>   Delete /tmp/RtmphWAvW0/tuning_example/comparison/selection.rds deliberately if the first selection was genuinely wrong, and record why in the log.
 ```

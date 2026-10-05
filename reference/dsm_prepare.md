@@ -184,7 +184,7 @@ store <- dsm_prepare(ex$profiles, target = "soc_stock", raster_dir = ex$raster_d
                      percentage = "^clay_pct$", transform = "log1p", n_cores = 1,
                      overwrite = TRUE, verbose = FALSE)
 store
-#> <dsm_store> /tmp/RtmpymAqcK/landscape/patches
+#> <dsm_store> /tmp/RtmphWAvW0/landscape/patches
 #>   points     : 160 valid of 160
 #>   channels   : 8  (3 dummy, 1 percentage, 4 continuous)
 #>   windows    : 3, 7
