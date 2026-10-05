@@ -293,6 +293,59 @@ ok["a_map_without_the_di_is_refused"] <- inherits(
   try(conformal_scaled_interval(cs_ldi, new_ld$pred, new_ld[, "level"]), silent = TRUE),
   "try-error")
 
+# ── 8. BY GROUP: dense surveys and single pits ───────────────────────────────
+#
+# The case the weighting exists for. Four dense surveys of 100 profiles each,
+# in homogeneous ground (small residuals), and 36 places with 3 profiles each
+# in variable ground. A new place is mostly of the second kind (90%). Pooled
+# point by point, the quantile is the surveys' and covers a new place's
+# profile ~63% of the time (Python, 300 draws, 2026-10-05); every group
+# weighing the same, ~92%.
+set.seed(808)
+draw_places <- function() {
+  big <- unlist(lapply(1:4, function(j) rnorm(1, 0, 0.3) + rnorm(100, 0, 0.5)))
+  small <- unlist(lapply(1:36, function(j) rnorm(1, 0, 1.5) + rnorm(3, 0, 1)))
+  list(res = abs(c(big, small)),
+       grp = c(rep(paste0("b", 1:4), each = 100), rep(paste0("s", 1:36), each = 3)))
+}
+cov_pt <- cov_gr <- numeric(100)
+for (rep_i in 1:100) {
+  d <- draw_places()
+  q_pt <- conformal_calibrate(rep(0, length(d$res)), d$res, alpha = 0.1)$q
+  q_gr <- conformal_calibrate(rep(0, length(d$res)), d$res, alpha = 0.1, group = d$grp)$q
+  is_big <- runif(2000) < 0.1
+  new_res <- abs(ifelse(is_big, rnorm(2000, 0, 0.3) + rnorm(2000, 0, 0.5),
+                        rnorm(2000, 0, 1.5) + rnorm(2000, 0, 1)))
+  cov_pt[rep_i] <- mean(new_res <= q_pt)
+  cov_gr[rep_i] <- mean(new_res <= q_gr)
+}
+ok["by_point_the_dense_surveys_set_the_width"] <- mean(cov_pt) < 0.75
+ok["by_group_a_new_place_is_covered"] <- mean(cov_gr) >= 0.88
+
+# ── 9. CV+: a line refitted without each fold ────────────────────────────────
+#
+# Exchangeable points and a fixed algorithm, the setting of Barber et al.
+# (2021): at least 1 - 2 alpha by the theorem, ~1 - alpha in practice (0.903
+# over 300 Python draws).
+set.seed(909)
+cov_cvp <- numeric(100)
+for (rep_i in 1:100) {
+  x <- runif(100); y <- 10 + 5 * x + rnorm(100)
+  fold <- rep(1:5, 20)
+  fits <- lapply(1:5, function(k) stats::lm(y ~ x, data = data.frame(x, y)[fold != k, ]))
+  oof <- vapply(1:100, function(i) unname(stats::predict(fits[[fold[i]]],
+                                                         data.frame(x = x[i]))), numeric(1))
+  cal_cvp <- cv_plus_calibrate(y, oof, fold, alpha = 0.1)
+  xn <- runif(1000); yn <- 10 + 5 * xn + rnorm(1000)
+  mu <- vapply(fits, function(f) unname(stats::predict(f, data.frame(x = xn))), numeric(1000))
+  iv_cvp <- cv_plus_interval(cal_cvp, mu)
+  cov_cvp[rep_i] <- mean(yn >= iv_cvp$lower & yn <= iv_cvp$upper)
+}
+ok["cv_plus_covers_what_it_promises"] <- mean(cov_cvp) > 0.87 && mean(cov_cvp) < 0.93
+
+cat(sprintf("  new places covered       : by point %.3f | by group %.3f\n",
+            mean(cov_pt), mean(cov_gr)))
+cat(sprintf("  CV+ coverage             : %.3f over 100 draws\n", mean(cov_cvp)))
 cat(sprintf("  coverage by DI fifth     : constant %s | level %s | level+DI %s\n",
             paste(sprintf("%.2f", cover_by(iv_c, by_di)), collapse = "/"),
             paste(sprintf("%.2f", cover_by(iv_l, by_di)), collapse = "/"),

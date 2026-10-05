@@ -58,6 +58,12 @@
 #' @param alpha    Miscoverage rate: 0.1 asks for 90% coverage.
 #' @param difficulty Optional per-point difficulty score (e.g. the ensemble
 #'   spread). When given, intervals scale with it. Must be positive.
+#' @param group    Optional group of each point -- a spatial block, a region,
+#'   a profile. Given, every group weighs the same in the quantile, whatever
+#'   its number of points: q is the smallest score at which the mean of the
+#'   groups' empirical distributions reaches (1 - alpha)(1 + 1/m), m groups
+#'   (Dunn, Wasserman & Ramdas 2023). The interval then speaks for a new point
+#'   of a new group rather than for a point drawn from the pooled sample.
 #' @return An object of class "conformal_cal".
 #' @examples
 #' set.seed(1)
@@ -65,8 +71,10 @@
 #' pred <- obs * exp(rnorm(300, 0, 0.25))
 #' cal  <- conformal_calibrate(obs[1:150], pred[1:150], alpha = 0.1)
 #' cal
+#' # the same residuals, every one of 30 groups weighing alike
+#' conformal_calibrate(obs[1:150], pred[1:150], alpha = 0.1, group = rep(1:30, 5))
 #' @export
-conformal_calibrate <- function(obs, pred, alpha = 0.1, difficulty = NULL) {
+conformal_calibrate <- function(obs, pred, alpha = 0.1, difficulty = NULL, group = NULL) {
   stopifnot(length(obs) == length(pred))
   if (!is.numeric(alpha) || length(alpha) != 1L || alpha <= 0 || alpha >= 1) {
     stop("alpha must be a single number in (0, 1).", call. = FALSE)
@@ -75,6 +83,13 @@ conformal_calibrate <- function(obs, pred, alpha = 0.1, difficulty = NULL) {
   if (!is.null(difficulty)) {
     stopifnot(length(difficulty) == length(obs))
     keep <- keep & is.finite(difficulty) & difficulty > 0
+  }
+  if (!is.null(group)) {
+    if (length(group) != length(obs)) {
+      stop("group has ", length(group), " label(s) for ", length(obs), " point(s).",
+           call. = FALSE)
+    }
+    keep <- keep & !is.na(group)
   }
   o <- as.numeric(obs)[keep]; p <- as.numeric(pred)[keep]
   n <- length(o)
@@ -87,28 +102,70 @@ conformal_calibrate <- function(obs, pred, alpha = 0.1, difficulty = NULL) {
   res <- abs(o - p)
   d   <- if (is.null(difficulty)) rep(1, n) else as.numeric(difficulty)[keep]
   score <- res / d
+  g <- if (is.null(group)) NULL else as.character(group)[keep]
 
   # THE (n+1) CORRECTION. The guarantee is over the calibration set PLUS the new
   # point, so the rank is taken out of n+1, not n. k > n means this calibration
   # set is too small to certify this alpha at all: the threshold is
   # ceiling(1/alpha) - 1, so 90% needs 9 points and 95% needs 19. Below it the
   # honest answer is an infinite interval, not a finite one that quietly fails
-  # to cover.
-  k <- ceiling((n + 1) * (1 - alpha))
-  if (k > n) {
+  # to cover. By group, the same count applies to the groups.
+  qk <- .conformal_quantile(score, alpha, g)
+  if (!is.finite(qk$q)) {
+    unit <- if (is.null(g)) "points" else "groups"
     warning("alpha = ", alpha, " needs at least ", ceiling(1 / alpha) - 1,
-            " calibration points to be certifiable; there are ", n,
+            " calibration ", unit, " to be certifiable; there are ", qk$m,
             ". The interval is infinite, which is the correct answer.",
             call. = FALSE)
-    q <- Inf
-  } else {
-    q <- sort(score)[k]
   }
 
-  structure(list(q = q, alpha = alpha, n = n, k = k,
+  structure(list(q = qk$q, alpha = alpha, n = n, k = qk$k,
                  normalised = !is.null(difficulty),
+                 weighting = if (is.null(g)) "point" else "group",
+                 n_groups = qk$m,
                  residuals = res, scores = score),
             class = "conformal_cal")
+}
+
+# ── WEIGHTING BY GROUP ────────────────────────────────────────────────────────
+#
+# THE POOLED QUANTILE IS A CHOICE OF TARGET. Profiles come in clusters: a few
+# dense surveys and many places with one pit. Pooled point by point, the
+# quantile is the dense surveys' -- the interval covers 90% of PROFILES, which
+# is mostly a statement about the places that were sampled most. A map makes
+# its promise about places.
+#
+# Dunn, Wasserman & Ramdas (2023, JASA 118:2491-2502) treat the groups as the
+# exchangeable units of a two-layer model. Their pooled-CDF method gives every
+# group the same weight -- each point 1/(points in its group) -- and is
+# asymptotically valid in the number of groups. With the (1 + 1/m) factor
+# taken here, q is also the limit, over infinitely many draws, of their
+# repeated subsampling (one point per group per draw; Theorem 10), whose
+# coverage is at least 1 - 2 alpha for a new point of a NEW group in finite
+# samples: the p-value of a residual r there averages to
+# (1 + sum_j S_j(r)) / (m + 1), S_j the share of group j at or above r, and
+# accepting r while that is >= alpha is q's definition below. tests/
+# test_conformal.R holds the two to each other.
+#
+# With one point per group it is the ordinary rank, ceiling((n + 1)(1 - alpha)).
+.conformal_quantile <- function(score, alpha, group = NULL) {
+  n <- length(score)
+  if (is.null(group)) {
+    k <- ceiling((n + 1) * (1 - alpha))
+    return(list(q = if (k > n) Inf else sort(score)[k], k = as.integer(k), m = n))
+  }
+  sizes  <- table(group)
+  m      <- length(sizes)
+  w      <- 1 / as.numeric(sizes[as.character(group)])
+  target <- (1 - alpha) * (m + 1)
+  # The weights are sums of 1/n_j: compared with a tolerance, or a target met
+  # exactly (m = 1/alpha - 1) fails by a rounding.
+  tol <- 1e-9 * (m + 1)
+  if (target > m + tol) return(list(q = Inf, k = NA_integer_, m = m))
+  o   <- order(score)
+  cum <- cumsum(w[o])
+  i   <- which(cum >= target - tol)[1]
+  list(q = score[o][i], k = as.integer(i), m = m)
 }
 
 #' Turn predictions into intervals.
@@ -282,8 +339,16 @@ print.conformal_cal <- function(x, ...) {
   cat("\n<conformal_cal> ", sprintf("%.0f%% intervals", 100 * (1 - x$alpha)),
       if (x$normalised) " (normalised)" else " (constant width)", "\n", sep = "")
   cat(sprintf("  calibration points : %d\n", x$n))
-  cat(sprintf("  rank used          : %d of %d  (the (n+1) correction)\n",
-              x$k, x$n))
+  # A calibration made before the weighting existed has no field: by point.
+  if (identical(x$weighting, "group")) {
+    cat(sprintf("  weighting          : by group -- %d group(s), each weighing the same\n",
+                x$n_groups))
+    cat(sprintf("  level              : the groups' mean distribution at %.4f  (the (1 + 1/m) correction)\n",
+                (1 - x$alpha) * (1 + 1 / x$n_groups)))
+  } else {
+    cat(sprintf("  rank used          : %d of %d  (the (n+1) correction)\n",
+                x$k, x$n))
+  }
   if (is.finite(x$q)) {
     cat(sprintf("  q                  : %.4f%s\n", x$q,
                 if (x$normalised) " x difficulty" else ""))
@@ -382,6 +447,80 @@ conformal_cv <- function(pred_obs, alpha = 0.1, difficulty = NULL,
 # with the calibration set. Outside the area of applicability they are not,
 # and no width is honest there -- that is what the AOA mask is for.
 
+#' Fit the scale of an interval: |residual| on covariates that say how wrong.
+#'
+#' The scale of [conformal_scaled_calibrate()], fitted on its own: a + b1 x1 +
+#' b2 x2 + ..., by least squares on |obs - pred|, with a floor. Fitted on
+#' points the quantile is NOT taken on -- a calibration set's quantile, scaled
+#' by a fit to the cross-validated residuals, keeps the whole calibration set
+#' for q; fitted and calibrated on the same points, the fit would absorb the
+#' residuals the quantile measures.
+#'
+#' @param obs,pred   Observations and predictions, NATIVE units.
+#' @param covariates A data frame of scale covariates, one row per point, e.g.
+#'   data.frame(level = pred, di = di).
+#' @param floor_frac The scale is never below this share of the median
+#'   |residual|. A linear fit can go to zero or below at the edge of the
+#'   covariates' range, and a zero-width interval there would claim a
+#'   certainty the data never gave.
+#' @return A `conformal_scale`: the coefficients, the floor, and how well the
+#'   fit explained |residual| (r2_fit).
+#' @examples
+#' set.seed(1)
+#' level <- runif(300, 1, 4)
+#' di    <- runif(300)                      # a dissimilarity index
+#' obs   <- exp(level + rnorm(300, 0, 0.1 + 0.3 * di))
+#' pred  <- exp(level)
+#' conformal_scale_fit(obs, pred, data.frame(level = pred, di = di))
+#' @export
+conformal_scale_fit <- function(obs, pred, covariates, floor_frac = 0.05) {
+  covariates <- as.data.frame(covariates)
+  if (length(obs) != length(pred) || nrow(covariates) != length(obs)) {
+    stop("obs, pred and covariates must describe the same points: ",
+         length(obs), ", ", length(pred), " and ", nrow(covariates), " rows.",
+         call. = FALSE)
+  }
+  if (is.null(names(covariates)) || any(!nzchar(names(covariates)))) {
+    stop("covariates needs named columns -- the names are how the map's ",
+         "covariates are matched to the fitted coefficients.", call. = FALSE)
+  }
+  x_ok <- Reduce(`&`, lapply(covariates, function(v) is.finite(as.numeric(v))))
+  keep <- is.finite(obs) & is.finite(pred) & x_ok
+  o <- as.numeric(obs)[keep]
+  p <- as.numeric(pred)[keep]
+  X <- covariates[keep, , drop = FALSE]
+  n <- length(o)
+  if (n < ncol(X) + 3L) {
+    stop("Only ", n, " usable point(s) to fit a scale on ", ncol(X), " covariate(s).",
+         call. = FALSE)
+  }
+  res <- abs(o - p)
+  fit <- stats::lm(abs_res ~ ., data = data.frame(abs_res = res, X))
+  coef <- stats::coef(fit)
+  coef[!is.finite(coef)] <- 0          # a covariate constant on these points
+  floor <- floor_frac * stats::median(res)
+  if (!is.finite(floor) || floor <= 0) floor <- .Machine$double.eps
+  structure(list(coef = coef, floor = floor, terms = names(X), n_fit = n,
+                 r2_fit = summary(fit)$r.squared, floor_frac = floor_frac),
+            class = "conformal_scale")
+}
+
+#' Print a `conformal_scale`
+#'
+#' @param x   A `conformal_scale`, from [conformal_scale_fit()].
+#' @param ... Ignored.
+#' @return `x`, invisibly.
+#' @keywords internal
+#' @export
+print.conformal_scale <- function(x, ...) {
+  terms <- names(x$coef)[-1L]
+  cat(sprintf("\n<conformal_scale> |residual| ~ %.4f%s\n", x$coef[1L],
+              paste(sprintf(" %+.4f x %s", x$coef[terms], terms), collapse = "")))
+  cat(sprintf("  fitted on %d point(s), R2 %.3f | floor %.4f (%.2f x the median |residual|)\n",
+              x$n_fit, x$r2_fit, x$floor, x$floor_frac))
+  invisible(x)
+}
+
 #' Calibrate an interval whose width is a fitted scale.
 #'
 #' @param obs,pred   Calibration observations and predictions, NATIVE units.
@@ -390,12 +529,19 @@ conformal_cv <- function(pred_obs, alpha = 0.1, difficulty = NULL,
 #'   fitted by least squares on |obs - pred|.
 #' @param alpha      Miscoverage rate: 0.1 asks for 90%.
 #' @param fit_frac   Share of the points the scale is fitted on; the rest
-#'   calibrate q. One half each is the textbook split.
+#'   calibrate q. One half each is the textbook split. Not used when `scale`
+#'   is given.
 #' @param floor_frac The scale is never below this share of the median
 #'   |residual| of the fitting half. A linear fit can go to zero or below at
 #'   the edge of the covariates' range, and a zero-width interval there would
 #'   claim a certainty the data never gave.
 #' @param seed       Seed of the split.
+#' @param scale      NULL: the scale is fitted on `fit_frac` of these points and
+#'   q taken on the rest. A `conformal_scale` from [conformal_scale_fit()],
+#'   fitted on OTHER points: every point here then calibrates q.
+#' @param group      Optional group of each point, as in
+#'   [conformal_calibrate()]: q weighs every group alike, and the split, when
+#'   there is one, keeps a group on one side.
 #' @return A `conformal_scaled` (also a `conformal_cal`).
 #' @examples
 #' set.seed(1)
@@ -407,10 +553,14 @@ conformal_cv <- function(pred_obs, alpha = 0.1, difficulty = NULL,
 #' cal <- conformal_scaled_calibrate(obs[1:200], pred[1:200], covariates[1:200, ],
 #'                                   alpha = 0.1)
 #' cal
+#' # the scale fitted on other points, and all 100 of these calibrating q
+#' sc <- conformal_scale_fit(obs[1:200], pred[1:200], covariates[1:200, ])
+#' conformal_scaled_calibrate(obs[201:300], pred[201:300], covariates[201:300, ],
+#'                            scale = sc)
 #' @export
 conformal_scaled_calibrate <- function(obs, pred, covariates, alpha = 0.1,
                                        fit_frac = 0.5, floor_frac = 0.05,
-                                       seed = 42L) {
+                                       seed = 42L, scale = NULL, group = NULL) {
   covariates <- as.data.frame(covariates)
   if (length(obs) != length(pred) || nrow(covariates) != length(obs)) {
     stop("obs, pred and covariates must describe the same points: ",
@@ -421,37 +571,64 @@ conformal_scaled_calibrate <- function(obs, pred, covariates, alpha = 0.1,
     stop("covariates needs named columns -- the names are how the map's ",
          "covariates are matched to the fitted coefficients.", call. = FALSE)
   }
-  if (!is.numeric(fit_frac) || fit_frac <= 0 || fit_frac >= 1) {
+  if (!is.null(scale) && !inherits(scale, "conformal_scale")) {
+    stop("scale must be a conformal_scale, from conformal_scale_fit().", call. = FALSE)
+  }
+  if (is.null(scale) && (!is.numeric(fit_frac) || fit_frac <= 0 || fit_frac >= 1)) {
     stop("fit_frac must be in (0, 1).", call. = FALSE)
+  }
+  if (!is.null(group) && length(group) != length(obs)) {
+    stop("group has ", length(group), " label(s) for ", length(obs), " point(s).",
+         call. = FALSE)
   }
   x_ok <- Reduce(`&`, lapply(covariates, function(v) is.finite(as.numeric(v))))
   keep <- is.finite(obs) & is.finite(pred) & x_ok
+  if (!is.null(group)) keep <- keep & !is.na(group)
   o <- as.numeric(obs)[keep]
   p <- as.numeric(pred)[keep]
   X <- covariates[keep, , drop = FALSE]
+  g <- if (is.null(group)) NULL else as.character(group)[keep]
   n <- length(o)
-  if (n < 20L) {
-    stop("Only ", n, " usable calibration point(s): the scale needs some to be ",
-         "fitted on and the quantile needs others to be taken on.", call. = FALSE)
+
+  if (is.null(scale)) {
+    if (n < 20L) {
+      stop("Only ", n, " usable calibration point(s): the scale needs some to be ",
+           "fitted on and the quantile needs others to be taken on.", call. = FALSE)
+    }
+    # By point, the draw it always was; by group, whole groups, so no group
+    # is fitted on and calibrated on at once.
+    idx_fit <- if (is.null(g)) {
+      with_local_seed(seed, sort(sample.int(n, max(2L, floor(fit_frac * n)))))
+    } else {
+      .draw_groups_for_frac(g, fit_frac, seed)
+    }
+    idx_cal <- setdiff(seq_len(n), idx_fit)
+    if (length(idx_cal) < 2L || length(idx_fit) < ncol(X) + 3L) {
+      stop("The split by group left ", length(idx_fit), " point(s) to fit the scale ",
+           "and ", length(idx_cal), " to calibrate q: too few groups for a split.",
+           call. = FALSE)
+    }
+    sc_fit <- conformal_scale_fit(o[idx_fit], p[idx_fit], X[idx_fit, , drop = FALSE],
+                                  floor_frac = floor_frac)
+  } else {
+    gone <- setdiff(scale$terms, names(X))
+    if (length(gone) > 0L) {
+      stop("The scale was fitted on ", paste(scale$terms, collapse = ", "),
+           "; covariates lacks ", paste(gone, collapse = ", "), ".", call. = FALSE)
+    }
+    idx_cal <- seq_len(n)
+    sc_fit  <- scale
   }
 
-  idx_fit <- with_local_seed(seed, sort(sample.int(n, max(2L, floor(fit_frac * n)))))
-  idx_cal <- setdiff(seq_len(n), idx_fit)
-  res <- abs(o - p)
-  d <- data.frame(abs_res = res[idx_fit], X[idx_fit, , drop = FALSE])
-  fit <- stats::lm(abs_res ~ ., data = d)
-  coef <- stats::coef(fit)
-  coef[!is.finite(coef)] <- 0          # a covariate constant on the fit half
-  floor <- floor_frac * stats::median(res[idx_fit])
-  if (!is.finite(floor) || floor <= 0) floor <- .Machine$double.eps
-
-  sc <- .conformal_scale(coef, floor, X[idx_cal, , drop = FALSE])
-  cal <- conformal_calibrate(o[idx_cal], p[idx_cal], alpha = alpha, difficulty = sc)
+  sc <- .conformal_scale(sc_fit$coef, sc_fit$floor, X[idx_cal, , drop = FALSE])
+  cal <- conformal_calibrate(o[idx_cal], p[idx_cal], alpha = alpha, difficulty = sc,
+                             group = if (is.null(g)) NULL else g[idx_cal])
 
   structure(c(unclass(cal), list(
-    coef = coef, floor = floor, terms = names(X),
-    n_fit = length(idx_fit), r2_fit = summary(fit)$r.squared,
-    fit_frac = fit_frac, floor_frac = floor_frac, seed = seed)),
+    coef = sc_fit$coef, floor = sc_fit$floor, terms = sc_fit$terms,
+    n_fit = sc_fit$n_fit, r2_fit = sc_fit$r2_fit,
+    fit_frac = if (is.null(scale)) fit_frac else NA_real_,
+    floor_frac = sc_fit$floor_frac, seed = seed, scale_given = !is.null(scale))),
     class = c("conformal_scaled", "conformal_cal"))
 }
 
@@ -516,11 +693,288 @@ print.conformal_scaled <- function(x, ...) {
               x$coef[1L],
               paste(sprintf(" %+.4f x %s", x$coef[terms], terms), collapse = ""),
               x$floor, x$r2_fit))
-  cat(sprintf("  points             : %d fitted the scale, %d calibrated q\n",
-              x$n_fit, x$n))
-  cat(sprintf("  rank used          : %d of %d  (the (n+1) correction)\n", x$k, x$n))
+  cat(sprintf("  points             : %d fitted the scale%s, %d calibrated q\n",
+              x$n_fit, if (isTRUE(x$scale_given)) " (other points)" else "", x$n))
+  if (identical(x$weighting, "group")) {
+    cat(sprintf("  weighting          : by group -- %d group(s), each weighing the same\n",
+                x$n_groups))
+  } else {
+    cat(sprintf("  rank used          : %d of %d  (the (n+1) correction)\n", x$k, x$n))
+  }
   cat(sprintf("  q                  : %.4f x scale\n", x$q))
   invisible(x)
+}
+
+# ── CV+: the cross-validation's own models, at the new point ──────────────────
+#
+# WHAT THE CV CALIBRATION GETS WRONG, AND WHAT CV+ DOES INSTEAD.
+#
+# The cross-validated residuals R_i come from fold models; the interval they
+# calibrate is put around another model -- the final one, refitted on more
+# data. Barber, Candes, Ramdas & Tibshirani (2021, Ann. Stat. 49:486-507) keep
+# the fold models at the new point as well: for each calibration point i, its
+# fold's model predicts the new point, and the interval is
+#
+#   lower = the floor(alpha (n+1))-th smallest of  mu_k(i)(x) - R_i
+#   upper = the ceil((1-alpha)(n+1))-th smallest of mu_k(i)(x) + R_i
+#
+# With exchangeable points and an algorithm fixed in advance, the coverage is at
+# least 1 - 2 alpha - min{2(1 - 1/K)/(n/K + 1), (1 - K/n)/(K + 1)} >= 1 - 2 alpha
+# - sqrt(2/n) (their Theorem 4) -- and close to 1 - alpha in practice. What it
+# does not survive here: the configuration was chosen on these same folds, and
+# the points cluster in space. Measured on the test set, as every interval is.
+#
+# THE ORDER STATISTIC, PIXEL BY PIXEL. The n values differ at every new point
+# (each fold's model moves its share of them), so there is no single sorted
+# vector to index. The count of values at or below t is a sum, over the folds,
+# of how many of that fold's sorted scores are at or below (t - mu_k(x)) / d(x)
+# -- findInterval(), vectorised over the pixels -- and the r-th smallest is the
+# smallest t whose count reaches r. It lies between the folds' lowest and
+# highest prediction plus the pooled r-th score (every value is at least its
+# row's lowest mu plus its score, at most the highest), so bisection starts on
+# a bracket as wide as the folds disagree, and the result is snapped to the
+# largest value at or below the bracket's top: the order statistic itself, to
+# a tolerance far below a float32 band. Python against brute force, 300 random
+# draws with ties: 7e-8 at most (2026-10-05).
+
+#' Calibrate a CV+ interval from the folds of a cross-validation.
+#'
+#' @param obs  Observations of the calibration points: every point validated
+#'   once, in one fold.
+#' @param pred Each point's out-of-fold prediction -- by the model of the fold
+#'   that held it out (for a seed ensemble, the median of that fold's seeds).
+#' @param fold The fold that held each point out.
+#' @param alpha Miscoverage rate: 0.1 asks for 90%.
+#' @param difficulty Optional positive scale of each point, for a normalised
+#'   CV+: the residuals are divided by it, and [cv_plus_interval()] multiplies
+#'   them back by the new point's.
+#' @return A `cv_plus_cal`: each fold's sorted scores, the rank, the folds.
+#' @examples
+#' set.seed(1)
+#' x <- runif(200)
+#' fold <- rep(1:5, 40)
+#' y <- 10 + 5 * x + rnorm(200)
+#' # each fold's model: a line fitted without that fold
+#' fits <- lapply(1:5, function(k) lm(y ~ x, data = data.frame(x, y)[fold != k, ]))
+#' oof  <- vapply(seq_along(y), function(i)
+#'   unname(predict(fits[[fold[i]]], data.frame(x = x[i]))), numeric(1))
+#' cal <- cv_plus_calibrate(y, oof, fold, alpha = 0.1)
+#' cal
+#' # the five models at three new points, one column per fold
+#' new <- data.frame(x = c(0.1, 0.5, 0.9))
+#' cv_plus_interval(cal, sapply(fits, predict, newdata = new))
+#' @export
+cv_plus_calibrate <- function(obs, pred, fold, alpha = 0.1, difficulty = NULL) {
+  n0 <- length(obs)
+  if (length(pred) != n0 || length(fold) != n0) {
+    stop("obs, pred and fold must describe the same points: ", n0, ", ",
+         length(pred), " and ", length(fold), ".", call. = FALSE)
+  }
+  if (!is.numeric(alpha) || length(alpha) != 1L || alpha <= 0 || alpha >= 1) {
+    stop("alpha must be a single number in (0, 1).", call. = FALSE)
+  }
+  keep <- is.finite(obs) & is.finite(pred) & !is.na(fold)
+  if (!is.null(difficulty)) {
+    if (length(difficulty) != n0) {
+      stop("difficulty has ", length(difficulty), " value(s) for ", n0, " point(s).",
+           call. = FALSE)
+    }
+    keep <- keep & is.finite(difficulty) & difficulty > 0
+  }
+  o <- as.numeric(obs)[keep]
+  p <- as.numeric(pred)[keep]
+  f <- fold[keep]
+  d <- if (is.null(difficulty)) rep(1, length(o)) else as.numeric(difficulty)[keep]
+  n <- length(o)
+  # The folds in their own order -- numbers as numbers, so fold 10 comes after
+  # fold 9 -- which is the order an unnamed fold_pred's columns are read in.
+  folds <- sort(unique(f))
+  if (length(folds) < 2L) {
+    stop("CV+ needs at least 2 folds: with one, no point's model differs from ",
+         "another's, and the interval is a split interval with extra steps.",
+         call. = FALSE)
+  }
+  res <- abs(o - p)
+  score <- res / d
+  by_fold <- lapply(folds, function(k) sort(score[f == k]))
+  names(by_fold) <- as.character(folds)
+  r <- ceiling((n + 1) * (1 - alpha))
+  if (r > n) {
+    warning("alpha = ", alpha, " needs at least ", ceiling(1 / alpha) - 1,
+            " calibration points to be certifiable; there are ", n,
+            ". The interval is infinite, which is the correct answer.",
+            call. = FALSE)
+  }
+  structure(list(alpha = alpha, n = n, r = as.integer(r), folds = folds,
+                 scores = by_fold, normalised = !is.null(difficulty),
+                 residuals = res),
+            class = "cv_plus_cal")
+}
+
+#' Turn the fold models' predictions into CV+ intervals.
+#'
+#' @param cal       A `cv_plus_cal`, from [cv_plus_calibrate()].
+#' @param fold_pred A matrix, one row per new point and one column per fold:
+#'   that fold's model at the point (for a seed ensemble, the median of the
+#'   fold's seeds). Columns named by fold are matched by name; unnamed ones
+#'   are read in the order of `cal$folds`.
+#' @param difficulty The new points' scale, for a normalised calibration;
+#'   refused for a plain one, as in [conformal_interval()].
+#' @param lower_limit Floor of the lower bound, e.g. 0 for a stock.
+#' @return A tibble: lower, upper and width, one row per new point.
+#' @examples
+#' set.seed(1)
+#' fold <- rep(1:4, 25)
+#' oof  <- rnorm(100, 20, 3)              # each point's out-of-fold prediction
+#' obs  <- oof + rnorm(100, 0, 2)
+#' cal  <- cv_plus_calibrate(obs, oof, fold, alpha = 0.1)
+#' # the four fold models at two new points: they disagree a little
+#' cv_plus_interval(cal, rbind(c(19.5, 20.2, 20.0, 20.4), c(30.1, 29.0, 29.8, 30.6)),
+#'                  lower_limit = 0)
+#' @export
+cv_plus_interval <- function(cal, fold_pred, difficulty = NULL, lower_limit = -Inf) {
+  stopifnot(inherits(cal, "cv_plus_cal"))
+  mu <- as.matrix(fold_pred)
+  storage.mode(mu) <- "double"
+  K <- length(cal$folds)
+  if (ncol(mu) != K) {
+    stop("fold_pred has ", ncol(mu), " column(s); the calibration has ", K, " fold(s).",
+         call. = FALSE)
+  }
+  if (!is.null(colnames(mu))) {
+    pos <- match(as.character(cal$folds), colnames(mu))
+    if (anyNA(pos)) {
+      stop("fold_pred's columns do not name the calibration's folds (",
+           paste(cal$folds, collapse = ", "), ").", call. = FALSE)
+    }
+    mu <- mu[, pos, drop = FALSE]
+  }
+  if (cal$normalised && is.null(difficulty)) {
+    stop("This calibration is normalised, so it needs a difficulty score for ",
+         "each new point -- the same kind used to calibrate it.", call. = FALSE)
+  }
+  if (!cal$normalised && !is.null(difficulty)) {
+    stop("This calibration is not normalised; a difficulty score here would ",
+         "widen the intervals with no guarantee attached to the widening.",
+         call. = FALSE)
+  }
+  N <- nrow(mu)
+  d <- if (cal$normalised) as.numeric(difficulty) else rep(1, N)
+  if (length(d) != N) {
+    stop("difficulty has ", length(d), " value(s) for ", N, " point(s).", call. = FALSE)
+  }
+  lower <- upper <- rep(NA_real_, N)
+  ok <- is.finite(rowSums(mu)) & is.finite(d) & d > 0
+  if (cal$r > cal$n) {
+    lower[ok] <- -Inf
+    upper[ok] <- Inf
+  } else if (any(ok)) {
+    m <- mu[ok, , drop = FALSE]
+    upper[ok] <- .cv_plus_order_stat(m, d[ok], cal$scores, cal$r)
+    # The floor(alpha (n+1))-th smallest of mu - R is minus the
+    # ceil((1-alpha)(n+1))-th smallest of -mu + R: one routine, both bounds.
+    lower[ok] <- -.cv_plus_order_stat(-m, d[ok], cal$scores, cal$r)
+  }
+  lower <- pmax(lower, lower_limit)
+  tibble::tibble(lower = lower, upper = upper, width = upper - lower)
+}
+
+# The r-th smallest of {mu[, k] + d * scores[[k]][i]}, row by row (see above).
+.cv_plus_order_stat <- function(mu, d, scores, r, tol = 1e-7, max_iter = 80L) {
+  N <- nrow(mu)
+  K <- ncol(mu)
+  s_r <- sort(unlist(scores, use.names = FALSE))[r]
+  lo <- matrixStats::rowMins(mu) + d * s_r
+  hi <- matrixStats::rowMaxs(mu) + d * s_r
+  # A value equal to t counts. (t - mu) / d is a hair below the score it came
+  # from as often as not -- 12.299999999999997 against 12.3 -- so the
+  # comparison has a tolerance; without it, an exact tie fell out of the count.
+  at_or_below <- function(t, rows) {
+    out <- integer(length(rows))
+    for (k in seq_len(K)) {
+      u <- (t - mu[rows, k]) / d[rows]
+      out <- out + findInterval(u + 1e-9 * pmax(1, abs(u)), scores[[k]])
+    }
+    out
+  }
+  at_lo <- at_or_below(lo, seq_len(N)) >= r
+  act <- which(!at_lo)
+  for (it in seq_len(max_iter)) {
+    act <- act[hi[act] - lo[act] > tol * pmax(1, abs(hi[act]))]
+    if (length(act) == 0L) break
+    mid <- (lo[act] + hi[act]) / 2
+    up  <- at_or_below(mid, act) >= r
+    hi[act[up]]  <- mid[up]
+    lo[act[!up]] <- mid[!up]
+  }
+  snap <- rep(-Inf, N)
+  for (k in seq_len(K)) {
+    u   <- (hi - mu[, k]) / d
+    idx <- findInterval(u + 1e-9 * pmax(1, abs(u)), scores[[k]])
+    hit <- idx >= 1L
+    snap[hit] <- pmax(snap[hit], mu[hit, k] + d[hit] * scores[[k]][idx[hit]])
+  }
+  ifelse(at_lo, lo, snap)
+}
+
+#' Print a `cv_plus_cal`
+#'
+#' @param x   A `cv_plus_cal`, from [cv_plus_calibrate()].
+#' @param ... Ignored.
+#' @return `x`, invisibly.
+#' @keywords internal
+#' @export
+print.cv_plus_cal <- function(x, ...) {
+  cat("\n<cv_plus_cal> ", sprintf("%.0f%% intervals", 100 * (1 - x$alpha)),
+      if (x$normalised) " (normalised)" else "", "\n", sep = "")
+  cat(sprintf("  calibration points : %d, in %d fold(s) (%s)\n", x$n, length(x$folds),
+              paste(lengths(x$scores), collapse = ", ")))
+  if (x$r > x$n) {
+    cat("  rank               : too few points to certify this alpha -- infinite\n")
+  } else {
+    cat(sprintf("  rank used          : %d of %d, both bounds (Barber et al. 2021)\n",
+                x$r, x$n))
+  }
+  invisible(x)
+}
+
+# ── Coverage on held-out points, by what the interval promised ────────────────
+#
+# One number per interval is how an under-covering corner hides: 90% overall
+# is compatible with 99% where the soil is easy and 70% where it is not. So
+# the coverage is reported over all points; as the mean over groups, each
+# weighing the same -- what a group-weighted calibration promises; and within
+# every stratum given (inside and outside the AOA, fifths of the predicted
+# level, regions).
+.coverage_rows <- function(obs, lower, upper, group = NULL, strata = list()) {
+  obs <- as.numeric(obs); lower <- as.numeric(lower); upper <- as.numeric(upper)
+  ok <- is.finite(obs) & !is.na(lower) & !is.na(upper)
+  inside <- obs >= lower & obs <= upper
+  width  <- upper - lower
+  one <- function(type, name, sel) {
+    tibble::tibble(stratum_type = type, stratum = as.character(name), n = sum(sel),
+                   coverage = if (any(sel)) mean(inside[sel]) else NA_real_,
+                   mean_width = if (any(sel)) mean(width[sel]) else NA_real_)
+  }
+  out <- list(one("all", "points", ok))
+  if (!is.null(group)) {
+    g <- as.character(group)
+    sel <- ok & !is.na(g)
+    if (any(sel)) {
+      cov_g <- tapply(inside[sel], g[sel], mean)
+      wid_g <- tapply(width[sel], g[sel], mean)
+      out[[length(out) + 1L]] <- tibble::tibble(
+        stratum_type = "all", stratum = "groups (each weighs the same)",
+        n = length(cov_g), coverage = mean(cov_g), mean_width = mean(wid_g))
+    }
+  }
+  for (nm in names(strata)) {
+    s <- as.character(strata[[nm]])
+    for (lv in sort(unique(s[ok & !is.na(s)]))) {
+      out[[length(out) + 1L]] <- one(nm, lv, ok & !is.na(s) & s == lv)
+    }
+  }
+  dplyr::bind_rows(out)
 }
 
 # ── Where the calibration residuals should come from ──────────────────────────
@@ -556,10 +1010,17 @@ print.conformal_scaled <- function(x, ...) {
 # folds biases the residuals small; the larger training set of the refit biases
 # them large. Neither bias is bounded, so the finite-sample guarantee is gone
 # and the coverage is an estimate, which is why it is always measured on the
-# test rows. Kept over a separate calibration split because, with a few
-# thousand clustered points, setting one aside costs the model more than the
-# guarantee is worth; the alternatives with a guarantee (CV+ / jackknife+,
-# Barber et al. 2021) need every fold's model at prediction time.
+# test rows. It stays the default because it costs nothing: no point leaves
+# the training, no model is run again.
+#
+# THE TWO WITH A GUARANTEE ARE OFFERED BESIDE IT (2026-10-05). "split": a
+# calibration set the plan carves beside the test set (calibration_frac),
+# which nothing trains on or chooses with -- the guarantee above, paid for in
+# training points. "cv_plus": CV+ (above), the fold models at every pixel --
+# no point spent, paid for in network passes. dsm_final() calibrates every
+# method the runs allow and checks every one on the test set, overall, by
+# group, inside and outside the AOA and by level: which assumption breaks
+# least on clustered profiles is the test set's to say.
 
 #' Cross-validated residuals from a tuning run, for calibration.
 #'

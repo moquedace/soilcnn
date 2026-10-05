@@ -11,7 +11,9 @@ conformal_scaled_calibrate(
   alpha = 0.1,
   fit_frac = 0.5,
   floor_frac = 0.05,
-  seed = 42L
+  seed = 42L,
+  scale = NULL,
+  group = NULL
 )
 }
 \arguments{
@@ -24,7 +26,8 @@ fitted by least squares on |obs - pred|.}
 \item{alpha}{Miscoverage rate: 0.1 asks for 90\%.}
 
 \item{fit_frac}{Share of the points the scale is fitted on; the rest
-calibrate q. One half each is the textbook split.}
+calibrate q. One half each is the textbook split. Not used when \code{scale}
+is given.}
 
 \item{floor_frac}{The scale is never below this share of the median
 |residual| of the fitting half. A linear fit can go to zero or below at
@@ -32,6 +35,14 @@ the edge of the covariates' range, and a zero-width interval there would
 claim a certainty the data never gave.}
 
 \item{seed}{Seed of the split.}
+
+\item{scale}{NULL: the scale is fitted on \code{fit_frac} of these points and
+q taken on the rest. A \code{conformal_scale} from \code{\link[=conformal_scale_fit]{conformal_scale_fit()}},
+fitted on OTHER points: every point here then calibrates q.}
+
+\item{group}{Optional group of each point, as in
+\code{\link[=conformal_calibrate]{conformal_calibrate()}}: q weighs every group alike, and the split, when
+there is one, keeps a group on one side.}
 }
 \value{
 A \code{conformal_scaled} (also a \code{conformal_cal}).
@@ -49,4 +60,8 @@ covariates <- data.frame(level = pred, di = di)
 cal <- conformal_scaled_calibrate(obs[1:200], pred[1:200], covariates[1:200, ],
                                   alpha = 0.1)
 cal
+# the scale fitted on other points, and all 100 of these calibrating q
+sc <- conformal_scale_fit(obs[1:200], pred[1:200], covariates[1:200, ])
+conformal_scaled_calibrate(obs[201:300], pred[201:300], covariates[201:300, ],
+                           scale = sc)
 }
