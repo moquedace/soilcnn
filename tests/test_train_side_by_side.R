@@ -113,11 +113,15 @@ grid <- make_manual_tune_grid(
   gate_type = "no_gate_concat", use_residual = FALSE, use_se_block = FALSE)
 n_units <- nrow(grid) * plan$n_folds * 2L
 
+# A FIXED RAM CEILING, as test_final.R has. The automatic one is 70% of what is
+# free, and with a long run beside the suite (sample10, 2026-10-05) it held one
+# worker: two_workers_ran then read the machine's free memory, not the side by
+# side. 12 GB holds two by the estimate; the fixture's workers use a fraction.
 train <- function(run_id, ...) {
   suppressMessages(dsm_train(
     data, model = "cnn", resampling = plan, tune_grid = grid, n_seeds = 2L,
     output_dir = out_root, run_id = run_id, n_epochs = 3L, patience = 3L,
-    print_every = 100L, augment = FALSE, verbose = FALSE, ...))
+    print_every = 100L, augment = FALSE, verbose = FALSE, max_ram_gb = 12, ...))
 }
 err <- function(expr) tryCatch({ expr; "" }, error = function(e) conditionMessage(e))
 numbers_of <- function(cmp) {
