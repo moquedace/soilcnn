@@ -241,9 +241,13 @@ fcn_predict_strip <- function(model, x_strip, centres, engine = c("fcn", "patch"
 # and clamped as the refit's own evaluation clamped it, then aggregated:
 #
 #   ensemble_median, _mean, _sd, _mad, _min, _max   over the seeds
-#   smeared_mean_<source>       the conditional MEAN (Duan), log1p only
-#   piNN_constant_lower/upper_<source>   split conformal, constant width
-#   piNN_level_di_lower/upper_<source>   width fitted on the level and the DI
+#   smeared_mean_<source>       the conditional MEAN (Duan), log1p only;
+#                               smeared_mean_split from the calibration set
+#   piNN_<method>_<width>_lower/upper[_<source>]   the intervals:
+#       method  cv       calibrated on the source's cross-validated residuals
+#               split    split conformal, on the final run's calibration set
+#               cv_plus  CV+, the source's fold models at every pixel
+#       width   constant, or level_di: fitted on the level and the DI
 #   di                          dissimilarity index (Meyer & Pebesma 2021)
 #   aoa_<source>                1 inside the area of applicability
 #   valid_mask                  1 where the model predicted
@@ -297,6 +301,16 @@ fcn_predict_strip <- function(model, x_strip, centres, engine = c("fcn", "patch"
 #'   the training data in what the model uses (Meyer & Pebesma 2021). A map
 #'   resumed with other weights is refused.
 #' @param alpha   Miscoverage of the intervals: 0.1 is 90%.
+#' @param intervals Which intervals the map carries (see [dsm_final()], which
+#'   checks all of them on the test set): "cv", calibrated on each source's
+#'   cross-validated residuals; "split", split conformal on the final run's
+#'   calibration set; "cv_plus", CV+ with each source's fold models -- which
+#'   predicts every pixel once more per fold model, the map's dearest band by
+#'   far. NULL: "cv", and "split" when the final run has a calibration set.
+#' @param weighting "point" (every calibration point weighs the same) or
+#'   "group" (every group of the plan does -- block, region, profile; see
+#'   [conformal_calibrate()]), for the "cv" and "split" intervals. CV+ is by
+#'   point.
 #' @param clamp   c(lower, upper) of a prediction in native units. NULL for the
 #'   refit's own (its evaluation clamps to c(0, Inf) by default).
 #' @param bands   NULL for all, or some of: ensemble_median, ensemble_mean,
@@ -330,7 +344,8 @@ fcn_predict_strip <- function(model, x_strip, centres, engine = c("fcn", "patch"
 #' @export
 dsm_predict <- function(final, data, rasters = NULL, qc_table = NULL, extent = NULL,
                         config = NULL, calibration = NULL, aoa_weights = NULL,
-                        alpha = 0.1, clamp = NULL,
+                        alpha = 0.1, intervals = NULL, weighting = c("point", "group"),
+                        clamp = NULL,
                         bands = NULL, engine = c("auto", "patch"), output_dir = NULL,
                         run_id = NULL, resume = TRUE, n_cores = NULL,
                         threads_per_worker = 5L, max_ram_gb = NULL, unit_rows = NULL,
@@ -340,6 +355,9 @@ dsm_predict <- function(final, data, rasters = NULL, qc_table = NULL, extent = N
   t_start <- Sys.time()
   say <- function(...) if (verbose) message(...)
   engine <- match.arg(engine)
+  weighting <- match.arg(weighting)
+  if (!is.null(intervals)) intervals <- match.arg(intervals, c("cv", "split", "cv_plus"),
+                                                  several.ok = TRUE)
 
   # ── 0. the arguments, all checked before a raster is opened ───────────────
   fr  <- .predict_final(final, config)
@@ -379,8 +397,10 @@ dsm_predict <- function(final, data, rasters = NULL, qc_table = NULL, extent = N
 
   # ── 2. the calibration: one set of bands per source of residuals ──────────
   sources <- .predict_sources(calibration, fr)
-  cal <- .predict_calibration(sources, fr, inp, alpha, say, weights = aoa_w)
-  if (length(cal$sources) == 0L) {
+  intervals <- .predict_intervals(intervals, fr, sources)
+  cal <- .predict_calibration(sources, fr, inp, alpha, say, weights = aoa_w,
+                              intervals = intervals, weighting = weighting)
+  if (length(cal$sources) == 0L && is.null(cal$split)) {
     say("\nNo calibration source: the map carries no interval, no DI and no AOA.")
   }
 
@@ -407,10 +427,22 @@ dsm_predict <- function(final, data, rasters = NULL, qc_table = NULL, extent = N
   }
 
   # ── 5. the work: workers, steps, units ────────────────────────────────────
+  # CV+ predicts every pixel once more per fold model: they count in the
+  # per-pixel memory as the seeds do, and add one strip-sized copy (the
+  # fold's scaling of the step's rows).
+  n_fold_models <- sum(vapply(cal$sources, function(s) as.integer(s$cv_plus$n_models %||% 0L),
+                              integer(1)))
+  if (n_fold_models > 0L) {
+    say(sprintf("\nCV+: %d fold model(s) predict every pixel beside the %d seed(s) -- the map takes about %.1fx the network time of one without CV+.",
+                n_fold_models, length(fr$seeds), (n_fold_models + length(fr$seeds)) / length(fr$seeds)))
+  }
   work  <- .predict_work_plan(grid, inp, fr$cfg, band_tbl, n_cores, tpw, max_ram_gb,
-                              unit_rows, step_rows, chunk_cols, say, n_seeds = length(fr$seeds))
+                              unit_rows, step_rows, chunk_cols, say,
+                              n_seeds = length(fr$seeds) + n_fold_models,
+                              fold_strip = n_fold_models > 0L)
   units <- .predict_units(grid$rows, grid$cols, work$unit_rows)
-  settings <- .predict_settings(fr, inp, grid, work, band_tbl, alpha, clamp, engine, cal)
+  settings <- .predict_settings(fr, inp, grid, work, band_tbl, alpha, clamp, engine, cal,
+                                intervals, weighting)
   # THE WEIGHTS ONLY WHEN GIVEN: a map started before this setting existed has
   # no such field, and an unweighted call must still resume it.
   if (!is.null(aoa_w)) settings$aoa_weights <- unname(aoa_w)
@@ -519,6 +551,8 @@ dsm_predict <- function(final, data, rasters = NULL, qc_table = NULL, extent = N
     worker_restarts = run_info$restarts, recycle_gb = job$recycle_gb,
     threads_per_worker = tpw, engine = paste(engine_used, collapse = ";"),
     calibration = paste(sprintf("%s=%s", names(sources), sources), collapse = ";"),
+    intervals = paste(intervals, collapse = ";"), weighting = weighting,
+    n_fold_models = n_fold_models,
     alpha = paste(alpha, collapse = ";"), n_bands = nrow(band_tbl),
     probe = probe_res$status, probe_max_rel_diff = probe_res$max_rel_diff %||% NA_real_,
     peak_gb_per_worker = run_info$peak_gb, map_minutes = run_info$minutes,
@@ -568,12 +602,15 @@ print.dsm_prediction <- function(x, ...) {
         sprintf(" (%d profile(s), max relative difference %.2e)", x$probe$n, x$probe$max_rel_diff)
       else if (!is.null(x$probe$reason)) paste0(" -- ", x$probe$reason) else "", "\n", sep = "")
   if (nrow(x$calibration) > 0L) {
-    cat("  calibration:\n")
+    cat("  calibration", if (!is.null(m$weighting)) paste0(" (by ", m$weighting, ")") else "", ":\n",
+        sep = "")
     for (i in seq_len(nrow(x$calibration))) {
       r <- x$calibration[i, ]
-      cat(sprintf("    %-8s %s  constant +/-%.3g | level+DI q %.3g x (%.3g %+.3g x level %+.3g x DI) | AOA DI <= %.3f | smearing %s\n",
-                  r$source, r$label, r$q_constant, r$q_level_di, r$scale_intercept,
-                  r$scale_level, r$scale_di, r$aoa_threshold,
+      cat(sprintf("    %-8s %-8s %s  constant %s | level+DI q %.3g x (%.3g %+.3g x level %+.3g x DI)%s | smearing %s\n",
+                  r$source, r$method, r$label,
+                  if (is.finite(r$q_constant)) sprintf("+/-%.3g", r$q_constant) else "(per pixel)",
+                  r$q_level_di, r$scale_intercept, r$scale_level, r$scale_di,
+                  if (is.finite(r$aoa_threshold)) sprintf(" | AOA DI <= %.3f", r$aoa_threshold) else "",
                   if (is.finite(r$smearing_s)) sprintf("%.4f", r$smearing_s) else "-"))
     }
   }
@@ -677,6 +714,7 @@ print.dsm_prediction <- function(x, ...) {
 # The store's tables, the rasters and the QC -- everything in the model's
 # channel order, which is the contract tying channel i to band i.
 .predict_inputs <- function(data, rasters, qc_table, scaling) {
+  type_table <- NULL
   if (inherits(data, "dsm_data")) {
     store_dir  <- data$patch_dir
     recipe     <- data$recipe
@@ -686,6 +724,7 @@ print.dsm_prediction <- function(x, ...) {
     transform  <- data$transform
     predictors <- as.character(data$store$predictors)
     cell_size  <- data$cell_size
+    type_table <- data$type_table
   } else {
     if (inherits(data, "dsm_store")) data <- data$store_dir
     if (!is.character(data) || length(data) != 1L || !dir.exists(data)) {
@@ -707,6 +746,8 @@ print.dsm_prediction <- function(x, ...) {
     transform  <- if (is.null(tr) || is.na(tr)) NULL else target_transform_spec(tr)
     predictors <- strsplit(as.character(manifest$predictor_cols_final[1]), ";")[[1]]
     cell_size  <- recipe$cell_size
+    tt <- if (!is.null(recipe$files$type_table)) file.path(store_dir, recipe$files$type_table) else ""
+    if (file.exists(tt)) type_table <- safe_read_csv2(tt)
   }
   if (is.null(transform)) {
     stop("The store does not record its target transform, so the map could not be ",
@@ -800,6 +841,7 @@ print.dsm_prediction <- function(x, ...) {
   }
   list(store_dir = store_dir, points = points, meta = meta, predictors = predictors,
        qc_table = qc, scaling = scaling, files = files, transform = transform,
+       type_table = type_table,
        cell_size = as.numeric(cell_size %||% NA_real_),
        raster_nrow = if ("raster_nrow" %in% names(manifest)) as.numeric(manifest$raster_nrow[1]) else NULL,
        raster_ncol = if ("raster_ncol" %in% names(manifest)) as.numeric(manifest$raster_ncol[1]) else NULL)
@@ -889,6 +931,10 @@ print.dsm_prediction <- function(x, ...) {
          "names distinct, lowercase, starting with a letter -- e.g. c(block = \"...\", ",
          "knndm = \"...\"). The names become the bands' suffixes.", call. = FALSE)
   }
+  if ("split" %in% nm) {
+    stop("\"split\" names the final run's own calibration set in the bands; give the ",
+         "tuning run another name.", call. = FALSE)
+  }
   dirs <- normalizePath(as.character(calibration), winslash = "/", mustWork = FALSE)
   for (i in seq_along(dirs)) {
     for (f in c("fold_plan.rds", "tune_grid.rds")) {
@@ -899,6 +945,36 @@ print.dsm_prediction <- function(x, ...) {
     }
   }
   stats::setNames(dirs, nm)
+}
+
+# WHICH INTERVALS. NULL is what costs nothing: "cv" for every source, and
+# "split" when the final run predicted a calibration set. "split" asked for
+# where there is none, or "cv_plus" without a source, is refused rather than
+# skipped: a map said to carry an interval must carry it.
+.predict_intervals <- function(intervals, fr, sources) {
+  has_split <- .predict_split_rows(fr, check = TRUE)
+  if (is.null(intervals)) return(c("cv", if (has_split) "split"))
+  if ("split" %in% intervals && !has_split) {
+    stop("intervals = \"split\" needs a calibration set, and this final run has none: its ",
+         "tuning plan carved no calibration_frac (spatial_cv(calibration_frac = 0.15), ",
+         "and the others), or the run predates it.", call. = FALSE)
+  }
+  if (any(c("cv", "cv_plus") %in% intervals) && length(sources) == 0L) {
+    stop("intervals \"cv\" and \"cv_plus\" are calibrated on a tuning run's folds, and ",
+         "calibration = character(0) gives none.", call. = FALSE)
+  }
+  intervals
+}
+
+# The final ensemble's calibration rows (ensemble_predictions.csv): sample_id,
+# obs, pred. With check = TRUE, only whether there are any.
+.predict_split_rows <- function(fr, check = FALSE) {
+  p <- file.path(fr$run_dir, fr$config_id, "ensemble_predictions.csv")
+  if (!file.exists(p)) return(if (check) FALSE else NULL)
+  e <- safe_read_csv2(p)
+  e <- e[e$dataset_role == "calibration", , drop = FALSE]
+  if (check) return(nrow(e) >= 2L)
+  if (nrow(e) < 2L) NULL else e
 }
 
 # ONE CALIBRATION PER SOURCE, from that source's residuals and that source's
@@ -931,7 +1007,8 @@ print.dsm_prediction <- function(x, ...) {
   stats::setNames(as.numeric(w), predictors)
 }
 
-.predict_calibration <- function(sources, fr, inp, alpha, say, weights = NULL) {
+.predict_calibration <- function(sources, fr, inp, alpha, say, weights = NULL,
+                                 intervals = "cv", weighting = "point") {
   out <- list()
   for (nm in names(sources)) {
     dir <- sources[[nm]]
@@ -951,18 +1028,27 @@ print.dsm_prediction <- function(x, ...) {
     }
     aref <- aoa_reference(inp$points, inp$predictors, inp$qc_table, inp$scaling, plan,
                           weights = weights)
-    tab <- dplyr::inner_join(res, dplyr::select(aref$cv, sample_id, di = cv_di), by = "sample_id")
+    tab <- dplyr::inner_join(res, dplyr::select(aref$cv, sample_id, fold, di = cv_di),
+                             by = "sample_id")
+    pos <- match(as.character(tab$sample_id), as.character(inp$points$sample_id))
+    grp <- if (identical(weighting, "group")) .plan_groups(plan)[pos] else NULL
     iv <- list()
-    for (a in alpha) {
-      lab <- .predict_level_label(a)
-      const <- conformal_calibrate(tab$obs, tab$pred, alpha = a)
-      ldi <- tryCatch(
-        conformal_scaled_calibrate(tab$obs, tab$pred,
-                                   data.frame(level = tab$pred, di = tab$di), alpha = a),
-        error = function(e) stop("calibration source '", nm, "': ", conditionMessage(e),
-                                 call. = FALSE))
-      iv[[lab]] <- list(alpha = a, label = lab, constant = const, level_di = ldi)
+    if ("cv" %in% intervals) {
+      for (a in alpha) {
+        lab <- .predict_level_label(a)
+        const <- conformal_calibrate(tab$obs, tab$pred, alpha = a, group = grp)
+        ldi <- tryCatch(
+          conformal_scaled_calibrate(tab$obs, tab$pred,
+                                     data.frame(level = tab$pred, di = tab$di), alpha = a,
+                                     group = grp),
+          error = function(e) stop("calibration source '", nm, "': ", conditionMessage(e),
+                                   call. = FALSE))
+        iv[[lab]] <- list(alpha = a, label = lab, constant = const, level_di = ldi)
+      }
     }
+    cvp <- if ("cv_plus" %in% intervals) {
+      .predict_cv_plus(nm, dir, attr(res, "config_id"), plan, tab, inp, alpha)
+    } else NULL
     sm <- if (identical(inp$transform$name, "log1p")) {
       smearing_from_run(dir, attr(res, "config_id"))
     } else NULL
@@ -972,54 +1058,199 @@ print.dsm_prediction <- function(x, ...) {
                 if (!is.null(weights)) " (importance-weighted)" else "",
                 if (!is.null(sm)) sprintf(" | smearing S = %.4f", sm$s) else ""))
     for (lab in names(iv)) {
-      say(sprintf("  %s: constant +/- %.3f | level+DI: q %.3f x (%.3f %+.4f x level %+.3f x DI), floor %.3f",
+      say(sprintf("  cv %s: constant +/- %.3f | level+DI: q %.3f x (%.3f %+.4f x level %+.3f x DI), floor %.3f",
                   lab, iv[[lab]]$constant$q, iv[[lab]]$level_di$q, iv[[lab]]$level_di$coef[[1]],
                   iv[[lab]]$level_di$coef[["level"]], iv[[lab]]$level_di$coef[["di"]],
                   iv[[lab]]$level_di$floor))
     }
+    if (!is.null(cvp)) {
+      say(sprintf("  cv_plus: %d fold model(s) in %d fold(s), %d residual(s); the interval is computed at every pixel",
+                  cvp$n_models, length(cvp$folds), cvp$n_residuals))
+    }
     out[[nm]] <- list(name = nm, dir = dir, config_id = attr(res, "config_id"),
                       method = plan$method, n_residuals = nrow(res), n_calibration = nrow(tab),
                       aref = aref, threshold = as.numeric(aref$threshold), table = tab,
-                      intervals = iv, smearing = sm)
+                      intervals = iv, cv_plus = cvp, smearing = sm)
   }
-  # Sources whose references are the same points in the same space share one DI.
+  split <- if ("split" %in% intervals) {
+    .predict_split(fr, inp, alpha, out, weights, weighting, say)
+  } else NULL
+
+  # Sources whose references are the same points in the same space share one
+  # DI -- the split interval's reference among them.
   refs <- list()
-  for (nm in names(out)) {
-    r <- out[[nm]]$aref$ref
+  group_of <- function(r) {
     hit <- which(vapply(refs, function(q) identical(q$x, r$x) && identical(q$avg_dist, r$avg_dist) &&
                           identical(q$weights, r$weights), logical(1)))
     if (length(hit) == 0L) {
-      refs[[length(refs) + 1L]] <- r
+      refs[[length(refs) + 1L]] <<- r
       hit <- length(refs)
     }
-    out[[nm]]$di_group <- hit[1]
+    hit[1]
   }
-  list(sources = out, refs = refs)
+  for (nm in names(out)) out[[nm]]$di_group <- group_of(out[[nm]]$aref$ref)
+  if (!is.null(split)) split$di_group <- group_of(split$aref$ref)
+  list(sources = out, split = split, refs = refs, intervals = intervals, weighting = weighting)
 }
 
-# One row per source and level. di_band names the DI band the source's
-# level+DI interval and AOA were computed from: sources whose fold plans used
-# different profiles (a buffer drops some) have different references, and so
-# a DI band each.
+# Every entry that measures a DI: the sources, and the split interval.
+.predict_cal_members <- function(cal) {
+  c(cal$sources, if (!is.null(cal$split)) list(split = cal$split))
+}
+
+# CV+ FOR ONE SOURCE: the residuals with their folds, each fold's models, and
+# how to turn the map's rows -- scaled by the final model's constants -- into
+# what each fold model was trained on. Scaling is per channel, x' = (x - c) /
+# s, so a fold's input is the final's times s_final / s_fold, plus (c_final -
+# c_fold) / s_fold: one multiply-add over the step's rows, which leaves the
+# window's out-of-raster cells at other values than zero -- cells no
+# predicted pixel's window holds (.predict_valid()). Each fold's scaling is
+# rebuilt as the tuning run built it (fit_scaling() on its training rows), and
+# the probe holds every fold model to the predictions its run wrote.
+.predict_cv_plus <- function(nm, dir, cid_there, plan, tab, inp, alpha) {
+  pat <- paste0("^", cid_there, "_f([0-9]+)_s([0-9]+)_best\\.pt$")
+  files <- list.files(file.path(dir, "models"), pattern = pat)
+  if (length(files) == 0L) {
+    stop("calibration source '", nm, "': intervals = \"cv_plus\" needs its fold models, and the ",
+         "tuning run kept none of ", cid_there, " (", file.path(dir, "models"), ").", call. = FALSE)
+  }
+  if (is.null(inp$type_table)) {
+    stop("intervals = \"cv_plus\" rebuilds each fold's scaling from the store's type table, ",
+         "and this store does not carry one: pass data = dsm_load(<store>).", call. = FALSE)
+  }
+  fold <- as.integer(sub(pat, "\\1", files))
+  seed <- as.integer(sub(pat, "\\2", files))
+  t2 <- tab[!is.na(tab$fold), , drop = FALSE]
+  folds <- sort(unique(as.integer(t2$fold)))
+  if (length(folds) < 2L) {
+    stop("calibration source '", nm, "': CV+ needs two folds at least, and its plan holds ",
+         "out ", length(folds), " (", plan$method, "). Leave \"cv_plus\" out of intervals ",
+         "for it.", call. = FALSE)
+  }
+  gone <- setdiff(folds, fold)
+  if (length(gone) > 0L) {
+    stop("calibration source '", nm, "': fold(s) ", paste(gone, collapse = ", "), " hold ",
+         "cross-validated residuals and no model -- CV+ needs the model of every fold its ",
+         "residuals came from.", call. = FALSE)
+  }
+  tt <- inp$type_table[match(inp$predictors, inp$type_table$predictor), , drop = FALSE]
+  scal <- lapply(folds, function(k) {
+    s <- fit_scaling(inp$points, tt, plan$folds[[k]]$train)
+    if (any(s$degenerate)) {
+      stop("calibration source '", nm, "': degenerate scaling on fold ", k, "'s training rows ",
+           "-- this is not the store the tuning run was fitted on.", call. = FALSE)
+    }
+    s
+  })
+  # The residuals divided by the level+DI scale, for the level+DI CV+.
+  sc <- conformal_scale_fit(t2$obs, t2$pred, data.frame(level = t2$pred, di = t2$di))
+  d_cv <- .conformal_scale(sc$coef, sc$floor, data.frame(level = t2$pred, di = t2$di))
+  iv <- list()
+  for (a in alpha) {
+    lab <- .predict_level_label(a)
+    iv[[lab]] <- list(alpha = a, label = lab,
+                      constant = cv_plus_calibrate(t2$obs, t2$pred, t2$fold, alpha = a),
+                      level_di = cv_plus_calibrate(t2$obs, t2$pred, t2$fold, alpha = a,
+                                                   difficulty = d_cv))
+  }
+  seeds <- lapply(folds, function(k) sort(seed[fold == k]))
+  list(folds = folds, seeds = seeds, config_id = cid_there, dir = dir,
+       models = lapply(seq_along(folds), function(j)
+         file.path(dir, "models", sprintf("%s_f%d_s%d_best.pt", cid_there, folds[j], seeds[[j]]))),
+       preds = lapply(seq_along(folds), function(j)
+         file.path(dir, "predictions", sprintf("%s_f%d_s%d_pred_all.csv", cid_there, folds[j], seeds[[j]]))),
+       a = lapply(scal, function(s) as.numeric(inp$scaling$scale / s$scale)),
+       b = lapply(scal, function(s) as.numeric((inp$scaling$center - s$center) / s$scale)),
+       intervals = iv, scale = sc, n_models = sum(lengths(seeds)), n_residuals = nrow(t2))
+}
+
+# THE SPLIT INTERVAL: the final run's calibration set, predicted by its seeds
+# and trained on by none (refit_split()). Its DI is measured as a pixel's is,
+# against the final model's own tuning plan; the level+DI scale is fitted on
+# that run's cross-validated residuals and q taken on the whole calibration
+# set (conformal_scaled_calibrate(scale = )).
+.predict_split <- function(fr, inp, alpha, sources, weights, weighting, say) {
+  e <- .predict_split_rows(fr)
+  tdir <- fr$tuning_dir
+  if (is.null(tdir) || !dir.exists(tdir)) {
+    stop("The split interval's dissimilarity is measured against the final model's own tuning ",
+         "plan, and its tuning run is not found", if (!is.null(tdir)) paste0(" (", tdir, ")"),
+         ".", call. = FALSE)
+  }
+  plan <- readRDS(file.path(tdir, "fold_plan.rds"))
+  same <- function(a, b) identical(normalizePath(a, winslash = "/", mustWork = FALSE),
+                                   normalizePath(b, winslash = "/", mustWork = FALSE))
+  own <- Filter(function(s) same(s$dir, tdir), sources)
+  aref <- if (length(own)) own[[1]]$aref else
+    aoa_reference(inp$points, inp$predictors, inp$qc_table, inp$scaling, plan, weights = weights)
+  pos <- match(as.character(e$sample_id), as.character(inp$points$sample_id))
+  if (anyNA(pos)) {
+    stop("The final run's calibration set names ", sum(is.na(pos)), " sample_id(s) this store ",
+         "does not hold.", call. = FALSE)
+  }
+  di <- aoa_di(aref, inp$points[pos, inp$predictors, drop = FALSE])
+  res <- cv_residuals_for_config(tdir, fr$cfg, required = TRUE)
+  tab <- dplyr::inner_join(res, dplyr::select(aref$cv, sample_id, di = cv_di), by = "sample_id")
+  sc  <- conformal_scale_fit(tab$obs, tab$pred, data.frame(level = tab$pred, di = tab$di))
+  grp <- if (identical(weighting, "group")) .plan_groups(plan)[pos] else NULL
+  iv <- list()
+  for (a in alpha) {
+    lab <- .predict_level_label(a)
+    iv[[lab]] <- list(alpha = a, label = lab,
+                      constant = conformal_calibrate(e$obs, e$pred, alpha = a, group = grp),
+                      level_di = conformal_scaled_calibrate(e$obs, e$pred,
+                                                            data.frame(level = e$pred, di = di),
+                                                            alpha = a, scale = sc, group = grp))
+  }
+  sm_path <- file.path(fr$run_dir, fr$config_id, "smearing_split.rds")
+  sm <- if (identical(inp$transform$name, "log1p") && file.exists(sm_path)) readRDS(sm_path) else NULL
+  say(sprintf("\nCalibration 'split': the final run's %d calibration point(s)%s",
+              nrow(e), if (!is.null(sm)) sprintf(" | smearing S = %.4f", sm$s) else ""))
+  for (lab in names(iv)) {
+    say(sprintf("  split %s: constant +/- %.3f | level+DI: q %.3f x the cross-validated scale",
+                lab, iv[[lab]]$constant$q, iv[[lab]]$level_di$q))
+  }
+  list(name = "split", dir = fr$run_dir, config_id = fr$config_id, method = "split",
+       n_residuals = nrow(e), n_calibration = sum(is.finite(di)), aref = aref,
+       threshold = NA_real_, intervals = iv, smearing = sm, scale = sc)
+}
+
+# One row per source, interval method and level. di_band names the DI band the
+# level+DI interval and the AOA were computed from: sources whose fold plans
+# used different profiles (a buffer drops some) have different references, and
+# so a DI band each. plan is the source's fold plan ("split" for the final
+# run's calibration set). A CV+ interval has no single q: it is computed at
+# every pixel from the fold models, so its q columns are NA and its scale is
+# the one its residuals were divided by.
 .predict_calibration_table <- function(cal, band_tbl = NULL) {
   rows <- list()
-  for (s in cal$sources) {
+  one <- function(s, method, iv, q_const, q_ldi, sc) {
     di_band <- NA_character_
     if (!is.null(band_tbl)) {
       b <- band_tbl$band[band_tbl$kind == "di" & band_tbl$group %in% s$di_group]
       if (length(b)) di_band <- b[1]
     }
+    tibble::tibble(
+      source = s$name, method = method, dir = s$dir, config_id_there = s$config_id,
+      plan = s$method, n_residuals = s$n_residuals, n_calibration = s$n_calibration,
+      weighting = if (identical(method, "cv_plus")) "point" else (cal$weighting %||% "point"),
+      label = iv$label, alpha = iv$alpha, q_constant = q_const, q_level_di = q_ldi,
+      scale_intercept = sc$coef[[1]], scale_level = sc$coef[["level"]],
+      scale_di = sc$coef[["di"]], scale_floor = sc$floor, scale_r2_fit = sc$r2_fit,
+      aoa_threshold = s$threshold, di_group = s$di_group, di_band = di_band,
+      smearing_s = if (is.null(s$smearing)) NA_real_ else s$smearing$s)
+  }
+  for (s in cal$sources) {
     for (iv in s$intervals) {
-      rows[[length(rows) + 1L]] <- tibble::tibble(
-        source = s$name, dir = s$dir, config_id_there = s$config_id, method = s$method,
-        n_residuals = s$n_residuals, n_calibration = s$n_calibration,
-        label = iv$label, alpha = iv$alpha, q_constant = iv$constant$q,
-        q_level_di = iv$level_di$q, scale_intercept = iv$level_di$coef[[1]],
-        scale_level = iv$level_di$coef[["level"]], scale_di = iv$level_di$coef[["di"]],
-        scale_floor = iv$level_di$floor, scale_r2_fit = iv$level_di$r2_fit,
-        aoa_threshold = s$threshold, di_group = s$di_group, di_band = di_band,
-        smearing_s = if (is.null(s$smearing)) NA_real_ else s$smearing$s)
+      rows[[length(rows) + 1L]] <- one(s, "cv", iv, iv$constant$q, iv$level_di$q, iv$level_di)
     }
+    for (iv in s$cv_plus$intervals) {
+      rows[[length(rows) + 1L]] <- one(s, "cv_plus", iv, NA_real_, NA_real_, s$cv_plus$scale)
+    }
+  }
+  for (iv in cal$split$intervals) {
+    rows[[length(rows) + 1L]] <- one(cal$split, "split", iv, iv$constant$q, iv$level_di$q,
+                                     iv$level_di)
   }
   dplyr::bind_rows(rows)
 }
@@ -1037,18 +1268,50 @@ print.dsm_prediction <- function(x, ...) {
          paste(.predict_band_kinds, collapse = ", "), ".", call. = FALSE)
   }
   per_source <- c("smeared_mean", "interval_constant", "interval_level_di", "di", "aoa")
-  if (length(cal$sources) == 0L && asked && any(want %in% per_source)) {
+  if (length(cal$sources) == 0L && is.null(cal$split) && asked && any(want %in% per_source)) {
     stop("Band(s) ", paste(intersect(want, per_source), collapse = ", "), " need a ",
          "calibration source, and none was given.", call. = FALSE)
   }
   rows <- list()
+  # method: the interval's calibration (cv, split, cv_plus); width: constant
+  # or level_di.
   add <- function(band, kind, meaning, datatype = "FLT4S", stat = NA_character_,
                   source = NA_character_, alpha = NA_real_, label = NA_character_,
-                  method = NA_character_, side = NA_character_, group = NA_integer_) {
+                  method = NA_character_, width = NA_character_, side = NA_character_,
+                  group = NA_integer_) {
     rows[[length(rows) + 1L]] <<- tibble::tibble(
       band = band, kind = kind, datatype = datatype, stat = stat, source = source,
-      alpha = alpha, label = label, method = method, side = side, group = group,
-      meaning = meaning)
+      alpha = alpha, label = label, method = method, width = width, side = side,
+      group = group, meaning = meaning)
+  }
+  by_group <- if (identical(cal$weighting, "group")) ", every group of the plan weighing the same" else ""
+  # The interval bands of one calibration (cv or split): both widths, both sides.
+  add_intervals <- function(ivs, method, src, suffix, from) {
+    for (iv in ivs) {
+      lvl <- 100 * (1 - iv$alpha)
+      if ("interval_constant" %in% want) {
+        for (side in c("lower", "upper")) {
+          add(sprintf("%s_%s_constant_%s%s", iv$label, method, side, suffix), "interval",
+              sprintf("%s bound of the %g%% %s interval, constant width (+/- %.4g), calibrated on %s%s",
+                      side, lvl, if (method == "split") "split conformal" else "conformal",
+                      iv$constant$q, from, by_group),
+              source = src, alpha = iv$alpha, label = iv$label, method = method,
+              width = "constant", side = side)
+        }
+      }
+      if ("interval_level_di" %in% want) {
+        cf <- iv$level_di$coef
+        for (side in c("lower", "upper")) {
+          add(sprintf("%s_%s_level_di_%s%s", iv$label, method, side, suffix), "interval",
+              sprintf("%s bound of the %g%% %s interval of width %.4g x (%.4g %+.4g x level %+.4g x DI, floor %.4g), calibrated on %s%s",
+                      side, lvl, if (method == "split") "split conformal" else "conformal",
+                      iv$level_di$q, cf[[1]], cf[["level"]], cf[["di"]], iv$level_di$floor,
+                      from, by_group),
+              source = src, alpha = iv$alpha, label = iv$label, method = method,
+              width = "level_di", side = side)
+        }
+      }
+    }
   }
   stat_meaning <- c(
     median = "median over the seeds of each seed's native prediction: the map's central value. A conditional MEDIAN -- do not sum it for a total",
@@ -1067,28 +1330,40 @@ print.dsm_prediction <- function(x, ...) {
           sprintf("conditional MEAN, Duan's smearing with S = %.4f from '%s' residuals: the only band that may be summed for a total", s$smearing$s, s$name),
           source = s$name)
     }
-    for (iv in s$intervals) {
+    add_intervals(s$intervals, "cv", s$name, paste0("_", s$name),
+                  sprintf("'%s' cross-validated residuals", s$name))
+    cp <- s$cv_plus
+    for (iv in cp$intervals) {
       lvl <- 100 * (1 - iv$alpha)
-      if ("interval_constant" %in% want) {
+      for (w in intersect(c("interval_constant", "interval_level_di"), want)) {
+        width <- sub("^interval_", "", w)
         for (side in c("lower", "upper")) {
-          add(sprintf("%s_constant_%s_%s", iv$label, side, s$name), "interval",
-              sprintf("%s bound of the %g%% conformal interval, constant width (+/- %.4g), calibrated on '%s' cross-validated residuals", side, lvl, iv$constant$q, s$name),
-              source = s$name, alpha = iv$alpha, label = iv$label, method = "constant", side = side)
-        }
-      }
-      if ("interval_level_di" %in% want) {
-        cf <- iv$level_di$coef
-        for (side in c("lower", "upper")) {
-          add(sprintf("%s_level_di_%s_%s", iv$label, side, s$name), "interval",
-              sprintf("%s bound of the %g%% conformal interval of width %.4g x (%.4g %+.4g x level %+.4g x DI, floor %.4g), calibrated on '%s' residuals", side, lvl, iv$level_di$q, cf[[1]], cf[["level"]], cf[["di"]], iv$level_di$floor, s$name),
-              source = s$name, alpha = iv$alpha, label = iv$label, method = "level_di", side = side)
+          add(sprintf("%s_cv_plus_%s_%s_%s", iv$label, width, side, s$name), "interval",
+              sprintf("%s bound of the %g%% CV+ interval (Barber et al. 2021): the %d fold model(s) of '%s' at the pixel, with each one's cross-validated residuals%s",
+                      side, lvl, cp$n_models, s$name,
+                      if (width == "level_di") sprintf(", scaled by (%.4g %+.4g x level %+.4g x DI, floor %.4g)",
+                                                       cp$scale$coef[[1]], cp$scale$coef[["level"]],
+                                                       cp$scale$coef[["di"]], cp$scale$floor) else ""),
+              source = s$name, alpha = iv$alpha, label = iv$label, method = "cv_plus",
+              width = width, side = side)
         }
       }
     }
   }
+  if (!is.null(cal$split)) {
+    sp <- cal$split
+    if ("smeared_mean" %in% want && !is.null(sp$smearing)) {
+      add("smeared_mean_split", "smeared_mean",
+          sprintf("conditional MEAN, Duan's smearing with S = %.4f from the final run's calibration set: the only band that may be summed for a total", sp$smearing$s),
+          source = "split")
+    }
+    add_intervals(sp$intervals, "split", "split", "",
+                  sprintf("the final run's %d calibration point(s)", sp$n_residuals))
+  }
+  members <- .predict_cal_members(cal)
   if ("di" %in% want && length(cal$refs) > 0L) {
     for (g in seq_along(cal$refs)) {
-      users <- names(cal$sources)[vapply(cal$sources, function(s) s$di_group == g, logical(1))]
+      users <- names(members)[vapply(members, function(s) identical(s$di_group, g), logical(1))]
       nm <- if (length(cal$refs) == 1L) "di" else paste0("di_", users[1])
       add(nm, "di", sprintf("dissimilarity index (Meyer & Pebesma 2021): distance in the model's scaled predictor space to the nearest of %d training profile(s), over their mean pairwise distance%s",
                            cal$refs[[g]]$n, if (length(users) > 1L) paste0("; shared by ", paste(users, collapse = ", ")) else ""),
@@ -1145,25 +1420,30 @@ print.dsm_prediction <- function(x, ...) {
 # against its 12.4 (with the reader's own garbage, since fixed). The clone
 # left the model with the window that replaced it. An estimate, said to be
 # one: the real peak of every worker is measured and written beside it.
+# With CV+ (fold_strip), the seeds count every fold model too, and a worker
+# holds one more strip-sized float32 copy: the step's rows in a fold's scaling
+# (.predict_fold_strip()).
 .predict_worker_gb <- function(g, h, w_out, n_ch, chunk_cols, conv_sum, n_seeds = 10L,
-                               n_bands = 21L, n_iv = 4L, threads = 7L) {
+                               n_bands = 21L, n_iv = 4L, threads = 7L, fold_strip = FALSE) {
   w_buf <- w_out + 2 * h
   bytes <- (g + 2 * h) * w_buf * (4 * n_ch + 1) +
     g * w_buf * 20 +
     2 * (g + 2 * h) * (min(chunk_cols, w_out) + 2 * h) * (n_ch + 4 * conv_sum) * 4 +
-    g * w_out * (8 * (2 * n_seeds + n_bands + 4 * n_iv) + 16)
+    g * w_out * (8 * (2 * n_seeds + n_bands + 4 * n_iv) + 16) +
+    if (fold_strip) (g + 2 * h) * (min(chunk_cols, w_out) + 2 * h) * n_ch * 4 else 0
   bytes / 1e9 + 0.5 + 2 + 3.5 + 0.35 * max(0, threads - 7)
 }
 
 .predict_work_plan <- function(grid, inp, cfg, band_tbl, n_cores, tpw, max_ram_gb,
-                               unit_rows, step_rows, chunk_cols, say, n_seeds = 10L) {
+                               unit_rows, step_rows, chunk_cols, say, n_seeds = 10L,
+                               fold_strip = FALSE) {
   n_ch <- length(inp$predictors)
   conv_sum <- sum(as.integer(cfg$conv_channels[[1]]))
   iv <- band_tbl[band_tbl$kind == "interval", , drop = FALSE]
-  n_iv <- nrow(unique(iv[, c("source", "label", "method"), drop = FALSE]))
+  n_iv <- nrow(unique(iv[, c("source", "label", "method", "width"), drop = FALSE]))
   gb <- function(g) .predict_worker_gb(g, grid$h, grid$n_cols_out, n_ch, chunk_cols, conv_sum,
                                        n_seeds = n_seeds, n_bands = nrow(band_tbl), n_iv = n_iv,
-                                       threads = tpw)
+                                       threads = tpw, fold_strip = fold_strip)
   n_workers <- max(1L, n_cores %/% tpw)
   budget <- max_ram_gb
   if (is.null(budget) && requireNamespace("ps", quietly = TRUE)) {
@@ -1291,16 +1571,24 @@ print.dsm_prediction <- function(x, ...) {
   x[setdiff(names(x), "step_rows_used")]
 }
 
-.predict_settings <- function(fr, inp, grid, work, band_tbl, alpha, clamp, engine, cal) {
+.predict_settings <- function(fr, inp, grid, work, band_tbl, alpha, clamp, engine, cal,
+                              intervals = "cv", weighting = "point") {
   list(final_run = fr$run_dir, config_id = fr$config_id, seeds = fr$seeds,
        model_bytes = as.numeric(file.size(fr$model_files)), rasters = inp$files,
        predictors = inp$predictors,
        grid = c(grid$nrow, grid$ncol, grid$xmin, grid$ymax, grid$xres, grid$yres),
        rows = grid$rows, cols = grid$cols, unit_rows = work$unit_rows,
        bands = band_tbl$band, alpha = alpha, clamp = clamp, engine = engine,
-       calibration = lapply(cal$sources, function(s) c(
+       intervals = intervals, weighting = weighting,
+       calibration = lapply(.predict_cal_members(cal), function(s) c(
          s$dir, s$config_id, s$threshold,
          unlist(lapply(s$intervals, function(iv) c(iv$constant$q, iv$level_di$q, iv$level_di$coef))),
+         # CV+ is computed at every pixel: what makes two maps the same is the
+         # fold models, their residuals and the scale.
+         if (!is.null(s$cv_plus)) c(s$cv_plus$n_models, s$cv_plus$n_residuals,
+                                    unlist(s$cv_plus$seeds), s$cv_plus$scale$coef,
+                                    unlist(lapply(s$cv_plus$intervals, function(iv)
+                                      c(iv$constant$r, sum(iv$constant$residuals))))),
          if (is.null(s$smearing)) NA_real_ else s$smearing$s)))
 }
 
@@ -1314,9 +1602,14 @@ print.dsm_prediction <- function(x, ...) {
        batch = 4096L, gather_mb = 256, col_quantum = min(512L, work$chunk_cols),
        engine = engine, bands = band_tbl,
        di = .predict_di_plan(cal),
-       sources = lapply(cal$sources, function(s) list(
+       # The split interval is a source of its own here, named "split" (no
+       # tuning source may take the name, .predict_sources()).
+       sources = lapply(.predict_cal_members(cal), function(s) list(
          name = s$name, di_group = s$di_group, threshold = s$threshold,
-         smearing = s$smearing, intervals = s$intervals)),
+         smearing = s$smearing, intervals = s$intervals,
+         cv_plus = if (is.null(s$cv_plus)) NULL else
+           s$cv_plus[c("folds", "seeds", "models", "preds", "a", "b", "intervals", "scale",
+                       "n_models", "config_id")])),
        threads = tpw, gdal_cache_mb = 512L, blocky = work$blocky,
        gc_threshold_mb = 1000L, gc_every_s = 1,
        units_dir = file.path(run_dir, "units"), probe_cells = NULL,
@@ -1591,13 +1884,49 @@ print.dsm_prediction <- function(x, ...) {
   # Whether torch hands back 0- or 1-based indices, asked rather than assumed:
   # an off-by-one here would pair every pixel with the wrong profile.
   index_base <- 2L - as.integer(torch::torch_argmin(torch::torch_tensor(c(3, 1, 2))))
+  # CV+: every source's fold models, each fold with the multiply-add that
+  # takes the step's rows from the final model's scaling to its own.
+  fold_models <- list()
+  for (src in job$sources) {
+    cp <- src$cv_plus
+    if (is.null(cp)) next
+    fold_models[[src$name]] <- lapply(seq_along(cp$folds), function(j) list(
+      fold = cp$folds[j],
+      a = torch::torch_tensor(cp$a[[j]], dtype = torch::torch_float32())$view(c(1L, -1L, 1L, 1L)),
+      b = torch::torch_tensor(cp$b[[j]], dtype = torch::torch_float32())$view(c(1L, -1L, 1L, 1L)),
+      models = lapply(cp$models[[j]], function(f) {
+        m <- build_cnn_from_config(job$cfg, job$n_channels)
+        m$load_state_dict(torch::torch_load(f))
+        m$eval()
+        m
+      })))
+  }
   list(models = models, srcs = srcs, n_ch = length(job$files), n_seeds = length(models),
        rules = rules, has_rule = has_rule, inverse = target_transform_spec(job$transform)$inverse,
        di = di, n_di = n_di, index_base = index_base, gc_hook = .predict_gc_hook(job$gc_every_s),
        fcn_engine = if (identical(job$engine, "patch")) "patch" else "fcn",
+       fold_models = fold_models,
        # The worker's step window, kept across its units (.predict_window()):
        # an environment, so one unit's allocation is the next unit's to reuse.
        bufs = new.env(parent = emptyenv()))
+}
+
+# THE FOLD'S COPY OF THE STRIP, made once per strip shape and kept by the
+# worker, as the step's window is (.predict_window()): every fold of every
+# chunk writes into it -- the strip, times the fold's a, plus its b -- and no
+# strip-sized tensor is allocated per fold. The strips come in a handful of
+# shapes (the columns are rounded to quanta), so a new one is rare.
+.predict_fold_strip <- function(env, x4) {
+  shp <- as.integer(x4$shape)
+  key <- paste(shp, collapse = "x")
+  b <- env$bufs
+  if (!identical(b$fold_key, key)) {
+    b$fold_strip <- NULL
+    invisible(gc(verbose = FALSE, full = TRUE))
+    b$fold_strip <- torch::torch_empty(shp, dtype = torch::torch_float32())
+    b$fold_key <- key
+  }
+  b$fold_strip
 }
 
 # THE STEP'S WINDOW LIVES IN THE WORKER, MADE ONCE.
@@ -1722,8 +2051,9 @@ print.dsm_prediction <- function(x, ...) {
   }
   # Each reference's profiles, in its rows' order (aoa_reference() builds the
   # rows and cv$sample_id from the same index).
+  members <- .predict_cal_members(cal)
   ids <- lapply(seq_len(n_g), function(g) {
-    s <- cal$sources[[which(vapply(cal$sources, function(z) z$di_group == g, logical(1)))[1]]]
+    s <- members[[which(vapply(members, function(z) identical(z$di_group, g), logical(1)))[1]]]
     s$aref$cv$sample_id
   })
   u_ids <- unique(unlist(ids))
@@ -1795,11 +2125,12 @@ print.dsm_prediction <- function(x, ...) {
 }
 
 # The bands of a step, from the seeds' transformed predictions P (pixels x
-# seeds) and the DI (pixels x reference groups). The interval and smearing
+# seeds), the DI (pixels x reference groups) and, for CV+, each source's fold
+# predictions FP (pixels x folds, native). The interval and smearing
 # arithmetic is the library's own -- conformal_interval(),
-# conformal_scaled_interval(), smear() -- so the map applies exactly what was
-# calibrated.
-.predict_step_values <- function(P, D, env, job) {
+# conformal_scaled_interval(), cv_plus_interval(), smear() -- so the map
+# applies exactly what was calibrated.
+.predict_step_values <- function(P, D, env, job, FP = NULL) {
   cl <- job$clamp
   nat <- env$inverse(P)
   if (is.finite(cl[1])) nat[nat < cl[1]] <- cl[1]
@@ -1821,16 +2152,30 @@ print.dsm_prediction <- function(x, ...) {
       ensemble = st[[r$stat]],
       smeared_mean = smear(log1p(st$median), job$sources[[r$source]]$smearing, lower_limit = cl[1]),
       interval = {
-        key <- paste(r$source, r$label, r$method)
+        key <- paste(r$source, r$label, r$method, r$width)
         if (is.null(cache[[key]])) {
           src <- job$sources[[r$source]]
-          ivs <- src$intervals[[r$label]]
-          cache[[key]] <- if (identical(r$method, "constant")) {
-            conformal_interval(ivs$constant, st$median, lower_limit = cl[1])
+          cache[[key]] <- if (identical(r$method, "cv_plus")) {
+            ivs <- src$cv_plus$intervals[[r$label]]
+            if (identical(r$width, "constant")) {
+              cv_plus_interval(ivs$constant, FP[[r$source]], lower_limit = cl[1])
+            } else {
+              sc <- src$cv_plus$scale
+              cv_plus_interval(ivs$level_di, FP[[r$source]],
+                               difficulty = .conformal_scale(sc$coef, sc$floor,
+                                                             data.frame(level = st$median,
+                                                                        di = D[, src$di_group])),
+                               lower_limit = cl[1])
+            }
           } else {
-            conformal_scaled_interval(ivs$level_di, st$median,
-                                      data.frame(level = st$median, di = D[, src$di_group]),
-                                      lower_limit = cl[1])
+            ivs <- src$intervals[[r$label]]
+            if (identical(r$width, "constant")) {
+              conformal_interval(ivs$constant, st$median, lower_limit = cl[1])
+            } else {
+              conformal_scaled_interval(ivs$level_di, st$median,
+                                        data.frame(level = st$median, di = D[, src$di_group]),
+                                        lower_limit = cl[1])
+            }
           }
         }
         cache[[key]][[r$side]]
@@ -1873,6 +2218,13 @@ print.dsm_prediction <- function(x, ...) {
   bstat <- data.frame(band = job$bands$band, n = 0, sum = 0, min = Inf, max = -Inf)
   probe <- job$probe_cells
   probe_pred <- if (!is.null(probe)) matrix(NA_real_, nrow(probe), S) else NULL
+  # CV+'s fold models, counted in the order the probe reads them: source, fold,
+  # seed.
+  n_fold_models <- sum(vapply(env$fold_models, function(fm)
+    sum(vapply(fm, function(z) length(z$models), integer(1))), integer(1)))
+  probe_fold <- if (!is.null(probe) && n_fold_models > 0L) {
+    matrix(NA_real_, nrow(probe), n_fold_models)
+  } else NULL
   n_valid <- 0
   fin_halo <- NULL
   first <- TRUE
@@ -1920,7 +2272,8 @@ print.dsm_prediction <- function(x, ...) {
     rm(fin_full)
 
     # ── the network and the DI, chunk by chunk ──────────────────────────────
-    I_all <- list(); P_all <- list(); D_all <- list(); k <- 0L
+    I_all <- list(); P_all <- list(); D_all <- list(); FP_all <- list(); FR_all <- list()
+    k <- 0L
     for (j0 in seq(1L, w_out, by = job$chunk_cols)) {
       j1 <- min(w_out, j0 + job$chunk_cols - 1L)
       vm <- valid[, j0:j1, drop = FALSE]
@@ -1953,6 +2306,36 @@ print.dsm_prediction <- function(x, ...) {
                                     batch = job$batch, gather_mb = job$gather_mb,
                                     gc_hook = env$gc_hook)
       }
+      # CV+: each fold's models on the strip in that fold's scaling (see
+      # .predict_cv_plus()), the median of a fold's seeds in native units --
+      # the ensemble each residual came from. The raw predictions are kept
+      # only for the probe.
+      FP <- NULL; FR <- NULL
+      if (length(env$fold_models) > 0L) {
+        xb <- .predict_fold_strip(env, x4)
+        FP <- list(); FR <- list()
+        for (src in names(env$fold_models)) {
+          fm <- env$fold_models[[src]]
+          Fm <- matrix(NA_real_, length(i), length(fm),
+                       dimnames = list(NULL, vapply(fm, function(z) as.character(z$fold), character(1))))
+          for (jf in seq_along(fm)) {
+            xb$copy_(x4)
+            xb$mul_(fm[[jf]]$a)$add_(fm[[jf]]$b)
+            Pk <- matrix(NA_real_, length(i), length(fm[[jf]]$models))
+            for (s2 in seq_along(fm[[jf]]$models)) {
+              Pk[, s2] <- fcn_predict_strip(fm[[jf]]$models[[s2]], xb, cs, engine = env$fcn_engine,
+                                            batch = job$batch, gather_mb = job$gather_mb,
+                                            gc_hook = env$gc_hook)
+            }
+            if (!is.null(probe)) FR[[length(FR) + 1L]] <- Pk
+            nat <- env$inverse(Pk)
+            if (is.finite(job$clamp[1])) nat[nat < job$clamp[1]] <- job$clamp[1]
+            if (is.finite(job$clamp[2])) nat[nat > job$clamp[2]] <- job$clamp[2]
+            Fm[, jf] <- if (ncol(nat) > 1L) matrixStats::rowMedians(nat) else nat[, 1]
+          }
+          FP[[src]] <- Fm
+        }
+      }
       tm[["net"]] <- tm[["net"]] + secs(tn)
       td <- Sys.time()
       D <- NULL
@@ -1967,6 +2350,8 @@ print.dsm_prediction <- function(x, ...) {
       I_all[[k]] <- (i - 1L) * w_out + j
       P_all[[k]] <- P
       D_all[[k]] <- D
+      FP_all[[k]] <- FP
+      FR_all[[k]] <- if (length(FR)) do.call(cbind, FR) else NULL
       rm(strip, x4)
     }
     mark("network_di")
@@ -1980,12 +2365,19 @@ print.dsm_prediction <- function(x, ...) {
     if (nv > 0L) {
       P <- do.call(rbind, P_all)
       D <- if (length(env$di) > 0L) do.call(rbind, D_all) else NULL
-      vals <- .predict_step_values(P, D, env, job)
+      FPm <- if (length(env$fold_models) > 0L) {
+        lapply(stats::setNames(nm = names(env$fold_models)), function(src)
+          do.call(rbind, lapply(FP_all, function(z) z[[src]])))
+      } else NULL
+      vals <- .predict_step_values(P, D, env, job, FPm)
       if (!is.null(probe)) {
         here <- probe$row >= o0 & probe$row <= o1 & probe$col >= u$c0 & probe$col <= u$c1
         if (any(here)) {
           pos <- match((probe$row[here] - o0) * w_out + (probe$col[here] - u$c0 + 1L), idx)
           probe_pred[here, ] <- P[pos, , drop = FALSE]
+          if (!is.null(probe_fold)) {
+            probe_fold[here, ] <- do.call(rbind, FR_all)[pos, , drop = FALSE]
+          }
         }
       }
     }
@@ -2026,7 +2418,7 @@ print.dsm_prediction <- function(x, ...) {
       W[, 1:(2L * h), ]$copy_(W[, (gs + 1L):(gs + 2L * h), ])
       fin_halo <- fin_new[(gs - 2L * h + 1L):gs, , drop = FALSE]$clone()
     }
-    rm(fin_new, vals, P_all, D_all, I_all)
+    rm(fin_new, vals, P_all, D_all, I_all, FP_all, FR_all)
     invisible(gc(verbose = FALSE))
     mark("gc")
   }
@@ -2037,7 +2429,7 @@ print.dsm_prediction <- function(x, ...) {
   list(unit_id = u$unit_id, r0 = u$r0, r1 = u$r1, c0 = u$c0, c1 = u$c1,
        n_cells = as.numeric(u$r1 - u$r0 + 1L) * w_out, n_valid = n_valid,
        seconds = tm, total_s = secs(t_unit), band_stats = bstat,
-       probe_pred = probe_pred,
+       probe_pred = probe_pred, probe_fold = probe_fold,
        mem_trace = if (length(trace)) do.call(rbind, trace) else NULL,
        step_rows = job$step_rows, chunk_cols = job$chunk_cols, engine = job$engine,
        status = "success", finished_at = Sys.time())
@@ -2084,26 +2476,57 @@ print.dsm_prediction <- function(x, ...) {
 # -- and those have no prediction to compare with. The probe draws from the
 # profiles that have one; the first P4 run drew from all of them, met a gap
 # and gave up.
-.predict_stored_all <- function(fr) {
-  tabs <- lapply(fr$seeds, function(s) {
-    p <- file.path(fr$run_dir, fr$config_id, "predictions", sprintf("seed%04d_pred_all.csv", s))
+#
+# CV+'S FOLD MODELS ARE PROBED TOO, against the predictions their tuning run
+# wrote -- the one check that the fold's multiply-add, its scaling and the
+# engine give the fold model's own numbers. A fold model predicted its own
+# training and validation rows, so the profiles the probe can use are those
+# EVERY model -- seed and fold model alike -- has a prediction for. fold_pred
+# is in the order the map's worker keeps them: source, fold, seed.
+.predict_stored_all <- function(fr, job = NULL) {
+  read_one <- function(p) {
     if (!file.exists(p)) return(NULL)
     d <- safe_read_csv2(p)
     if (!all(c("sample_id", "pred_transform") %in% names(d))) return(NULL)
-    d[is.finite(d$pred_transform), c("sample_id", "pred_transform"), drop = FALSE]
+    # A row predicted under two roles is one prediction: the first.
+    d <- d[is.finite(d$pred_transform), c("sample_id", "pred_transform"), drop = FALSE]
+    d[!duplicated(d$sample_id), , drop = FALSE]
+  }
+  tabs <- lapply(fr$seeds, function(s) {
+    read_one(file.path(fr$run_dir, fr$config_id, "predictions", sprintf("seed%04d_pred_all.csv", s)))
   })
   if (any(vapply(tabs, is.null, logical(1)))) return(NULL)
-  ids <- Reduce(intersect, lapply(tabs, function(d) d$sample_id))
+  fold_files <- unlist(lapply(job$sources, function(s) unlist(s$cv_plus$preds)), use.names = FALSE)
+  ftabs <- lapply(fold_files, read_one)
+  if (any(vapply(ftabs, is.null, logical(1)))) {
+    stop("CV+: a fold model's predictions are missing or unreadable (",
+         paste(fold_files[vapply(ftabs, is.null, logical(1))][1], collapse = ""),
+         "), and the probe holds every fold model to them.", call. = FALSE)
+  }
+  ids <- Reduce(intersect, lapply(c(tabs, ftabs), function(d) d$sample_id))
   if (length(ids) == 0L) return(NULL)
-  pred <- vapply(tabs, function(d) as.numeric(d$pred_transform[match(ids, d$sample_id)]),
-                 numeric(length(ids)))
-  list(ids = ids, pred = matrix(pred, nrow = length(ids)))
+  as_mat <- function(tt) {
+    m <- vapply(tt, function(d) as.numeric(d$pred_transform[match(ids, d$sample_id)]),
+                numeric(length(ids)))
+    matrix(m, nrow = length(ids))
+  }
+  list(ids = ids, pred = as_mat(tabs),
+       fold_pred = if (length(ftabs)) as_mat(ftabs) else NULL,
+       fold_files = fold_files)
 }
 
 .predict_probe <- function(job, fr, inp, grid, run_dir, say, tol = 1e-3) {
-  st <- .predict_stored_all(fr)
+  st <- .predict_stored_all(fr, job)
+  has_folds <- any(vapply(job$sources, function(s) !is.null(s$cv_plus), logical(1)))
   if (is.null(st)) {
-    reason <- "the final run stored no transform-space prediction (pred_transform) for its seeds"
+    reason <- if (has_folds) {
+      "no profile has a stored prediction from every seed and every fold model"
+    } else "the final run stored no transform-space prediction (pred_transform) for its seeds"
+    # CV+ rests on the fold models giving their own numbers on the map, and
+    # nothing else shows it: a probe that cannot run stops the map.
+    if (has_folds) {
+      return(list(status = "fail", reason = paste0(reason, " -- the CV+ bands cannot be checked")))
+    }
     say("\nProbe: not applicable -- ", reason, ".")
     return(list(status = "not_applicable", reason = reason))
   }
@@ -2136,22 +2559,38 @@ print.dsm_prediction <- function(x, ...) {
          call. = FALSE)
   }
   rec <- readRDS(rp)
+  # The seeds and, for CV+, every fold model, side by side: the same check.
   mp <- rec$probe_pred
+  if (!is.null(st$fold_pred)) {
+    if (is.null(rec$probe_fold) || ncol(rec$probe_fold) != ncol(st$fold_pred)) {
+      stop("The probe unit returned ", if (is.null(rec$probe_fold)) 0L else ncol(rec$probe_fold),
+           " fold model prediction(s) per profile for the ", ncol(st$fold_pred), " fold model(s) ",
+           "stored.", call. = FALSE)
+    }
+    mp <- cbind(mp, rec$probe_fold)
+    stored <- cbind(stored, st$fold_pred[match(pts$sample_id, st$ids), , drop = FALSE])
+  }
   valid <- stats::complete.cases(mp)
   rel <- abs(mp - stored) / (1 + abs(stored))
   worst <- if (any(valid)) max(rel[valid, , drop = FALSE]) else NA_real_
+  n_seed <- ncol(rec$probe_pred)
   tab <- tibble::tibble(sample_id = pts$sample_id, row = pts$row, col = pts$col,
                         valid_on_map = valid,
                         max_abs_diff = apply(abs(mp - stored), 1L, max),
-                        max_rel_diff = apply(rel, 1L, max))
+                        max_rel_diff = apply(rel, 1L, max),
+                        max_rel_diff_seeds = apply(rel[, seq_len(n_seed), drop = FALSE], 1L, max),
+                        max_rel_diff_fold_models = if (ncol(rel) > n_seed) {
+                          apply(rel[, -seq_len(n_seed), drop = FALSE], 1L, max)
+                        } else NA_real_)
   safe_write_csv2(tab, file.path(run_dir, "probe.csv"))
   pass <- all(valid) && is.finite(worst) && worst <= tol
   reason <- if (!all(valid)) {
     sprintf("%d of %d profile pixel(s) were not predicted on the map", sum(!valid), length(valid))
   } else sprintf("max relative difference %.2e against a tolerance of %.0e", worst, tol)
-  say(sprintf("Probe: %s -- %d profile(s) x %d seed(s), %s (%.0f s).",
-              if (pass) "PASS" else "FAIL", nrow(pts), ncol(mp), reason,
-              as.numeric(difftime(Sys.time(), t0, units = "secs"))))
+  say(sprintf("Probe: %s -- %d profile(s) x %d seed(s)%s, %s (%.0f s).",
+              if (pass) "PASS" else "FAIL", nrow(pts), n_seed,
+              if (ncol(mp) > n_seed) sprintf(" and %d fold model(s)", ncol(mp) - n_seed) else "",
+              reason, as.numeric(difftime(Sys.time(), t0, units = "secs"))))
   list(status = if (pass) "pass" else "fail", reason = reason, n = nrow(pts),
        max_rel_diff = worst, tol = tol, table = tab)
 }

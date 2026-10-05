@@ -137,8 +137,14 @@ finish()
 # ── 3. The maps: median, interval width, applicability ────────────────────────
 md <- file.path(run, "maps", "spatial")
 r_med <- terra::rast(file.path(md, "ensemble_median.vrt"))
-r_wid <- terra::rast(file.path(md, "pi90_constant_upper_block.vrt")) -
-  terra::rast(file.path(md, "pi90_constant_lower_block.vrt"))
+# The bands carry their calibration in their name since 2026-10-05
+# (pi90_cv_constant_*); a map from before has the old names.
+band_vrt <- function(now, before) {
+  f <- file.path(md, paste0(now, ".vrt"))
+  if (file.exists(f)) f else file.path(md, paste0(before, ".vrt"))
+}
+r_wid <- terra::rast(band_vrt("pi90_cv_constant_upper_block", "pi90_constant_upper_block")) -
+  terra::rast(band_vrt("pi90_cv_constant_lower_block", "pi90_constant_lower_block"))
 r_aoa <- terra::rast(file.path(md, "aoa_block.vrt"))
 pal_med <- grDevices::hcl.colors(80, "YlGnBu", rev = TRUE)
 pal_wid <- grDevices::hcl.colors(80, "YlOrBr", rev = TRUE)

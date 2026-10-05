@@ -144,8 +144,8 @@ rd <- function(m, b) terra::as.matrix(terra::rast(m$vrt[[b]]), wide = TRUE)
 map2 <- mp(n_cores = 2L, run_id = "map_two", max_ram_gb = 13)
 bands_all <- c("ensemble_median", "ensemble_mean", "ensemble_sd", "ensemble_mad",
                "ensemble_min", "ensemble_max", "smeared_mean_block",
-               "pi90_constant_lower_block", "pi90_constant_upper_block",
-               "pi90_level_di_lower_block", "pi90_level_di_upper_block", "di",
+               "pi90_cv_constant_lower_block", "pi90_cv_constant_upper_block",
+               "pi90_cv_level_di_lower_block", "pi90_cv_level_di_upper_block", "di",
                "aoa_block", "valid_mask")
 ok["every_band_is_written_with_its_mosaic"] <-
   identical(map2$bands$band, bands_all) && all(file.exists(map2$vrt))
@@ -233,11 +233,11 @@ iv  <- src$intervals$pi90
 ivc <- conformal_interval(iv$constant, med, lower_limit = 0)
 ivl <- conformal_scaled_interval(iv$level_di, med, data.frame(level = med, di = di), lower_limit = 0)
 ok["the_constant_interval_is_the_median_plus_minus_q"] <-
-  rel(snap$pi90_constant_lower_block[cells], ivc$lower) < 1e-5 &&
-  rel(snap$pi90_constant_upper_block[cells], ivc$upper) < 1e-5
+  rel(snap$pi90_cv_constant_lower_block[cells], ivc$lower) < 1e-5 &&
+  rel(snap$pi90_cv_constant_upper_block[cells], ivc$upper) < 1e-5
 ok["the_level_di_interval_is_the_fitted_scale_at_every_pixel"] <-
-  rel(snap$pi90_level_di_lower_block[cells], ivl$lower) < 1e-5 &&
-  rel(snap$pi90_level_di_upper_block[cells], ivl$upper) < 1e-5
+  rel(snap$pi90_cv_level_di_lower_block[cells], ivl$lower) < 1e-5 &&
+  rel(snap$pi90_cv_level_di_upper_block[cells], ivl$upper) < 1e-5
 ok["the_smeared_mean_is_duans_factor_on_the_median"] <-
   rel(snap$smeared_mean_block[cells], smear(log1p(med), src$smearing, lower_limit = 0)) < 1e-5
 ok["the_record_says_what_each_band_is"] <-
@@ -449,8 +449,118 @@ ok["seeds_pick_the_models_explained"] <- nrow(suppressMessages(dsm_importance(
   fin, data, shap_importance(samples = 4L, background = 10L), at = pts9[1:20, ], seeds = 42L,
   verbose = FALSE))$units) == 1L
 
+# ── 10. split conformal and CV+ ───────────────────────────────────────────────
+#
+# A plan with a calibration set: whole sites, in no fold; the final model
+# predicts it and never trains on it; dsm_final() checks the three
+# calibrations on the test set. On the map, the split bands are the library's
+# arithmetic on the map's median and DI, and the CV+ bands are
+# cv_plus_interval() on the fold models' predictions at every pixel --
+# computed here from each pixel's own patches in each fold's OWN scaling, by
+# hand, where the map rescales the final model's inputs by a multiply-add.
+ok["split_without_a_calibration_set_is_refused"] <-
+  grepl("calibration set", err(mp(run_id = "x6", intervals = "split")))
+fit_c <- suppressMessages(dsm_train(
+  data, model = "cnn",
+  resampling = spatial_cv(k = 2L, block_size = 1, buffer = "auto", test_frac = 0.2,
+                          calibration_frac = 0.2),
+  tune_grid = grid, n_seeds = 1L, output_dir = file.path(base, "out"), run_id = "tuning_cal",
+  device = setup_torch_device(n_threads = 1L, use_cuda = FALSE),
+  n_epochs = 2L, patience = 2L, print_every = 100L, augment = FALSE, verbose = FALSE))
+cal_rows <- fit_c$plan$calibration
+ok["the_calibration_set_is_whole_sites_in_no_fold"] <- length(cal_rows) >= 9L &&
+  length(cal_rows) %% 9L == 0L &&
+  !any(cal_rows %in% unlist(lapply(fit_c$plan$folds, function(f) c(f$train, f$validation, f$test))))
+fin_c <- suppressMessages(dsm_final(
+  fit_c, config = cid, seeds = 2L, validation_frac = 0.34, threads_per_unit = 1L,
+  n_cores = 1L, training = list(n_epochs = 2L, patience = 2L, print_every = 100L,
+                                augment = FALSE),
+  output_dir = file.path(base, "out", "final_model"), run_id = "final_cal", verbose = FALSE))
+ens_c  <- safe_read_csv2(file.path(fin_c$run_dir, cid, "ensemble_predictions.csv"))
+spec_c <- readRDS(file.path(fin_c$run_dir, "run_spec.rds"))
+ok["the_final_model_predicts_the_calibration_set_and_never_trains_on_it"] <-
+  setequal(ens_c$sample_id[ens_c$dataset_role == "calibration"],
+           data$store$meta$sample_id[cal_rows]) &&
+  setequal(spec_c$split$calibration, cal_rows) &&
+  !any(cal_rows %in% c(spec_c$split$train, spec_c$split$validation))
+ivs_c <- fin_c$per_config[[cid]]$intervals
+ok["dsm_final_checks_every_calibration_on_the_test_set"] <- !is.null(ivs_c) &&
+  all(c("cv", "split", "cv_plus") %in% ivs_c$summary$method) &&
+  file.exists(file.path(fin_c$run_dir, cid, "intervals", "coverage_test.csv")) &&
+  isTRUE(ivs_c$fold_check_max_rel_diff < 1e-4) &&
+  any(grepl("checked on the test set", readLines(fin_c$report_file)))
+
+map_c <- suppressMessages(dsm_predict(
+  fin_c, data, calibration = c(block = fit_c$run_dir), intervals = c("cv", "split", "cv_plus"),
+  n_cores = 1L, threads_per_worker = 1L, step_rows = 16L, unit_rows = 16L, chunk_cols = 20L,
+  run_id = "map_cal", verbose = FALSE))
+want_c <- c(sprintf("pi90_%s_%s_%s%s", rep(c("cv", "cv_plus", "split"), each = 4L),
+                    rep(rep(c("constant", "level_di"), each = 2L), 3L), c("lower", "upper"),
+                    rep(c("_block", "_block", ""), each = 4L)))
+ok["the_map_carries_the_three_calibrations"] <- all(want_c %in% map_c$bands$band)
+ok["the_probe_checks_every_fold_model_too"] <- identical(map_c$probe$status, "pass") &&
+  map_c$probe$max_rel_diff < 1e-4 &&
+  all(is.finite(map_c$probe$table$max_rel_diff_fold_models))
+
+cal_c  <- readRDS(file.path(map_c$run_dir, "calibration.rds"))
+snap_c <- lapply(stats::setNames(nm = c("ensemble_median", "di", want_c)), function(b) rd(map_c, b))
+med_c <- snap_c$ensemble_median[cells]
+di_c  <- snap_c$di[cells]
+sp <- cal_c$split$intervals$pi90
+ref_sc <- conformal_interval(sp$constant, med_c, lower_limit = 0)
+ref_sl <- conformal_scaled_interval(sp$level_di, med_c, data.frame(level = med_c, di = di_c),
+                                    lower_limit = 0)
+ok["the_split_bands_are_the_calibration_sets_interval_at_every_pixel"] <-
+  rel(snap_c$pi90_split_constant_lower[cells], ref_sc$lower) < 1e-5 &&
+  rel(snap_c$pi90_split_constant_upper[cells], ref_sc$upper) < 1e-5 &&
+  rel(snap_c$pi90_split_level_di_lower[cells], ref_sl$lower) < 1e-5 &&
+  rel(snap_c$pi90_split_level_di_upper[cells], ref_sl$upper) < 1e-5
+
+# Every pixel's patches in fold k's own scaling, from the QC'd raw values.
+qraw <- raw
+for (k in seq_len(C)) {
+  qraw[, , k] <- matrix(qc_band_values(as.vector(raw[, , k]), qc[k, , drop = FALSE]), n_r, n_c)
+}
+patch_from <- function(arr, w) {
+  hw <- (w - 1L) %/% 2L
+  a <- array(0, dim = c(nrow(cells), C, w, w))
+  for (i in seq_len(nrow(cells))) {
+    rr <- cells[i, 1]; cc <- cells[i, 2]
+    a[i, , , ] <- aperm(arr[(rr - hw):(rr + hw), (cc - hw):(cc + hw), , drop = FALSE], c(3L, 1L, 2L))
+  }
+  torch::torch_tensor(a, dtype = torch::torch_float32())
+}
+cp <- cal_c$sources$block$cv_plus
+F_ref <- sapply(seq_along(cp$folds), function(j) {
+  k <- cp$folds[j]
+  s_k <- fit_scaling(data$points, data$type_table, fit_c$plan$folds[[k]]$train)
+  s_k <- s_k[match(preds, s_k$predictor), , drop = FALSE]
+  arr <- qraw
+  for (ch in seq_len(C)) arr[, , ch] <- (qraw[, , ch] - s_k$center[ch]) / s_k$scale[ch]
+  q3 <- patch_from(arr, 3L); q7 <- patch_from(arr, 7L)
+  nat_k <- sapply(cp$seeds[[j]], function(s) {
+    m <- build_cnn_from_config(cfg, C)
+    m$load_state_dict(torch::torch_load(file.path(
+      fit_c$run_dir, "models", sprintf("%s_f%d_s%d_best.pt", cp$config_id, k, s))))
+    m$eval()
+    pmax(expm1(torch::with_no_grad(as.numeric(m(q3, q7)$squeeze(2L)))), 0)
+  })
+  if (is.matrix(nat_k)) matrixStats::rowMedians(nat_k) else nat_k
+})
+cvp <- cp$intervals$pi90
+ref_pc <- cv_plus_interval(cvp$constant, F_ref, lower_limit = 0)
+ref_pl <- cv_plus_interval(cvp$level_di, F_ref, lower_limit = 0,
+                           difficulty = .conformal_scale(cp$scale$coef, cp$scale$floor,
+                                                         data.frame(level = med_c, di = di_c)))
+worst_cvp <- max(rel(snap_c$pi90_cv_plus_constant_lower_block[cells], ref_pc$lower),
+                 rel(snap_c$pi90_cv_plus_constant_upper_block[cells], ref_pc$upper),
+                 rel(snap_c$pi90_cv_plus_level_di_lower_block[cells], ref_pl$lower),
+                 rel(snap_c$pi90_cv_plus_level_di_upper_block[cells], ref_pl$upper))
+ok["the_cv_plus_bands_are_the_fold_models_in_their_own_scaling_at_every_pixel"] <- worst_cvp < 1e-4
+
 cat(sprintf("  fixture                  : %d x %d grid, %d channels, %d profiles, %d valid pixel(s)\n",
             n_r, n_c, C, nrow(data$store$meta), sum(valid_ref)))
+cat(sprintf("  CV+ bands against a hand computation in each fold's scaling: %.2e\n", worst_cvp))
 cat(sprintf("  probe                    : %d profile(s), max relative difference %.2e\n",
             map2$probe$n, map2$probe$max_rel_diff))
 cat(sprintf("  worst ensemble band      : %.2e (%s)\n", max(worst_ens), names(which.max(worst_ens))))

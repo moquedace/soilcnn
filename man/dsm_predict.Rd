@@ -14,6 +14,8 @@ dsm_predict(
   calibration = NULL,
   aoa_weights = NULL,
   alpha = 0.1,
+  intervals = NULL,
+  weighting = c("point", "group"),
   clamp = NULL,
   bands = NULL,
   engine = c("auto", "patch"),
@@ -67,6 +69,18 @@ the training data in what the model uses (Meyer & Pebesma 2021). A map
 resumed with other weights is refused.}
 
 \item{alpha}{Miscoverage of the intervals: 0.1 is 90\%.}
+
+\item{intervals}{Which intervals the map carries (see \code{\link[=dsm_final]{dsm_final()}}, which
+checks all of them on the test set): "cv", calibrated on each source's
+cross-validated residuals; "split", split conformal on the final run's
+calibration set; "cv_plus", CV+ with each source's fold models -- which
+predicts every pixel once more per fold model, the map's dearest band by
+far. NULL: "cv", and "split" when the final run has a calibration set.}
+
+\item{weighting}{"point" (every calibration point weighs the same) or
+"group" (every group of the plan does -- block, region, profile; see
+\code{\link[=conformal_calibrate]{conformal_calibrate()}}), for the "cv" and "split" intervals. CV+ is by
+point.}
 
 \item{clamp}{c(lower, upper) of a prediction in native units. NULL for the
 refit's own (its evaluation clamps to c(0, Inf) by default).}
