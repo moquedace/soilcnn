@@ -373,21 +373,34 @@ picp_report(test$obs, iv$lower, iv$upper, group = test$block, alpha = 0.1)
 ```
 
 Split conformal, on a calibration set nothing else touched, gives
-`P(y ∈ interval) ≥ 1 − α` with no distributional assumption. `dsm_final()`
-departs from that on purpose, and the guarantee becomes approximate: it calibrates on
-the tuning run's **cross-validated** residuals — every point predicted once, as
-validation, somewhere — and checks coverage on the **test** rows, which neither
-trained nor calibrated anything: a coverage measured on the points that
-calibrated it comes out right by arithmetic, not by evidence. The refit's own
-validation split is only the fallback, and in the SOC model it was the
-wrong set: one fold from one region, it gave a 90% interval that covered 83.6%
-of the test set, against 87.8% from the cross-validated residuals.
+`P(y ∈ interval) ≥ 1 − α` with no distributional assumption. Where the
+residuals come from decides what the interval can promise, and the framework
+offers three sources, each with its own trade:
 
-`dsm_predict()` calibrates each interval band the same way, for every
-calibration source it is given — block folds, kNNDM folds — and writes
-`pi90_constant_lower/upper_<source>` beside `pi90_level_di_lower/upper_<source>`,
-whose width follows the predicted level and the dissimilarity index. Every
-number that calibrated a band is in the run's `calibration.csv`.
+| `method` | the residuals | guarantee | cost |
+|---|---|---|---|
+| `"cv"` | the tuning run's cross-validated residuals | none: the configuration was chosen on those folds, and the final model is refitted on more data | nothing |
+| `"split"` | a calibration set the plan carves beside the test set (`spatial_cv(calibration_frac = 0.15)`): in no fold, behind the same buffer, predicted by the final model and trained on by none | `≥ 1 − α` for points exchangeable with it (Lei et al. 2018) | the points leave the training |
+| `"cv_plus"` | the cross-validated residuals, with each fold's own model at the new point — CV+ (Barber et al. 2021) | `≥ 1 − 2α − √(2/n)` for an algorithm fixed in advance, ~`1 − α` in practice | every fold model predicts every pixel |
+
+Each comes at a constant width or one that grows with the predicted level and
+the dissimilarity index, and with points or whole groups — blocks, regions,
+profiles — weighing alike: pooled point by point, a quantile is the dense
+surveys'; every group weighing the same (Dunn, Wasserman & Ramdas 2023), it
+speaks for a new place. Profiles cluster, and a configuration is chosen on
+its folds, so no guarantee holds here as stated. `dsm_final()` therefore
+calibrates every method the runs allow and checks every one on the **test**
+rows — overall, by group, inside and outside the area of applicability, and
+by fifth of the predicted level — in `<config>/intervals/coverage_test.csv`
+and the report. A coverage measured on the points that calibrated it comes
+out right by arithmetic, not by evidence.
+
+`dsm_predict(intervals = c("cv", "split", "cv_plus"), weighting = "point")`
+writes the bands a map carries: `pi90_<method>_<width>_lower/upper[_<source>]`
+— `constant` or `level_di` — for every calibration source it is given (block
+folds, kNNDM folds); "split" is the final run's own. Every number that
+calibrated a band is in the run's `calibration.csv`, and CV+'s fold models
+pass the same probe as the seeds before anything is mapped.
 
 **PICP** turns uncertainty from an adjective into a number that can be wrong.
 Promise 90%, deliver 61%, and you can see it. And because the conformal

@@ -15,12 +15,15 @@ Description: A framework, built on 'torch', for mapping a soil property from
     median, mean and interval maps over rasters of any extent. The map's
     centre is the ensemble median over seeds; the mean corrects its
     back-transformation by smearing, after Duan (1983)
-    <doi:10.1080/01621459.1983.10478017>; the intervals are conformal, after
-    Lei et al. (2018) <doi:10.1080/01621459.2017.1307116>, calibrated on
-    cross-validated residuals, so their coverage is approximate and is checked
-    on the test set; and the area of applicability of
-    Meyer and Pebesma (2021) <doi:10.1111/2041-210X.13650> is mapped beside
-    them. What a model learned is read by permutation, by SHAP values from
+    <doi:10.1080/01621459.1983.10478017>. The intervals are conformal,
+    calibrated three ways and each checked on the test set: on the
+    cross-validated residuals; on a calibration set held out of every fold,
+    as split conformal, after Lei et al. (2018)
+    <doi:10.1080/01621459.2017.1307116>; or with every fold's model at each
+    pixel, as CV+, after Barber et al. (2021) <doi:10.1214/20-AOS1965> -- with
+    points, or whole groups of them, weighing alike, after Dunn et al. (2023)
+    <doi:10.1080/01621459.2022.2060112>. The area of applicability of Meyer
+    and Pebesma (2021) <doi:10.1111/2041-210X.13650> is mapped beside them. What a model learned is read by permutation, by SHAP values from
     expected gradients, after Erion et al. (2021)
     <doi:10.1038/s42256-021-00343-w>, by SAGE, after Covert et al. (2020)
     <doi:10.48550/arXiv.2004.00668>, by accumulated local effects, after Apley
