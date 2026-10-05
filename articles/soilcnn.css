@@ -1,0 +1,22 @@
+/* soilcnn: mineral blue, olive and earth; local system fonts, no web dependencies. */
+:root { --ink:#253840; --muted:#63767d; --blue:#246589; --olive:#60734f; --earth:#ab6645; }
+html { background:#fff; }
+body { max-width:980px; margin:52px auto; padding:0 30px 70px; color:var(--ink); font-family:"Segoe UI",Arial,sans-serif; font-size:17px; line-height:1.75; }
+h1,h2,h3 { color:var(--ink); line-height:1.25; letter-spacing:-.025em; }
+h1 { font-size:42px; font-weight:650; margin:0 0 28px; }
+h2 { font-size:27px; font-weight:600; margin:58px 0 20px; border-top:0; border-bottom:3px solid #edf1ef; padding-top:0; padding-bottom:10px; }
+h3 { font-size:21px; margin-top:32px; }
+p,li { max-width:850px; }
+a { color:var(--blue); text-underline-offset:3px; }
+code { font-family:Consolas,"Liberation Mono",monospace; font-size:.86em; color:#23566f; background:#f1f5f5; padding:2px 5px; border-radius:3px; }
+pre { background:#f3f6f5; border:1px solid #e3e9e8; border-left:3px solid #8eaab6; border-radius:4px; padding:20px 24px; overflow-x:auto; line-height:1.6; margin:24px 0; }
+pre code { background:transparent; padding:0; color:var(--ink); }
+img { max-width:100%; height:auto; display:block; margin:26px auto 8px; }
+.figure { margin:36px 0; }
+p.caption, figcaption { color:var(--muted); font-size:14px; line-height:1.6; margin:12px 0 32px; max-width:none; }
+.soilcnn-intro { border-left:3px solid var(--olive); padding:5px 0 5px 20px; margin:26px 0; font-size:19px; }
+.soilcnn-kicker { color:var(--blue); font-size:12px; font-weight:700; letter-spacing:.14em; margin-bottom:12px; }
+table { border-collapse:collapse; width:100%; font-size:15px; margin:24px 0; }
+th,td { border-bottom:1px solid #dce4e3; padding:12px; text-align:left; }
+th { color:var(--blue); background:#f3f6f5; }
+@media(max-width:650px) { body { margin:25px auto; padding:0 18px 40px; font-size:16px; } h1 { font-size:32px; } h2 { font-size:24px; } pre { padding:15px; } }

@@ -1,0 +1,414 @@
+# Getting started with soilcnn
+
+SOILCNN / DIGITAL SOIL MAPPING
+
+soilcnn maps a soil property from point observations and a stack of
+aligned rasters. A point-based model reads the covariates under each
+point. The convolutional network here reads the *neighbourhood* around
+it, at one or two window sizes, and everything around the network is
+there to keep the result honest:
+
+- spatial folds with a buffer;
+- a frozen test set;
+- a noise floor measured from the seeds;
+- conformal intervals calibrated on held-out residuals;
+- the area where the map may be believed.
+
+This vignette walks the whole chain. Each step is one call.
+
+![Figure 1. The workflow keeps data preparation, validation, tuning and
+final prediction explicit.](figures/workflow.png)
+
+Figure 1. The workflow keeps data preparation, validation, tuning and
+final prediction explicit.
+
+The figures come from a real application: soil organic carbon stocks at
+0-30 cm over Latin America and the Caribbean, from about 26,000 profiles
+and 174 predictors at a nominal 250 m resolution. The completed
+extraction store contains 25,887 profiles. The geographic raster grid
+has latitude-dependent ground dimensions.
+
+![Figure 2. The full application dataset: profile locations and the
+predictor footprint. Uneven coverage motivates spatial validation and
+applicability diagnostics. The map uses a spherical Lambert azimuthal
+equal-area projection centred at 75 W / 15 S, with equal horizontal and
+vertical scales.](figures/observations.png)
+
+Figure 2. The full application dataset: profile locations and the
+predictor footprint. Uneven coverage motivates spatial validation and
+applicability diagnostics. The map uses a spherical Lambert azimuthal
+equal-area projection centred at 75 W / 15 S, with equal horizontal and
+vertical scales.
+
+``` r
+
+library(soilcnn)
+```
+
+## 1. Points and rasters become a patch store
+
+[`dsm_prepare()`](https://moquedace.github.io/soilcnn/reference/dsm_prepare.md)
+reads the points and every raster in a folder, runs the quality control,
+classifies the predictors, and cuts a patch around each point at every
+window you ask for. It writes all of that as a *store*, together with a
+recipe (the target transform, the QC rules, the predictor types), so
+later steps need only the store.
+
+``` r
+
+store <- dsm_prepare(
+  points     = "profiles.gpkg",        # an sf object, a data frame, or a file sf reads
+  target     = "soc_stock",
+  raster_dir = "predictors/",          # aligned single-band rasters, one per predictor
+  windows    = c(3, 9, 15),            # in pixels: 0.75, 2.25 and 3.75 km at 250 m
+  out_dir    = "outputs",
+  transform  = "log1p",                # the space the network trains in
+  target_min = 0
+)
+```
+
+`windows` is required. A window’s ground extent is its width times the
+resolution, so no default would be right at every resolution.
+
+The network reads a stack of predictor channels around each profile. The
+illustration below uses separate high-resolution rasters at one of the
+application’s profiles, in south-eastern Brazil: NDVI, elevation and
+clay, aligned on a 0.00025-degree grid (approximately 25.7 m east-west
+by 27.7 m north-south at this latitude). These inputs illustrate the
+patch concept; they were not used to train the 250 m application
+described above.
+
+The top row shows approximately 4 km of landscape with nested window
+outlines. Below it, the 3 x 3, 9 x 9 and 15 x 15 windows are enlarged to
+the same display size. Their ground footprints are approximately 77 x 83
+m, 231 x 249 m and 385 x 415 m, respectively. Landscape panels and local
+patches have separate colour ranges, shown by their own bars, to reveal
+variation at both extents. The three window sizes share one range within
+each channel.
+
+Fine grid spacing does not imply equally fine original information in
+every predictor. The clay source is SoilGrids 2.0, whose source
+predictions are at 250 m; alignment on the 28 m grid does not add
+independent fine-scale soil information. Clay is in g/kg, as documented
+by
+[ISRIC](https://docs.isric.org/globaldata/soilgrids/SoilGrids_faqs_01.html).
+Elevation is in metres ([EDTM version
+1.1](https://doi.org/10.5281/zenodo.7676373)). NDVI is dimensionless.
+
+![Figure 3. Landscape context and native-cell windows from the
+high-resolution example. The marker identifies the central cell. Bars
+show source raster values. This illustration is separate from the 250 m
+trial.](figures/patches.png)
+
+Figure 3. Landscape context and native-cell windows from the
+high-resolution example. The marker identifies the central cell. Bars
+show source raster values. This illustration is separate from the 250 m
+trial.
+
+A two-branch configuration learns a representation at each scale and
+combines them through a learned gate. This diagram shows the concept;
+the tuning grid also includes single-scale models and alternative fusion
+strategies.
+
+![Figure 4. Conceptual multiscale architecture. Predictor scaling is
+fitted on the training rows of each fold.](figures/architecture.png)
+
+Figure 4. Conceptual multiscale architecture. Predictor scaling is
+fitted on the training rows of each fold.
+
+## 2. Load
+
+``` r
+
+data <- dsm_load(store)
+```
+
+[`dsm_load()`](https://moquedace.github.io/soilcnn/reference/dsm_load.md)
+opens the store and reads its own tables. It refuses a store whose
+recipe does not fit together. It also refuses one whose manifest says
+the extraction did not finish.
+
+## 3. Decide who trains and who scores
+
+This is the most consequential line of the chain.
+
+``` r
+
+cv <- spatial_cv(k = 5, block_size = "auto", buffer = "auto", test_frac = 0.15)
+```
+
+“auto” means *measured*:
+
+- the block size comes from how these points are spread;
+- the buffer is the largest window times the resolution. That is the
+  exact distance at which two patches stop sharing a pixel.
+
+The other designs are one line each, and everything downstream is
+unchanged:
+
+``` r
+
+random_cv(k = 10)                         # ignores geography, on purpose
+holdout_cv(validation_frac = 0.2)         # a single split
+region_cv(group = data$points$biome)      # leave one region out
+knndm_cv(k = 5, predpoints = prediction_sample(terra::rast("predictors/elev.tif")))
+```
+
+[`knndm_cv()`](https://moquedace.github.io/soilcnn/reference/knndm_cv.md)
+shapes the folds so that the distance from a validation point to its
+nearest training point is distributed like the distance from a map pixel
+to its nearest training point. It needs a sample of where the map will
+be drawn, and it needs the CAST and sf packages.
+
+The five panels below show the plans of a test run on 267 profiles (1%
+of the application), with one test set shared by all five designs. Each
+panel is fold 1: training, validation, test, and the profiles that fold
+leaves out. They illustrate how the designs split the data, not how the
+models perform. The spatial blocks here are 0.1 degree; the full run
+uses 1-degree blocks.
+
+![Figure 5. Validation geometry: fold 1 of each design, with one test
+set for all five. Hollow points are not used in this fold. All panels
+use the same equal-area projection and extent.](figures/designs.png)
+
+Figure 5. Validation geometry: fold 1 of each design, with one test set
+for all five. Hollow points are not used in this fold. All panels use
+the same equal-area projection and extent.
+
+Random folds do not enforce geographic separation, so nearby
+observations can appear in training and validation. Spatial blocks and
+region-based plans introduce geographic separation; kNNDM targets the
+nearest-neighbour distance distribution faced during prediction. Each
+design asks a different validation question. Their relative scores must
+be measured in a completed experiment.
+
+The exclusion buffer is easier to see locally. The next illustration
+uses fold 1 of the full spatial plan, whose buffer is 0.0337 degrees
+(about 3.7 km, the width of a 15 x 15 window) in the Chebyshev metric.
+The shaded square protects one validation location; every validation and
+test location has one.
+
+![Figure 6. The buffer in the full spatial plan. Grey training points
+stay outside the shaded exclusion zone; hollow points were removed from
+training by a buffer.](figures/buffer.png)
+
+Figure 6. The buffer in the full spatial plan. Grey training points stay
+outside the shaded exclusion zone; hollow points were removed from
+training by a buffer.
+
+A plan is worth looking at before a night is spent on it:
+
+``` r
+
+plan <- resolve_resampling(cv, data)
+print(plan)
+```
+
+## 4. Tune
+
+``` r
+
+fit <- dsm_train(
+  data,
+  model       = "cnn",
+  resampling  = plan,
+  tune_length = 30,      # a budget, as in caret, not a lattice
+  n_seeds     = 3,       # what turns "A beat B" into a claim with an error bar
+  output_dir  = "outputs/tuning"
+)
+
+fit$by_config                                   # mean and sd, one row per config
+print_noise_floor(seed_noise_floor(fit$comparison))
+print_one_se(one_se(fit$by_config))             # the simplest config within one SE
+```
+
+The grid is drawn over the windows the store holds: every window alone,
+and every pair. The batch sizes are ones the smallest fold can fill. The
+predictions are scored in native units through the inverse of the
+store’s own transform.
+
+### Choosing a supported level of complexity
+
+The best validation mean is not necessarily the selected model. For CCC,
+[`one_se()`](https://moquedace.github.io/soilcnn/reference/one_se.md)
+subtracts the best configuration’s standard error from its mean, then
+selects the configuration with the fewest parameters among those whose
+mean reaches that threshold. Error-bar overlap does not determine
+eligibility, and the rule is not a test of statistical equivalence.
+
+![Figure 7. A didactic, simulated example of the one-standard-error
+rule. F has the highest mean; D is the smallest configuration above the
+0.490 threshold. Bars show plus/minus one SE. These values are not
+results of the SOC application.](figures/selection.png)
+
+Figure 7. A didactic, simulated example of the one-standard-error rule.
+F has the highest mean; D is the smallest configuration above the 0.490
+threshold. Bars show plus/minus one SE. These values are not results of
+the SOC application.
+
+The simulated values illustrate how to read the selection. For a
+completed run, use `fit$by_config` for the actual means, standard errors
+and parameter counts; the frozen test set stays outside this decision.
+
+## 5. The baselines that give the number a scale
+
+Train them under the same plan, so the comparison is between models and
+not between experiments:
+
+``` r
+
+rf_context <- dsm_train(data, model = "rf", resampling = plan,
+                        features = c("centre", "window_mean"), tune_length = 4,
+                        output_dir = "outputs/tuning")
+rf_point   <- dsm_train(data, model = "rf", resampling = plan,
+                        features = "centre", tune_length = 4, output_dir = "outputs/tuning")
+```
+
+The gap between `rf_context` and the CNN is what the spatial
+*arrangement* of the neighbourhood is worth. If it is smaller than the
+noise floor, the convolution is only averaging.
+
+The same plan runs any of caret’s ~230 methods:
+
+``` r
+
+caret_available("^xgb")
+register_model(caret_spec("xgbTree"))
+xgb <- dsm_train(data, model = "xgbTree", resampling = plan, tune_length = 4,
+                 output_dir = "outputs/tuning")
+```
+
+## 6. The test set, once
+
+The test set is carved out when the plan is made, and nothing scores it
+while a configuration is being chosen. Record the choice first, then
+score the test set:
+
+``` r
+
+freeze_selection(fit$run_dir, config_id = one_se(fit$by_config)$config_id[1])
+score_test_grid(fit$run_dir, data, device = setup_torch_device())
+```
+
+[`score_test_grid()`](https://moquedace.github.io/soilcnn/reference/score_test_grid.md)
+refuses to run before
+[`freeze_selection()`](https://moquedace.github.io/soilcnn/reference/freeze_selection.md),
+and it prints both timestamps.
+
+## 7. Refit the chosen configuration
+
+``` r
+
+final <- dsm_final(fit, seeds = 10)
+```
+
+[`dsm_final()`](https://moquedace.github.io/soilcnn/reference/dsm_final.md)
+refits the configuration the tuning run selects under ten seeds, side by
+side. It calibrates the conformal intervals and the smearing factor on
+the tuning run’s cross-validated residuals. It writes `final_report.md`,
+which declares every hyperparameter of the chosen network and whether
+the search chose it.
+
+## 8. The map
+
+``` r
+
+map <- dsm_predict(final, data, extent = c(-56, -50.5, -15, -13.8))
+map
+```
+
+The map is one VRT per band:
+
+- the ensemble median, mean, sd, mad, min and max over the seeds;
+- the smeared mean;
+- the 90% conformal intervals;
+- the dissimilarity index and the area of applicability.
+
+`bands.csv`, beside the bands, says what each one is.
+
+Before it maps,
+[`dsm_predict()`](https://moquedace.github.io/soilcnn/reference/dsm_predict.md)
+runs a *probe*. It predicts the profiles’ own pixels through the whole
+chain and compares them with the final model’s stored predictions, so a
+wrong band order or a wrong scaling stops the run in seconds instead of
+producing a plausible map. Drop `extent` for the whole grid. The run
+resumes where it stopped, and it refuses to continue if anything that
+changes the numbers has changed.
+
+## Where the map may be believed
+
+A map has a value at every pixel, including pixels whose predictor
+combination the model never met, and nothing in the raster tells them
+apart. The cross-validated error does not describe those pixels. The
+`di_*` and `aoa_*` bands (Meyer & Pebesma, 2021) say where it does, and
+they belong beside the map, not in a footnote.
+
+### Reading the final maps together
+
+Interpret the predicted stock together with the width of its calibrated
+90% interval and its area of applicability. A wide interval indicates
+less precise predictions; a pixel outside the AOA has predictor
+conditions beyond the applicability criterion derived from validation.
+The two diagnostics describe different aspects of reliability.
+
+The maps of the application will be shown here once its full run is
+complete.
+
+## 9. What the model learned
+
+``` r
+
+themes <- read.csv2("importance_themes.csv")[, c("channel", "variable")]
+perm <- dsm_importance(final, data, groups = themes)
+shap <- dsm_importance(final, data, shap_importance(), groups = themes)
+compare_importance(permutation = perm, shap = shap)
+plot(shap)
+```
+
+[`dsm_importance()`](https://moquedace.github.io/soilcnn/reference/dsm_importance.md)
+takes the method as an argument, as
+[`dsm_train()`](https://moquedace.github.io/soilcnn/reference/dsm_train.md)
+takes the validation design:
+
+- [`permutation_importance()`](https://moquedace.github.io/soilcnn/reference/permutation_importance.md):
+  how much the model relies on a variable; with `within =`, what the
+  variable adds beyond the place;
+- [`context_importance()`](https://moquedace.github.io/soilcnn/reference/context_importance.md):
+  how far from the point, and through which window, the network reads;
+- [`shap_importance()`](https://moquedace.github.io/soilcnn/reference/shap_importance.md):
+  how each variable pushes each prediction, up or down; with `at =`
+  points of the map, its maps
+  ([`importance_map()`](https://moquedace.github.io/soilcnn/reference/importance_map.md));
+- [`sage_importance()`](https://moquedace.github.io/soilcnn/reference/sage_importance.md):
+  how much of the skill each theme carries, a signal two themes share
+  split between them;
+- [`refit_importance()`](https://moquedace.github.io/soilcnn/reference/refit_importance.md):
+  whether a variable is needed at all, the seeds trained again without
+  it;
+- [`ale_effect()`](https://moquedace.github.io/soilcnn/reference/ale_effect.md):
+  how the prediction changes along each variable’s range.
+
+With many correlated predictors, themes are the unit to read: a table of
+yours (`channel`, `variable`) groups the channels, and the channels of
+one categorical always move together. `rows = "folds"` scores the tuning
+run’s fold models instead of the final seeds, which is how two
+validation designs are compared on what their models learned.
+
+Every model must first give back, point by point, the predictions its
+run wrote, and a refit must first train a seed again and get them back.
+An importance measured on another model would look just as plausible.
+
+The application’s importances will be shown here once its full run is
+complete.
+
+## About the illustrations
+
+Profile locations come from the full SOC 0-30 cm application at 250 m.
+The input-patch illustration uses separate high-resolution raster crops
+at one of its profiles. The continental validation panels come from the
+plans of a test run on 1% of the profiles; the local buffer detail comes
+from the full spatial plan. The model-selection plot uses simulated
+values. No prediction maps or performance figures are presented. The
+scripts that draw the figures are in the package’s [GitHub
+repository](https://github.com/moquedace/soilcnn), under `tools/`; they
+read data and fold plans, and fit no model.
