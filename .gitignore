@@ -49,3 +49,6 @@ tools/figure_inputs/
 # small, made by code, and needed by the examples, the tests and the vignette.
 !inst/extdata/**/*.tif
 !inst/extdata/**/*.csv
+
+# pkgdown site, built locally (CI publishes it to gh-pages)
+site/

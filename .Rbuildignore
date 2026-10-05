@@ -20,3 +20,6 @@
 ^docs/pilot_reports$
 ^data-raw$
 ^cran-comments\.md$
+^\.github$
+^_pkgdown\.yml$
+^site$

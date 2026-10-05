@@ -28,7 +28,7 @@ Description: A framework, built on 'torch', for mapping a soil property from
     variable. Random forest and multilayer perceptron baselines run under the
     same folds.
 License: MIT + file LICENSE
-URL: https://github.com/moquedace/soilcnn
+URL: https://github.com/moquedace/soilcnn, https://moquedace.github.io/soilcnn/
 BugReports: https://github.com/moquedace/soilcnn/issues
 Depends:
     R (>= 4.5.0)

@@ -5,11 +5,12 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/R-%3E%3D4.5-276DC3?style=flat-square&logo=r&logoColor=white"/>
-  <img src="https://img.shields.io/badge/torch-deep%20learning-EE4C2C?style=flat-square&logo=pytorch&logoColor=white"/>
-  <img src="https://img.shields.io/badge/domain-digital%20soil%20mapping-4CAF50?style=flat-square"/>
-  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"/>
-  <img src="https://img.shields.io/badge/status-in%20development-orange?style=flat-square"/>
+  <a href="https://github.com/moquedace/soilcnn/actions/workflows/R-CMD-check.yaml"><img src="https://github.com/moquedace/soilcnn/actions/workflows/R-CMD-check.yaml/badge.svg" alt="R CMD check"/></a>
+  <img src="https://img.shields.io/badge/R-%3E%3D4.5-276DC3?style=flat-square&logo=r&logoColor=white" alt="R 4.5 or later"/>
+  <img src="https://img.shields.io/badge/torch-deep%20learning-EE4C2C?style=flat-square&logo=pytorch&logoColor=white" alt="torch"/>
+  <img src="https://img.shields.io/badge/domain-digital%20soil%20mapping-4CAF50?style=flat-square" alt="digital soil mapping"/>
+  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT licence"/>
+  <img src="https://img.shields.io/badge/status-in%20development-orange?style=flat-square" alt="in development"/>
 </p>
 
 <p align="center">
