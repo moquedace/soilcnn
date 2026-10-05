@@ -428,8 +428,21 @@ ok["each_point_keeps_its_values_for_dependence"] <- nrow(imp9$values) == nrow(im
   all(c("band_a", "temp_c") %in% colnames(imp9$values))
 map9 <- importance_map(imp9, output_dir = file.path(base, "shap_map"))
 ok["the_map_lays_each_point_on_its_cell"] <- all(file.exists(map9$files)) && {
-  v <- terra::extract(map9$shap[["band_a"]], as.matrix(imp9$points[, c("x", "y")]))[, 1]
+  v <- terra::extract(terra::unwrap(map9$shap)[["band_a"]], as.matrix(imp9$points[, c("x", "y")]))[, 1]
   isTRUE(all.equal(as.numeric(v), imp9$points$band_a, tolerance = 1e-6))
+}
+# A map saved and read back draws, with the same values: its rasters travel
+# packed. As SpatRasters they came back pointing at nothing (2026-10-05).
+ok["the_map_survives_saveRDS"] <- {
+  rds9 <- file.path(base, "shap_map", "map.rds")
+  saveRDS(map9, rds9)
+  back9 <- readRDS(rds9)
+  grDevices::pdf(NULL)
+  drew9 <- tryCatch({ plot(back9); TRUE }, error = function(e) conditionMessage(e))
+  grDevices::dev.off()
+  if (!isTRUE(drew9)) cat("  map read back failed: ", drew9, "\n", sep = "")
+  isTRUE(drew9) && identical(terra::values(terra::unwrap(back9$shap)),
+                             terra::values(terra::unwrap(map9$shap)))
 }
 ok["the_map_and_its_importance_draw"] <- {
   f9 <- file.path(base, "shap_map", "fig_%02d.png")
@@ -440,7 +453,7 @@ ok["the_map_and_its_importance_draw"] <- {
   isTRUE(d9) && length(list.files(dirname(f9), pattern = "^fig_.*png$")) == 2L
 }
 ok["the_dominant_layer_names_a_variable"] <- {
-  d <- terra::values(map9$dominant)[, 1]
+  d <- terra::values(terra::unwrap(map9$dominant))[, 1]
   any(!is.na(d)) && all(d[!is.na(d)] %in% map9$legend$value)
 }
 ok["a_map_read_from_other_rasters_is_refused"] <- grepl("not the store's", err(

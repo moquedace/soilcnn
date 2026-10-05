@@ -2267,7 +2267,9 @@ importance_points <- function(final, data, extent = NULL, every = 1L, rasters = 
 #'   SHAP value of the points in each cell, in the network's units), `dominant`
 #'   (in each cell, the variable with the largest mean |SHAP|, as the number in
 #'   `legend`), `legend`, `prediction` (the mean prediction, native units)
-#'   and `files`. `plot()` draws it.
+#'   and `files`. The three rasters are packed with [terra::wrap()], so the map
+#'   survives [base::saveRDS()]; [terra::unwrap()] gives each as a `SpatRaster`.
+#'   `plot()` draws it.
 #' @examplesIf torch::torch_is_installed()
 #' \donttest{
 #' run <- example_run()    # a small fitted run, made once a session
@@ -2318,8 +2320,12 @@ importance_map <- function(x, resolution = NULL, output_dir = NULL) {
     terra::writeRaster(prediction, files[3], overwrite = TRUE)
     safe_write_csv2(legend, files[4])
   }
-  structure(list(shap = shap, dominant = dominant, legend = legend, prediction = prediction,
-                 files = files),
+  # PACKED. A SpatRaster is a pointer into terra's C++ objects, and comes back
+  # from readRDS() pointing at nothing -- "NULL value passed as symbol address"
+  # when a cached map was drawn again (07_importance.R, 2026-10-05). Packed, the
+  # values travel with the object; plot() unpacks them.
+  structure(list(shap = terra::wrap(shap), dominant = terra::wrap(dominant), legend = legend,
+                 prediction = terra::wrap(prediction), files = files),
             class = "importance_map")
 }
 

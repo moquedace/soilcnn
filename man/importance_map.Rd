@@ -21,7 +21,9 @@ An \code{importance_map}, a list: \code{shap} (one layer per variable: the mean
 SHAP value of the points in each cell, in the network's units), \code{dominant}
 (in each cell, the variable with the largest mean |SHAP|, as the number in
 \code{legend}), \code{legend}, \code{prediction} (the mean prediction, native units)
-and \code{files}. \code{plot()} draws it.
+and \code{files}. The three rasters are packed with \code{\link[terra:wrap]{terra::wrap()}}, so the map
+survives \code{\link[base:saveRDS]{base::saveRDS()}}; \code{\link[terra:unwrap]{terra::unwrap()}} gives each as a \code{SpatRaster}.
+\code{plot()} draws it.
 }
 \description{
 Lays the values of \code{\link[=dsm_importance]{dsm_importance()}}\verb{(at = )} back on a grid: each cell

@@ -234,9 +234,13 @@ plot.dsm_importance <- function(x, n = 20L, ...) {
 #' @return `x`, invisibly.
 #' @export
 plot.importance_map <- function(x, n = 12L, ...) {
-  v <- names(x$shap)
+  # Packed by importance_map(), so a map read back from disk draws; a map from
+  # before holds its rasters as they are.
+  open <- function(r) if (inherits(r, "PackedSpatRaster")) terra::unwrap(r) else r
+  shap <- open(x$shap); dominant <- open(x$dominant); prediction <- open(x$prediction)
+  v <- names(shap)
   mean_abs <- vapply(v, function(l) {
-    z <- terra::values(x$shap[[l]], mat = FALSE)
+    z <- terra::values(shap[[l]], mat = FALSE)
     mean(abs(z), na.rm = TRUE)
   }, numeric(1))
   v <- utils::head(v[order(-mean_abs)], n)
@@ -245,18 +249,18 @@ plot.importance_map <- function(x, n = 12L, ...) {
   nr <- ceiling(k / nc)
   op <- graphics::par(mfrow = c(nr, nc), mar = c(1, 1, 2, 1), oma = c(0, 0, 2, 0))
   on.exit(graphics::par(op))
-  lim <- max(vapply(v, function(l) max(abs(terra::values(x$shap[[l]], mat = FALSE)), na.rm = TRUE),
+  lim <- max(vapply(v, function(l) max(abs(terra::values(shap[[l]], mat = FALSE)), na.rm = TRUE),
                     numeric(1)))
   pal <- grDevices::colorRampPalette(c(.importance_col[["blue"]], "#f7f7f7",
                                        .importance_col[["earth"]]))(65)
-  for (l in v) .importance_image(x$shap[[l]], pal, c(-lim, lim), l)
+  for (l in v) .importance_image(shap[[l]], pal, c(-lim, lim), l)
   k_dom <- nrow(x$legend)
   pal_dom <- grDevices::hcl.colors(max(k_dom, 3L), "Set 3")[seq_len(k_dom)]
-  .importance_image(x$dominant, pal_dom, c(0.5, k_dom + 0.5), "dominant")
-  present <- sort(unique(stats::na.omit(terra::values(x$dominant, mat = FALSE))))
+  .importance_image(dominant, pal_dom, c(0.5, k_dom + 0.5), "dominant")
+  present <- sort(unique(stats::na.omit(terra::values(dominant, mat = FALSE))))
   graphics::legend("bottomleft", legend = x$legend$variable[present], fill = pal_dom[present],
                    cex = 0.6, bg = grDevices::adjustcolor("white", 0.8), border = NA)
-  .importance_image(x$prediction, grDevices::hcl.colors(64, "viridis"), NULL, "prediction")
+  .importance_image(prediction, grDevices::hcl.colors(64, "viridis"), NULL, "prediction")
   graphics::mtext(sprintf("SHAP on a diverging scale, +/- %.3g", lim), outer = TRUE, cex = 0.9)
   invisible(x)
 }
