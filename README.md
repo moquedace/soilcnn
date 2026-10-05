@@ -530,7 +530,7 @@ model ignores no longer pushes a pixel out of the AOA.
 
 ---
 
-## Tuneable parameters
+## Tunable parameters
 
 The table below summarises the search space `make_tune_grid()` draws from. See [`docs/tuning_guide.md`](docs/tuning_guide.md) for the rationale behind every range and its connection to digital soil mapping.
 
