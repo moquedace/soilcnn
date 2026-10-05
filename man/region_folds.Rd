@@ -4,7 +4,16 @@
 \alias{region_folds}
 \title{Fold by a grouping column: no group is split across folds.}
 \usage{
-region_folds(meta, group, k = NULL, test_frac = 0, test_ids = NULL, seed = 42L)
+region_folds(
+  meta,
+  group,
+  k = NULL,
+  test_frac = 0,
+  test_ids = NULL,
+  seed = 42L,
+  calibration_frac = 0,
+  calibration_ids = NULL
+)
 }
 \arguments{
 \item{meta}{Patch store meta.}
@@ -20,6 +29,14 @@ region_folds(meta, group, k = NULL, test_frac = 0, test_ids = NULL, seed = 42L)
 
 \item{seed}{Seed for this split only; the training seeds do not
 move it.}
+
+\item{calibration_frac}{Share of ALL the points held out as a calibration
+set for the intervals, carved after the test set by the same criterion;
+0 for none. It trains nothing and chooses nothing: dsm_final() predicts
+it and calibrates its "split" interval there.}
+
+\item{calibration_ids}{Sample ids that ARE the calibration set, in place of
+\code{calibration_frac}, as \code{test_ids} is for the test set.}
 }
 \value{
 A \code{fold_plan}.

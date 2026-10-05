@@ -4,7 +4,14 @@
 \alias{resolve_resampling}
 \title{Turn a spec into a fold plan against real points.}
 \usage{
-resolve_resampling(spec, data, test_ids = NULL, windows = NULL, verbose = TRUE)
+resolve_resampling(
+  spec,
+  data,
+  test_ids = NULL,
+  windows = NULL,
+  verbose = TRUE,
+  calibration_ids = NULL
+)
 }
 \arguments{
 \item{spec}{From spatial_cv() and friends, or an existing fold_plan,
@@ -18,6 +25,10 @@ survives a change of method.}
 \item{windows}{Windows the grid will use, for \code{buffer = "auto"}.}
 
 \item{verbose}{Print the block size that \code{block_size = "auto"} chose.}
+
+\item{calibration_ids}{Sample ids to force into the calibration set, in
+place of the \code{calibration_frac} of \code{spec}: several designs then calibrate
+their "split" intervals on the same points.}
 }
 \value{
 A \code{fold_plan}, already checked with check_fold_plan().

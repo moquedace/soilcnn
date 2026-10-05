@@ -13,6 +13,8 @@ knndm_folds(
   crs = 4326,
   project_to = "+proj=moll +lon_0=0 +datum=WGS84 +units=m",
   seed = 42L,
+  calibration_ids = NULL,
+  hold_out_calibration = FALSE,
   ...
 )
 }
@@ -38,6 +40,12 @@ frozen test set.}
 use the coordinates as they are (correct only if already projected).}
 
 \item{seed}{Seed, for the sampling kNNDM does internally.}
+
+\item{calibration_ids}{Frozen calibration-set sample_ids, as \code{test_ids}.}
+
+\item{hold_out_calibration}{Carve a calibration set for the intervals as the
+test set is carved: kNNDM in k + 1 folds over what the test left, one
+held out. FALSE by default.}
 
 \item{...}{Passed to CAST::knndm() -- \code{maxp}, \code{clustering},
 \code{samplesize}, \code{modeldomain}, \code{space}.}

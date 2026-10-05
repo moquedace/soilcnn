@@ -10,7 +10,9 @@ holdout(
   test_frac = 0.15,
   test_ids = NULL,
   seed = 42L,
-  group = "auto"
+  group = "auto",
+  calibration_frac = 0,
+  calibration_ids = NULL
 )
 }
 \arguments{
@@ -30,6 +32,14 @@ move it.}
 \item{group}{"auto" keeps the rows of one profile_id together when
 the table repeats profiles; NULL or "row" makes each row its own unit; a
 column name, or a vector with one label per row, names the groups.}
+
+\item{calibration_frac}{Share of ALL the points held out as a calibration
+set for the intervals, carved after the test set by the same criterion;
+0 for none. It trains nothing and chooses nothing: dsm_final() predicts
+it and calibrates its "split" interval there.}
+
+\item{calibration_ids}{Sample ids that ARE the calibration set, in place of
+\code{calibration_frac}, as \code{test_ids} is for the test set.}
 }
 \value{
 A \code{fold_plan} with one fold.
@@ -44,4 +54,6 @@ ex <- example_landscape()
 meta <- data.frame(sample_id = seq_len(nrow(ex$profiles)), x = ex$profiles$x,
                    y = ex$profiles$y)
 holdout(meta, validation_frac = 0.2, test_frac = 0.2)
+# with a calibration set for the intervals beside the test set
+holdout(meta, validation_frac = 0.2, test_frac = 0.2, calibration_frac = 0.15)
 }

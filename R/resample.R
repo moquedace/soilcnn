@@ -127,12 +127,59 @@ with_local_seed <- function(seed, expr) {
   .draw_groups_for_frac(group, test_frac, seed + 1000L)
 }
 
-# Everything after the test is carved: group -> k folds over what remains.
+# ── THE CALIBRATION SET: A SECOND TEST SET, FOR THE INTERVAL ──────────────────
+#
+# A split conformal interval is calibrated on points nothing else touched: not
+# trained on, not used to choose a configuration, not used to stop training.
+# The cross-validated residuals are none of that -- the configuration was
+# chosen on them -- so a plan can carve a calibration set beside the test set,
+# by the same criterion (whole blocks, whole regions, whole profiles) and from
+# the rows the test left, out of a stream of its own (seed + 2000): a change
+# of calibration_frac never moves the test set. From then on it is treated as
+# the test is: in no fold, behind the same buffer, predicted by the final
+# model and never trained on (refit_split()).
+#
+# calibration_frac is a share of ALL the points, as test_frac is. Frozen ids
+# take precedence, so several designs can share one calibration set, as they
+# share one test set.
+.carve_calibration <- function(meta, group, calibration_frac, calibration_ids, test, seed) {
+  n <- length(group)
+  if (!is.null(calibration_ids)) {
+    if (!"sample_id" %in% names(meta)) {
+      stop("meta needs sample_id to apply a frozen calibration set.", call. = FALSE)
+    }
+    pos <- match(as.character(calibration_ids), as.character(meta$sample_id))
+    if (anyNA(pos)) {
+      stop(sum(is.na(pos)), " frozen calibration sample_id(s) are not in meta -- the ",
+           "frozen split and this dataset are not the same data.", call. = FALSE)
+    }
+    both <- intersect(pos, test)
+    if (length(both) > 0L) {
+      stop(length(both), " frozen calibration sample_id(s) are also in the test set: a ",
+           "point that calibrates the interval cannot be one it is checked on.",
+           call. = FALSE)
+    }
+    return(sort(unique(pos)))
+  }
+  if (is.null(calibration_frac) || calibration_frac <= 0) return(integer(0))
+  rest  <- setdiff(seq_len(n), test)
+  share <- calibration_frac * n / length(rest)
+  if (share >= 1) {
+    stop("calibration_frac = ", calibration_frac, " takes every point the test set ",
+         "left: nothing would be left to train on.", call. = FALSE)
+  }
+  rest[.draw_groups_for_frac(group[rest], share, seed + 2000L)]
+}
+
+# Everything after the test (and the calibration set) is carved: group -> k
+# folds over what remains.
 .plan_from_groups <- function(meta, group, k, test_frac, test_ids, seed,
-                              method, params, extra = NULL) {
+                              method, params, extra = NULL,
+                              calibration_frac = 0, calibration_ids = NULL) {
   n    <- length(group)
   test   <- .carve_test(meta, group, test_frac, test_ids, seed)
-  pool   <- setdiff(seq_len(n), test)
+  calib  <- .carve_calibration(meta, group, calibration_frac, calibration_ids, test, seed)
+  pool   <- setdiff(seq_len(n), c(test, calib))
   g_pool <- group[pool]
 
   # k = NULL means leave-one-group-out, and it can only be counted AFTER the
@@ -140,12 +187,13 @@ with_local_seed <- function(seed, expr) {
   # folds. Resolved FIRST, because every check below compares against it.
   if (is.null(k)) k <- dplyr::n_distinct(g_pool)
   k <- as.integer(k)
+  held <- if (length(calib)) "the test and calibration sets" else "the test set"
   if (k < 2L) {
-    stop("Only ", k, " group(s) left after the test set -- not enough to fold.",
+    stop("Only ", k, " group(s) left after ", held, " -- not enough to fold.",
          call. = FALSE)
   }
   if (length(pool) < k) {
-    stop("Only ", length(pool), " row(s) left after the test set, for k = ", k,
+    stop("Only ", length(pool), " row(s) left after ", held, ", for k = ", k,
          " folds.", call. = FALSE)
   }
   ug <- with_local_seed(seed, sample(unique(g_pool)))
@@ -162,10 +210,22 @@ with_local_seed <- function(seed, expr) {
   .new_fold_plan(
     .folds_from_assignment(assignment, pool, test, k),
     method,
-    c(params, list(k = k, test_frac = test_frac, n_test = length(test),
-                   seed = seed)),
-    meta, assignment = asg
+    c(params, list(k = k, test_frac = test_frac, n_test = length(test)),
+      .calibration_params(calibration_frac, calibration_ids, calib, n),
+      list(seed = seed)),
+    meta, assignment = asg, calibration = calib, group = group
   )
+}
+
+# What a plan records of its calibration set -- nothing, when it has none, so
+# a plan without one prints as it always did. A frozen set records the share
+# it turned out to be.
+.calibration_params <- function(calibration_frac, calibration_ids, calib, n) {
+  if (length(calib) == 0L) return(list())
+  list(calibration_frac = if (is.null(calibration_ids)) calibration_frac else
+         round(length(calib) / n, 4),
+       n_calibration = length(calib),
+       calibration_frozen = !is.null(calibration_ids))
 }
 
 # Deal groups into k folds: largest group first, into whichever fold is
@@ -207,13 +267,26 @@ with_local_seed <- function(seed, expr) {
   folds
 }
 
-.new_fold_plan <- function(folds, method, params, meta, assignment = NULL) {
+# `calibration`: the rows of the calibration set, in no fold (see
+# .carve_calibration()). `group`: the plan's indivisible unit for EVERY row --
+# block, region, profile -- which a calibration weighted by group reads, and a
+# refit of a region plan cuts by. A plan made before either existed has
+# neither, and means none and one row per unit.
+.new_fold_plan <- function(folds, method, params, meta, assignment = NULL,
+                           calibration = integer(0), group = NULL) {
   structure(
     list(folds = folds, method = method, params = params,
          n_folds = length(folds), n_rows = nrow(meta),
-         assignment = assignment),
+         assignment = assignment, calibration = sort(as.integer(calibration)),
+         group = if (is.null(group)) NULL else as.character(group)),
     class = "fold_plan"
   )
+}
+
+# The plan's unit of each row, for a plan of any age.
+.plan_groups <- function(plan) {
+  if (!is.null(plan$group) && length(plan$group) == plan$n_rows) return(plan$group)
+  as.character(seq_len(plan$n_rows))
 }
 
 # -- 1. holdout: the fixed split written by stage 01 --------------------------
@@ -340,15 +413,24 @@ with_local_seed <- function(seed, expr) {
 #' @param group           "auto" keeps the rows of one profile_id together when
 #'   the table repeats profiles; NULL or "row" makes each row its own unit; a
 #'   column name, or a vector with one label per row, names the groups.
+#' @param calibration_frac Share of ALL the points held out as a calibration
+#'   set for the intervals, carved after the test set by the same criterion;
+#'   0 for none. It trains nothing and chooses nothing: dsm_final() predicts
+#'   it and calibrates its "split" interval there.
+#' @param calibration_ids Sample ids that ARE the calibration set, in place of
+#'   `calibration_frac`, as `test_ids` is for the test set.
 #' @return A `fold_plan` with one fold.
 #' @examples
 #' ex <- example_landscape()
 #' meta <- data.frame(sample_id = seq_len(nrow(ex$profiles)), x = ex$profiles$x,
 #'                    y = ex$profiles$y)
 #' holdout(meta, validation_frac = 0.2, test_frac = 0.2)
+#' # with a calibration set for the intervals beside the test set
+#' holdout(meta, validation_frac = 0.2, test_frac = 0.2, calibration_frac = 0.15)
 #' @export
 holdout <- function(meta, validation_frac = 0.15, test_frac = 0.15,
-                    test_ids = NULL, seed = 42L, group = "auto") {
+                    test_ids = NULL, seed = 42L, group = "auto",
+                    calibration_frac = 0, calibration_ids = NULL) {
   if (!"sample_id" %in% names(meta)) {
     stop("meta needs a sample_id column.", call. = FALSE)
   }
@@ -358,8 +440,12 @@ holdout <- function(meta, validation_frac = 0.15, test_frac = 0.15,
   if (isTRUE(attr(group, "grouped"))) message("holdout: ", grp_note)
 
   test  <- .carve_test(meta, group, test_frac, test_ids, seed)
-  pool  <- setdiff(seq_len(n), test)
-  if (length(pool) < 2L) stop("Nothing left after the test set.", call. = FALSE)
+  calib <- .carve_calibration(meta, group, calibration_frac, calibration_ids, test, seed)
+  pool  <- setdiff(seq_len(n), c(test, calib))
+  if (length(pool) < 2L) {
+    stop("Nothing left after the test", if (length(calib)) " and calibration sets" else " set",
+         ".", call. = FALSE)
+  }
 
   # The validation cut is drawn over GROUPS, not rows, for the same reason the
   # test cut is: half a profile in training and half in validation is the
@@ -377,12 +463,14 @@ holdout <- function(meta, validation_frac = 0.15, test_frac = 0.15,
   if (length(test) > 0L) idx$test <- test
 
   .new_fold_plan(list(idx), "holdout",
-                 list(k = 1L, validation_frac = validation_frac,
-                      test_frac = test_frac, n_test = length(test),
-                      seed = seed, grouping = grp_note),
+                 c(list(k = 1L, validation_frac = validation_frac,
+                        test_frac = test_frac, n_test = length(test)),
+                   .calibration_params(calibration_frac, calibration_ids, calib, n),
+                   list(seed = seed, grouping = grp_note)),
                  meta,
                  assignment = tibble::tibble(sample_id = meta$sample_id[pool],
-                                             fold = 1L))
+                                             fold = 1L),
+                 calibration = calib, group = group)
 }
 
 # -- 2. random k-fold ---------------------------------------------------------
@@ -409,7 +497,8 @@ holdout <- function(meta, validation_frac = 0.15, test_frac = 0.15,
 #' random_folds(meta, k = 3, test_frac = 0.2)
 #' @export
 random_folds <- function(meta, k = 5L, test_frac = 0, test_ids = NULL,
-                        seed = 42L, group = "auto") {
+                        seed = 42L, group = "auto",
+                        calibration_frac = 0, calibration_ids = NULL) {
   k <- as.integer(k)
   if (k < 2L) stop("k must be at least 2.", call. = FALSE)
   if (!"sample_id" %in% names(meta)) {
@@ -419,7 +508,9 @@ random_folds <- function(meta, k = 5L, test_frac = 0, test_ids = NULL,
   if (isTRUE(attr(g, "grouped"))) message("random_folds: ", attr(g, "note"))
   .plan_from_groups(meta, g, k, test_frac, test_ids, seed,
                     method = "random_folds",
-                    params = list(grouping = attr(g, "note")))
+                    params = list(grouping = attr(g, "note")),
+                    calibration_frac = calibration_frac,
+                    calibration_ids = calibration_ids)
 }
 
 # -- 3. spatial block k-fold --------------------------------------------------
@@ -585,7 +676,8 @@ spatial_folds <- function(meta, k = 5L, test_frac = 0, block_size = NULL,
                           buffer = NULL,
                           buffer_metric = c("chebyshev", "euclidean"),
                           test_ids = NULL, seed = 42L,
-                          blocks_per_fold = 10L) {
+                          blocks_per_fold = 10L,
+                          calibration_frac = 0, calibration_ids = NULL) {
   buffer_metric <- match.arg(buffer_metric)
   k <- as.integer(k)
   if (k < 2L) stop("k must be at least 2.", call. = FALSE)
@@ -633,13 +725,14 @@ spatial_folds <- function(meta, k = 5L, test_frac = 0, block_size = NULL,
   }
 
   # The test comes out of the SAME blocks the folds will use, so no test point
-  # sits inside a block that also trains.
+  # sits inside a block that also trains -- and so does the calibration set.
   plan <- .plan_from_groups(
     meta, blk, k, test_frac, test_ids, seed,
     method = "spatial_folds",
     params = list(block_size = block_size, block_size_auto = auto,
                   n_blocks = length(unique(blk))),
-    extra  = list(block = blk)
+    extra  = list(block = blk),
+    calibration_frac = calibration_frac, calibration_ids = calibration_ids
   )
   # Blocking chooses where the cut falls; the buffer is what makes the cut
   # mean something. See apply_buffer() for why one without the other is not
@@ -667,7 +760,8 @@ spatial_folds <- function(meta, k = 5L, test_frac = 0, block_size = NULL,
 #' region_folds(meta, group = ex$profiles$survey, k = 3)
 #' @export
 region_folds <- function(meta, group, k = NULL, test_frac = 0,
-                        test_ids = NULL, seed = 42L) {
+                        test_ids = NULL, seed = 42L,
+                        calibration_frac = 0, calibration_ids = NULL) {
   if (length(group) != nrow(meta)) {
     stop("group has ", length(group), " values but meta has ", nrow(meta),
          " rows.", call. = FALSE)
@@ -688,7 +782,9 @@ region_folds <- function(meta, group, k = NULL, test_frac = 0,
   .plan_from_groups(meta, g, k, test_frac, test_ids, seed,
                     method = "region_folds",
                     params = list(n_groups = dplyr::n_distinct(g)),
-                    extra  = list(group = g))
+                    extra  = list(group = g),
+                    calibration_frac = calibration_frac,
+                    calibration_ids = calibration_ids)
 }
 
 # -- 5. buffer: the mechanism that actually separates folds -------------------
@@ -761,10 +857,10 @@ region_folds <- function(meta, group, k = NULL, test_frac = 0,
 #' @noRd
 apply_buffer <- function(plan, meta, buffer,
                          metric = c("chebyshev", "euclidean"),
-                         protect = c("validation", "test")) {
+                         protect = c("validation", "test", "calibration")) {
   stopifnot(inherits(plan, "fold_plan"))
   metric  <- match.arg(metric)
-  protect <- match.arg(protect, c("validation", "test"), several.ok = TRUE)
+  protect <- match.arg(protect, c("validation", "test", "calibration"), several.ok = TRUE)
   if (is.null(buffer) || buffer <= 0) return(plan)
   if (!all(c("x", "y") %in% names(meta))) {
     stop("meta needs x and y columns to apply a buffer.", call. = FALSE)
@@ -790,6 +886,13 @@ apply_buffer <- function(plan, meta, buffer,
   # within one patch span of it are a thin rim.
   #
   # Reported by cause, because "5.1% dropped" hides which promise it paid for.
+  #
+  # THE CALIBRATION SET IS BEHIND THE SAME BUFFER AS THE TEST. Its residuals
+  # must be exchangeable with the test's: carved alike, and alike in how far
+  # the model's training points are kept from them. A calibration point with a
+  # training neighbour inside the buffer is an easier point than a test point
+  # ever is, and the interval would come out narrow by that.
+  cal <- if ("calibration" %in% protect) plan$calibration %||% integer(0) else integer(0)
   dropped <- vector("list", length(plan$folds))
   for (j in seq_along(plan$folds)) {
     f      <- plan$folds[[j]]
@@ -805,7 +908,11 @@ apply_buffer <- function(plan, meta, buffer,
       .near_any(x[f$train], y[f$train], x[f$test], y[f$test], buffer, metric)
     } else rep(FALSE, n_before)
 
-    plan$folds[[j]]$train <- f$train[!(near_val | near_test)]
+    near_cal <- if (length(cal) > 0L) {
+      .near_any(x[f$train], y[f$train], x[cal], y[cal], buffer, metric)
+    } else rep(FALSE, n_before)
+
+    plan$folds[[j]]$train <- f$train[!(near_val | near_test | near_cal)]
     if (length(plan$folds[[j]]$train) == 0L) {
       stop("Fold ", j, ": the buffer removed every training point. The buffer ",
            "is large relative to the spacing of this data.", call. = FALSE)
@@ -813,9 +920,16 @@ apply_buffer <- function(plan, meta, buffer,
 
     n_val_before <- length(f$validation)
     n_val_drop   <- 0L
-    if ("test" %in% protect && has_test && n_val_before > 0L) {
-      nv <- .near_any(x[f$validation], y[f$validation], x[f$test], y[f$test],
-                      buffer, metric)
+    if (n_val_before > 0L && (("test" %in% protect && has_test) || length(cal) > 0L)) {
+      nv <- rep(FALSE, n_val_before)
+      if ("test" %in% protect && has_test) {
+        nv <- nv | .near_any(x[f$validation], y[f$validation], x[f$test], y[f$test],
+                             buffer, metric)
+      }
+      if (length(cal) > 0L) {
+        nv <- nv | .near_any(x[f$validation], y[f$validation], x[cal], y[cal],
+                             buffer, metric)
+      }
       plan$folds[[j]]$validation <- f$validation[!nv]
       n_val_drop <- sum(nv)
       if (length(plan$folds[[j]]$validation) == 0L) {
@@ -824,19 +938,22 @@ apply_buffer <- function(plan, meta, buffer,
       }
     }
 
-    n_drop <- sum(near_val | near_test)
+    n_drop <- sum(near_val | near_test | near_cal)
     dropped[[j]] <- tibble::tibble(
       fold = j, n_train_before = n_before, n_dropped = n_drop,
       pct_dropped = round(100 * n_drop / n_before, 2),
       # Causes overlap -- a point can be near both -- so these do not have to
       # add up to n_dropped, and saying so here stops that reading as a bug.
       n_near_validation = sum(near_val), n_near_test = sum(near_test),
+      n_near_calibration = sum(near_cal),
       n_validation_before = n_val_before, n_validation_dropped = n_val_drop)
   }
 
   plan$params$buffer         <- buffer
   plan$params$buffer_metric  <- metric
-  plan$params$buffer_protect <- paste(protect, collapse = "+")
+  # What it protected: a calibration set only where the plan has one.
+  plan$params$buffer_protect <- paste(if (length(cal) > 0L) protect else
+                                        setdiff(protect, "calibration"), collapse = "+")
   plan$buffer_dropped        <- dplyr::bind_rows(dropped)
   plan
 }
@@ -1089,6 +1206,11 @@ refit_split <- function(plan, meta, validation_frac = 0.15, predpoints = NULL) {
   stopifnot(inherits(plan, "fold_plan"))
   test_pos <- plan$folds[[1]]$test
   test_ids <- if (length(test_pos)) meta$sample_id[test_pos] else NULL
+  # THE CALIBRATION SET, VERBATIM, as the test set is: kept out of the refit's
+  # training and validation, behind its buffer, and handed to the final model
+  # as a role of its own, to be predicted and never trained on.
+  cal_pos  <- plan$calibration %||% integer(0)
+  cal_ids  <- if (length(cal_pos)) meta$sample_id[cal_pos] else NULL
   k        <- max(2L, as.integer(round(1 / validation_frac)))
   seed     <- plan$params$seed %||% 42L
 
@@ -1101,16 +1223,20 @@ refit_split <- function(plan, meta, validation_frac = 0.15, predpoints = NULL) {
       block_size    = plan$params$block_size,
       buffer        = plan$params$buffer,
       buffer_metric = plan$params$buffer_metric %||% "chebyshev",
-      seed = seed),
-    region_folds  = .refit_region_plan(plan, meta, k, test_ids, seed),
-    knndm_folds   = .refit_knndm_plan(plan, meta, k, test_ids, seed, predpoints),
-    random_folds  = random_folds(meta, k = k, test_ids = test_ids, seed = seed),
+      seed = seed, calibration_ids = cal_ids),
+    region_folds  = .refit_region_plan(plan, meta, k, test_ids, seed, cal_ids),
+    knndm_folds   = .refit_knndm_plan(plan, meta, k, test_ids, seed, predpoints, cal_ids),
+    random_folds  = random_folds(meta, k = k, test_ids = test_ids, seed = seed,
+                                 calibration_ids = cal_ids),
     holdout       = holdout(meta, validation_frac = validation_frac,
-                            test_ids = test_ids, seed = seed),
+                            test_ids = test_ids, seed = seed, calibration_ids = cal_ids),
     stop("Unknown plan method: ", plan$method, call. = FALSE)
   )
 
-  if (identical(plan$method, "holdout")) return(sub_plan)
+  if (identical(plan$method, "holdout")) {
+    if (length(sub_plan$calibration)) sub_plan$folds[[1]]$calibration <- sub_plan$calibration
+    return(sub_plan)
+  }
 
   # WHICH OF THE k FOLDS VALIDATES. Blocks and random folds come out balanced
   # -- blocks dealt greedily, rows drawn at random -- and the first is taken,
@@ -1126,11 +1252,13 @@ refit_split <- function(plan, meta, validation_frac = 0.15, predpoints = NULL) {
     pick   <- which.min(abs(sizes - validation_frac * n_pool))
   }
   idx <- sub_plan$folds[[pick]]
+  if (length(sub_plan$calibration)) idx$calibration <- sub_plan$calibration
   .new_fold_plan(list(idx), paste0("refit_", plan$method),
                  c(sub_plan$params, list(refit_of = plan$method,
                                          validation_frac = validation_frac,
                                          refit_fold = pick)),
-                 meta, assignment = sub_plan$assignment)
+                 meta, assignment = sub_plan$assignment,
+                 calibration = sub_plan$calibration, group = sub_plan$group)
 }
 
 # A kNNDM plan's criterion is its prediction points: the refit runs kNNDM
@@ -1138,7 +1266,8 @@ refit_split <- function(plan, meta, validation_frac = 0.15, predpoints = NULL) {
 # and with the same CAST options. A plan from before knndm_folds() kept them
 # has only its projection in params; its points must be given, and its CRS is
 # taken as 4326 -- the default, and the one thing such a plan did not record.
-.refit_knndm_plan <- function(plan, meta, k, test_ids, seed, predpoints) {
+.refit_knndm_plan <- function(plan, meta, k, test_ids, seed, predpoints,
+                              calibration_ids = NULL) {
   kn   <- plan$knndm
   args <- kn$args %||% list()
   if (!is.null(predpoints) && !is.null(kn$predpoints) &&
@@ -1163,13 +1292,15 @@ refit_split <- function(plan, meta, validation_frac = 0.15, predpoints = NULL) {
   }
   do.call(knndm_folds, c(list(meta = meta, k = k, predpoints = pp,
                               test_ids = test_ids, crs = kn$crs %||% 4326,
-                              project_to = project_to, seed = seed), args))
+                              project_to = project_to, seed = seed,
+                              calibration_ids = calibration_ids), args))
 }
 
 # A region plan keeps each folded row's group in its assignment (region_folds()
-# writes it there). The test rows get a group of their own, which the frozen
-# test set then keeps out of every fold; k is capped at the groups there are.
-.refit_region_plan <- function(plan, meta, k, test_ids, seed) {
+# writes it there). The rows outside the folds -- the test set, and the
+# calibration set -- get a group of their own, which the frozen sets then keep
+# out of every fold; k is capped at the groups there are.
+.refit_region_plan <- function(plan, meta, k, test_ids, seed, calibration_ids = NULL) {
   asg <- plan$assignment
   if (is.null(asg) || !"group" %in% names(asg)) {
     stop("This region plan does not carry its groups, so the refit cannot cut ",
@@ -1180,15 +1311,17 @@ refit_split <- function(plan, meta, validation_frac = 0.15, predpoints = NULL) {
     stop("The region plan names ", sum(is.na(pos)), " sample_id(s) this store ",
          "does not hold.", call. = FALSE)
   }
-  g <- rep(".test", nrow(meta))
+  g <- rep(".held_out", nrow(meta))
   g[pos] <- as.character(asg$group)
-  test_pos <- if (length(test_ids)) match(as.character(test_ids), as.character(meta$sample_id)) else integer(0)
-  if (!setequal(which(g == ".test"), test_pos)) {
-    stop("The region plan's groups do not cover every row outside its test set.",
-         call. = FALSE)
+  id_pos <- function(ids) {
+    if (length(ids)) match(as.character(ids), as.character(meta$sample_id)) else integer(0)
+  }
+  if (!setequal(which(g == ".held_out"), c(id_pos(test_ids), id_pos(calibration_ids)))) {
+    stop("The region plan's groups do not cover every row outside its test and ",
+         "calibration sets.", call. = FALSE)
   }
   region_folds(meta, group = g, k = min(k, dplyr::n_distinct(asg$group)),
-               test_ids = test_ids, seed = seed)
+               test_ids = test_ids, seed = seed, calibration_ids = calibration_ids)
 }
 
 # -- validation and reporting -------------------------------------------------
@@ -1217,6 +1350,7 @@ refit_split <- function(plan, meta, validation_frac = 0.15, predpoints = NULL) {
 check_fold_plan <- function(plan, meta = NULL, group = "auto") {
   stopifnot(inherits(plan, "fold_plan"))
   val_seen <- integer(0)
+  cal <- plan$calibration %||% integer(0)
 
   rows <- lapply(seq_along(plan$folds), function(j) {
     f <- plan$folds[[j]]
@@ -1231,10 +1365,21 @@ check_fold_plan <- function(plan, meta = NULL, group = "auto") {
              "validation.", call. = FALSE)
       }
     }
+    # The calibration set is in no fold: a calibration point that trained,
+    # validated or was tested is not a calibration point.
+    if (length(cal) > 0L) {
+      bad <- length(intersect(cal, c(f$train, f$validation, f$test)))
+      if (bad > 0L) {
+        stop("Fold ", j, ": ", bad, " calibration row(s) also appear in train, ",
+             "validation or test.", call. = FALSE)
+      }
+    }
     val_seen <<- c(val_seen, f$validation)
-    tibble::tibble(fold = j, n_train = length(f$train),
-                   n_validation = length(f$validation),
-                   n_test = length(f$test %||% integer(0)))
+    out <- tibble::tibble(fold = j, n_train = length(f$train),
+                          n_validation = length(f$validation),
+                          n_test = length(f$test %||% integer(0)))
+    if (length(cal) > 0L) out$n_calibration <- length(cal)
+    out
   })
 
   # holdout is one fold and validates only its own slice, so "every pooled row
@@ -1282,6 +1427,7 @@ check_fold_plan <- function(plan, meta = NULL, group = "auto") {
         f     <- plan$folds[[j]]
         roles <- list(train = f$train, validation = f$validation)
         if (!is.null(f$test)) roles$test <- f$test
+        if (length(cal) > 0L) roles$calibration <- cal
         assigned <- unlist(lapply(names(roles), function(r)
           stats::setNames(rep(r, length(roles[[r]])), g[roles[[r]]])))
         if (length(assigned) == 0L) next
@@ -1334,14 +1480,23 @@ print.fold_plan <- function(x, ...) {
     # promises are different claims: "validation is independent" decides the
     # config, "test is independent" is the number that leaves the building.
     if ("n_near_test" %in% names(bd)) {
+      has_cal <- "n_near_calibration" %in% names(bd) && sum(bd$n_near_calibration) > 0L
       cat("    near validation: ", format(sum(bd$n_near_validation), big.mark = ","),
           " | near test: ", format(sum(bd$n_near_test), big.mark = ","),
+          if (has_cal) paste0(" | near calibration: ",
+                              format(sum(bd$n_near_calibration), big.mark = ",")) else "",
           " (a point can be both)\n", sep = "")
       if (sum(bd$n_validation_dropped) > 0L) {
-        cat("    validation points dropped for being near test: ",
+        cat("    validation points dropped for being near test",
+            if (has_cal) " or calibration" else "", ": ",
             format(sum(bd$n_validation_dropped), big.mark = ","), "\n", sep = "")
       }
     }
+  }
+  if (length(x$calibration %||% integer(0)) > 0L) {
+    cat("  calibration set: ", format(length(x$calibration), big.mark = ","),
+        " point(s) in no fold -- they calibrate the \"split\" interval and nothing else\n",
+        sep = "")
   }
   invisible(x)
 }

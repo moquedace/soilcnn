@@ -1197,4 +1197,75 @@ cat(sprintf("  refit by region          : %d site(s) validate, %d train, the tes
             length(unique(meta$site[rg$folds[[1]]$train])),
             length(unique(meta$site[gp$folds[[1]]$test]))))
 
+# -- 17. the calibration set: a second test set, for the intervals -----------
+#
+# Carved by the plan's criterion after the test set, in no fold, behind the
+# same buffer, carried verbatim into the refit -- where the final model
+# predicts it and never trains on it -- and part of what a resume is held to.
+spc <- spatial_folds(meta, k = k, test_frac = test_frac, block_size = 25000, seed = 7L,
+                     calibration_frac = 0.15)
+cal <- spc$calibration
+ok["calibration_is_whole_sites"] <- length(cal) > 0L && length(cal) %% n_per == 0L &&
+  length(intersect(unique(meta$site[cal]), unique(meta$site[-cal]))) == 0L
+ok["calibration_is_in_no_fold"] <- !any(cal %in% unlist(lapply(spc$folds, function(f)
+  c(f$train, f$validation, f$test))))
+ok["calibration_leaves_the_test_set_where_it_was"] <-
+  identical(spc$folds[[1]]$test, sp$folds[[1]]$test)
+ok["the_plan_knows_each_rows_unit"] <- length(spc$group) == nrow(meta) &&
+  identical(spc$params$n_calibration, length(cal))
+ok["check_fold_plan_refuses_a_calibration_row_in_a_fold"] <- {
+  bad <- spc
+  bad$folds[[1]]$train <- c(bad$folds[[1]]$train, cal[1])
+  inherits(try(check_fold_plan(bad), silent = TRUE), "try-error")
+}
+for (nm in c("holdout", "random", "region")) {
+  pc <- switch(nm,
+    holdout = holdout(meta, validation_frac = 0.2, test_frac = test_frac, seed = 7L,
+                      calibration_frac = 0.15),
+    random  = random_folds(meta, k = k, test_frac = test_frac, seed = 7L, calibration_frac = 0.15),
+    region  = region_folds(meta, group = meta$site, test_frac = test_frac, seed = 7L,
+                           calibration_frac = 0.15))
+  ok[paste0(nm, "_carves_a_calibration_set_in_no_fold")] <- length(pc$calibration) > 0L &&
+    !any(pc$calibration %in% unlist(lapply(pc$folds, function(f) c(f$train, f$validation, f$test)))) &&
+    inherits(try(check_fold_plan(pc, meta), silent = TRUE), "tbl_df")
+}
+
+# The buffer keeps training points away from the calibration set as from the
+# test set: here a training point beside a calibration point, far from the
+# test and validation sets.
+cb_plan <- structure(list(
+  folds = list(list(train = 4:7, validation = 8:9, test = 1:2)), n_folds = 1L,
+  params = list(), calibration = 3L), class = "fold_plan")
+cb_meta <- tibble::tibble(sample_id = 1:9, x = c(0, 0.1, 20, 20.5, 30, 31, 32, 50, 51), y = 0)
+cb <- apply_buffer(cb_plan, cb_meta, buffer = 1.0)
+ok["the_buffer_protects_the_calibration_set"] <- identical(cb$folds[[1]]$train, 5:7) &&
+  cb$buffer_dropped$n_near_calibration == 1L &&
+  identical(cb$params$buffer_protect, "validation+test+calibration")
+
+# The refit: the same calibration set, outside the refit's training and
+# validation, as a role of its own.
+rsc <- refit_split(spc, meta, 0.15)
+fr1 <- rsc$folds[[1]]
+ok["the_refit_carries_the_calibration_set_as_its_own_role"] <-
+  identical(sort(fr1$calibration), sort(cal)) && identical(sort(rsc$calibration), sort(cal)) &&
+  !any(cal %in% c(fr1$train, fr1$validation, fr1$test))
+gpc <- region_folds(meta, group = meta$site, test_frac = test_frac, seed = 7L,
+                    calibration_frac = 0.15)
+rgc <- refit_split(gpc, meta, 0.15)
+ok["a_region_refit_covers_every_row_outside_test_and_calibration"] <-
+  identical(sort(as.integer(c(rgc$folds[[1]]$train, rgc$folds[[1]]$validation))),
+            as.integer(setdiff(seq_len(nrow(meta)), c(gpc$folds[[1]]$test, gpc$calibration))))
+
+# A resume onto another calibration set is a resume onto other training rows.
+plan_dir2 <- file.path(tempdir(), "test_plan_guard_cal")
+unlink(plan_dir2, recursive = TRUE); dir.create(plan_dir2, recursive = TRUE)
+saveRDS(spc, file.path(plan_dir2, "fold_plan.rds"))
+spc2 <- spc
+spc2$calibration <- spc$calibration[-1]
+ok["a_different_calibration_set_is_caught"] <- isTRUE(check_plan_unchanged(spc, plan_dir2)) &&
+  inherits(try(check_plan_unchanged(spc2, plan_dir2), silent = TRUE), "try-error")
+unlink(plan_dir2, recursive = TRUE)
+cat(sprintf("  calibration set          : %d point(s) in %d whole site(s), in no fold, carried into the refit\n",
+            length(cal), length(unique(meta$site[cal]))))
+
 .report(ok, "test_resample")

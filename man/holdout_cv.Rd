@@ -8,7 +8,8 @@ holdout_cv(
   validation_frac = 0.15,
   test_frac = 0.15,
   group = "auto",
-  seed = 42L
+  seed = 42L,
+  calibration_frac = 0
 )
 }
 \arguments{
@@ -22,6 +23,11 @@ column name, or a vector with one label per row, names the groups.}
 
 \item{seed}{Seed for this split only; the training seeds do not
 move it.}
+
+\item{calibration_frac}{Share of ALL the points held out as a calibration
+set for the intervals, carved after the test set by the same criterion;
+0 for none. It trains nothing and chooses nothing: dsm_final() predicts
+it and calibrates its "split" interval there.}
 }
 \value{
 A \code{resample_spec}, as spatial_cv() returns.

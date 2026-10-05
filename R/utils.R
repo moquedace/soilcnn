@@ -671,7 +671,12 @@ check_plan_unchanged <- function(plan, run_dir, resume = TRUE) {
       identical(sort(as.integer(a$train)),      sort(as.integer(b$train))) &&
       identical(sort(as.integer(a$validation)), sort(as.integer(b$validation))) &&
       identical(sort(as.integer(a$test)),       sort(as.integer(b$test)))
-    }, logical(1)))
+    }, logical(1))) &&
+    # The calibration set is in no fold, and a run cut around another one
+    # trained on rows the asked-for plan keeps out. A plan of before it
+    # existed had none.
+    identical(sort(as.integer(old$calibration %||% integer(0))),
+              sort(as.integer(plan$calibration %||% integer(0))))
   if (same) return(invisible(TRUE))
 
   # Name the difference. "The plan changed" sends someone reading diffs; the
@@ -681,12 +686,12 @@ check_plan_unchanged <- function(plan, run_dir, resume = TRUE) {
   stop(
     "THE FOLD PLAN IN THIS RUN DIRECTORY IS NOT THE PLAN BEING ASKED FOR.\n\n",
     "  ", run_dir, "\n\n",
-    sprintf("  cached : %d fold(s) | train %d | validation %d | test %d\n",
+    sprintf("  cached : %d fold(s) | train %d | validation %d | test %d | calibration %d\n",
             length(old$folds), n_of(old, "train"), n_of(old, "validation"),
-            n_of(old, "test")),
-    sprintf("  asked  : %d fold(s) | train %d | validation %d | test %d\n\n",
+            n_of(old, "test"), length(old$calibration)),
+    sprintf("  asked  : %d fold(s) | train %d | validation %d | test %d | calibration %d\n\n",
             length(plan$folds), n_of(plan, "train"), n_of(plan, "validation"),
-            n_of(plan, "test")),
+            n_of(plan, "test"), length(plan$calibration)),
     "Resuming would rank units fitted on different training sets against each\n",
     "other. Use a new run_id, or delete this directory deliberately if the\n",
     "cached run is genuinely obsolete.",

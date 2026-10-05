@@ -96,6 +96,10 @@ project_xy <- function(x, y, crs = 4326,
 #' @param project_to Projection used for the distance comparison, or NULL to
 #'   use the coordinates as they are (correct only if already projected).
 #' @param seed       Seed, for the sampling kNNDM does internally.
+#' @param calibration_ids Frozen calibration-set sample_ids, as `test_ids`.
+#' @param hold_out_calibration Carve a calibration set for the intervals as the
+#'   test set is carved: kNNDM in k + 1 folds over what the test left, one
+#'   held out. FALSE by default.
 #' @param ...        Passed to CAST::knndm() -- `maxp`, `clustering`,
 #'   `samplesize`, `modeldomain`, `space`.
 #' @return A fold_plan.
@@ -109,7 +113,8 @@ project_xy <- function(x, y, crs = 4326,
 knndm_folds <- function(meta, k = 5L, predpoints = NULL, test_ids = NULL,
                         hold_out_test = FALSE, crs = 4326,
                         project_to = "+proj=moll +lon_0=0 +datum=WGS84 +units=m",
-                        seed = 42L, ...) {
+                        seed = 42L, calibration_ids = NULL,
+                        hold_out_calibration = FALSE, ...) {
   # ARGUMENTS FIRST, DEPENDENCIES SECOND.
   #
   # These checks are true whether or not CAST is installed, so running them
@@ -214,9 +219,27 @@ knndm_folds <- function(meta, k = 5L, predpoints = NULL, test_ids = NULL,
     test <- integer(0)
   }
 
-  pool <- setdiff(seq_len(n), test)
+  # ── the calibration set, carved as the test set is ──────────────────────────
+  #
+  # Frozen ids first; otherwise one fold of a kNNDM run in k + 1 folds over
+  # what the test left, the one closest in size to the mean -- shaped, like the
+  # test fold, to sit at the distances the map predicts at.
+  rest <- setdiff(seq_len(n), test)
+  if (!is.null(calibration_ids)) {
+    calib <- .carve_calibration(meta, rep("p", n), 0, calibration_ids, test, seed)
+  } else if (isTRUE(hold_out_calibration)) {
+    cut   <- run_knndm(rest, k + 1L)
+    sizes <- as.integer(table(factor(cut$clusters, levels = seq_len(k + 1L))))
+    pick  <- which.min(abs(sizes - mean(sizes)))
+    calib <- sort(rest[cut$clusters == pick])
+  } else {
+    calib <- integer(0)
+  }
+
+  pool <- setdiff(seq_len(n), c(test, calib))
   if (length(pool) < k) {
-    stop("Only ", length(pool), " point(s) left after the test set, for k = ",
+    stop("Only ", length(pool), " point(s) left after the test",
+         if (length(calib)) " and calibration sets" else " set", ", for k = ",
          k, " folds.", call. = FALSE)
   }
 
@@ -228,22 +251,28 @@ knndm_folds <- function(meta, k = 5L, predpoints = NULL, test_ids = NULL,
   plan <- .new_fold_plan(
     .folds_from_assignment(assignment, pool, test, k),
     "knndm_folds",
-    list(k = k, test_frac = round(length(test) / n, 4),
-         n_test = length(test), seed = seed,
-         # W IS THE QUALITY OF THE PLAN, not decoration. It is the Wasserstein
-         # distance between the CV and the prediction distance distributions:
-         # small means the folds imitate prediction, large means they do not and
-         # the CV estimate is about a scenario that will not occur.
-         #
-         # It is in the COORDINATE UNITS (metres here), so it is comparable
-         # between plans over the same points and meaningless between datasets
-         # or projections. Read it against the spacing of your own data -- a W
-         # of 100 km is small over a continent and enormous over a farm.
-         W = signif(main$W, 4),
-         W_test_split = if (is.finite(W_test)) signif(W_test, 4) else NA_real_,
-         projection = if (is.null(project_to)) "none (already projected)"
-                      else project_to),
-    meta, assignment = asg
+    c(list(k = k, test_frac = round(length(test) / n, 4),
+           n_test = length(test)),
+      .calibration_params(round(length(calib) / n, 4), calibration_ids, calib, n),
+      list(seed = seed,
+           # W IS THE QUALITY OF THE PLAN, not decoration. It is the Wasserstein
+           # distance between the CV and the prediction distance distributions:
+           # small means the folds imitate prediction, large means they do not
+           # and the CV estimate is about a scenario that will not occur.
+           #
+           # It is in the COORDINATE UNITS (metres here), so it is comparable
+           # between plans over the same points and meaningless between
+           # datasets or projections. Read it against the spacing of your own
+           # data -- a W of 100 km is small over a continent and enormous over
+           # a farm.
+           W = signif(main$W, 4),
+           W_test_split = if (is.finite(W_test)) signif(W_test, 4) else NA_real_,
+           projection = if (is.null(project_to)) "none (already projected)"
+                        else project_to)),
+    # kNNDM has no blocks: the unit of a row is its profile, as random folds
+    # group them -- or the row, where profile_id cannot say.
+    meta, assignment = asg, calibration = calib,
+    group = tryCatch(.resolve_row_group(meta, "auto"), error = function(e) NULL)
   )
   # WHAT A REFIT NEEDS TO CUT ITS VALIDATION THE SAME WAY. The final model
   # stops on a validation set carved by the tuning plan's own criterion

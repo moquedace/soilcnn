@@ -13,7 +13,9 @@ spatial_folds(
   buffer_metric = c("chebyshev", "euclidean"),
   test_ids = NULL,
   seed = 42L,
-  blocks_per_fold = 10L
+  blocks_per_fold = 10L,
+  calibration_frac = 0,
+  calibration_ids = NULL
 )
 }
 \arguments{
@@ -40,6 +42,14 @@ centres are within the window in both axes.}
 move it.}
 
 \item{blocks_per_fold}{Blocks per fold, for a \code{block_size} of NULL.}
+
+\item{calibration_frac}{Share of ALL the points held out as a calibration
+set for the intervals, carved after the test set by the same criterion;
+0 for none. It trains nothing and chooses nothing: dsm_final() predicts
+it and calibrates its "split" interval there.}
+
+\item{calibration_ids}{Sample ids that ARE the calibration set, in place of
+\code{calibration_frac}, as \code{test_ids} is for the test set.}
 }
 \value{
 A \code{fold_plan} with \code{k} folds.

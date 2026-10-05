@@ -186,6 +186,20 @@ if (has_cast && has_sf) {
     share > 0.10 && share < 0.45
   }
 
+  # The calibration set, carved as the test set is: a kNNDM fold of k + 1 over
+  # what the test left, in no fold; or frozen ids, never test ids.
+  plan_c <- knndm_folds(meta, k = 3L, predpoints = predpts, hold_out_test = TRUE,
+                        hold_out_calibration = TRUE, seed = 7L)
+  ok["hold_out_calibration_carves_a_set_in_no_fold"] <-
+    length(plan_c$calibration) > 0L &&
+    length(intersect(plan_c$calibration, plan_c$folds[[1]]$test)) == 0L &&
+    !any(plan_c$calibration %in% unlist(lapply(plan_c$folds, function(f) c(f$train, f$validation)))) &&
+    is.data.frame(check_fold_plan(plan_c, meta = meta))
+  plan_cf <- knndm_folds(meta, k = 3L, predpoints = predpts, seed = 7L,
+                         calibration_ids = meta$sample_id[plan_c$calibration])
+  ok["frozen_calibration_ids_are_taken_as_given"] <-
+    setequal(plan_cf$calibration, plan_c$calibration)
+
   # TWO FOLDS NEED A maxp ABOVE ONE HALF. CAST's default is 0.5 and its bound
   # is strict, so kNNDM in two folds stopped inside CAST with a message that
   # named neither k nor where maxp goes. It is refused before CAST, by name --

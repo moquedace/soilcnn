@@ -294,16 +294,32 @@ print.dsm_data <- function(x, ...) {
 #'   against the points, and dsm_train() does that itself.
 #' @examples
 #' spatial_cv(k = 5, block_size = "auto", buffer = "auto")
+#' # 15% of the points held out to calibrate split conformal intervals
+#' spatial_cv(k = 5, calibration_frac = 0.15)
 #' @export
 spatial_cv <- function(k = 5L, block_size = "auto", buffer = "auto",
                        test_frac = 0.15, max_share = 0.10,
                        buffer_metric = c("chebyshev", "euclidean"),
-                       seed = 42L) {
+                       seed = 42L, calibration_frac = 0) {
+  held <- .check_held_out(test_frac, calibration_frac, "spatial_cv")
   .resample_spec(.kind = "spatial", k = .check_k(k, "spatial_cv"), block_size = block_size,
-                 buffer = buffer, test_frac = .check_frac(test_frac, "spatial_cv", "test_frac"),
+                 buffer = buffer, test_frac = held[["test_frac"]],
                  max_share = .check_frac(max_share, "spatial_cv", "max_share", zero_ok = FALSE,
                                          one_ok = TRUE),
-                 buffer_metric = match.arg(buffer_metric), seed = seed)
+                 buffer_metric = match.arg(buffer_metric), seed = seed,
+                 calibration_frac = held[["calibration_frac"]])
+}
+
+# The test and calibration shares, each a fraction, and together leaving
+# something to train on.
+.check_held_out <- function(test_frac, calibration_frac, what) {
+  tf <- .check_frac(test_frac, what, "test_frac")
+  cf <- .check_frac(calibration_frac, what, "calibration_frac")
+  if (tf + cf >= 1) {
+    stop(what, "(): test_frac + calibration_frac must leave something to train on; got ",
+         tf, " + ", cf, ".", call. = FALSE)
+  }
+  c(test_frac = tf, calibration_frac = cf)
 }
 
 #' Folds matched to where the map will be predicted (kNNDM).
@@ -335,10 +351,11 @@ spatial_cv <- function(k = 5L, block_size = "auto", buffer = "auto",
 knndm_cv <- function(k = 5L, predpoints = NULL, hold_out_test = FALSE,
                      crs = 4326,
                      project_to = "+proj=moll +lon_0=0 +datum=WGS84 +units=m",
-                     seed = 42L, ...) {
+                     seed = 42L, hold_out_calibration = FALSE, ...) {
   .resample_spec(.kind = "knndm", k = .check_k(k, "knndm_cv"), predpoints = predpoints,
                  hold_out_test = hold_out_test, crs = crs,
-                 project_to = project_to, seed = seed, extra = list(...))
+                 project_to = project_to, seed = seed,
+                 hold_out_calibration = isTRUE(hold_out_calibration), extra = list(...))
 }
 
 #' Random k-fold. Ignores geography by construction.
@@ -353,10 +370,12 @@ knndm_cv <- function(k = 5L, predpoints = NULL, hold_out_test = FALSE,
 #' @examples
 #' random_cv(k = 10)
 #' @export
-random_cv <- function(k = 5L, test_frac = 0.15, group = "auto", seed = 42L) {
+random_cv <- function(k = 5L, test_frac = 0.15, group = "auto", seed = 42L,
+                      calibration_frac = 0) {
+  held <- .check_held_out(test_frac, calibration_frac, "random_cv")
   .resample_spec(.kind = "random", k = .check_k(k, "random_cv"),
-                 test_frac = .check_frac(test_frac, "random_cv", "test_frac"),
-                 group = group, seed = seed)
+                 test_frac = held[["test_frac"]],
+                 group = group, seed = seed, calibration_frac = held[["calibration_frac"]])
 }
 
 #' A single train/validation/test split.
@@ -367,15 +386,18 @@ random_cv <- function(k = 5L, test_frac = 0.15, group = "auto", seed = 42L) {
 #' holdout_cv(validation_frac = 0.2)
 #' @export
 holdout_cv <- function(validation_frac = 0.15, test_frac = 0.15,
-                       group = "auto", seed = 42L) {
+                       group = "auto", seed = 42L, calibration_frac = 0) {
   validation_frac <- .check_frac(validation_frac, "holdout_cv", "validation_frac", zero_ok = FALSE)
-  test_frac <- .check_frac(test_frac, "holdout_cv", "test_frac")
-  if (validation_frac + test_frac >= 1) {
+  held <- .check_held_out(test_frac, calibration_frac, "holdout_cv")
+  # validation_frac is a share of what the held-out sets leave, so it is that
+  # remainder it must leave something of.
+  if (validation_frac + held[["test_frac"]] >= 1) {
     stop("holdout_cv(): validation_frac + test_frac must leave something to train on; got ",
-         validation_frac, " + ", test_frac, ".", call. = FALSE)
+         validation_frac, " + ", held[["test_frac"]], ".", call. = FALSE)
   }
   .resample_spec(.kind = "holdout", validation_frac = validation_frac,
-                 test_frac = test_frac, group = group, seed = seed)
+                 test_frac = held[["test_frac"]], group = group, seed = seed,
+                 calibration_frac = held[["calibration_frac"]])
 }
 
 #' Leave-region-out, on a grouping that already exists (biome, catchment, ...).
@@ -387,9 +409,12 @@ holdout_cv <- function(validation_frac = 0.15, test_frac = 0.15,
 #' ex <- example_landscape()
 #' region_cv(group = ex$profiles$survey)
 #' @export
-region_cv <- function(group, k = NULL, test_frac = 0.15, seed = 42L) {
+region_cv <- function(group, k = NULL, test_frac = 0.15, seed = 42L,
+                      calibration_frac = 0) {
+  held <- .check_held_out(test_frac, calibration_frac, "region_cv")
   .resample_spec(.kind = "region", group = group, k = .check_k(k, "region_cv", allow_null = TRUE),
-                 test_frac = .check_frac(test_frac, "region_cv", "test_frac"), seed = seed)
+                 test_frac = held[["test_frac"]], seed = seed,
+                 calibration_frac = held[["calibration_frac"]])
 }
 
 #' Print a `resample_spec`
@@ -424,6 +449,9 @@ print.resample_spec <- function(x, ...) {
 #' @param data     From dsm_load().
 #' @param test_ids Sample ids to force into the test set, so a frozen test set
 #'   survives a change of method.
+#' @param calibration_ids Sample ids to force into the calibration set, in
+#'   place of the `calibration_frac` of `spec`: several designs then calibrate
+#'   their "split" intervals on the same points.
 #' @param windows  Windows the grid will use, for `buffer = "auto"`.
 #' @param verbose  Print the block size that `block_size = "auto"` chose.
 #' @return A `fold_plan`, already checked with check_fold_plan().
@@ -438,7 +466,7 @@ print.resample_spec <- function(x, ...) {
 #'                    windows = c(3, 7))
 #' @export
 resolve_resampling <- function(spec, data, test_ids = NULL, windows = NULL,
-                               verbose = TRUE) {
+                               verbose = TRUE, calibration_ids = NULL) {
   if (inherits(spec, "fold_plan")) return(spec)
   stopifnot(inherits(spec, "resample_spec"), inherits(data, "dsm_data"))
   meta <- data$store$meta
@@ -477,6 +505,8 @@ resolve_resampling <- function(spec, data, test_ids = NULL, windows = NULL,
          "random_cv(), holdout_cv() or region_cv().", call. = FALSE)
   }
 
+  # A spec made before the calibration set existed has no share: none.
+  cal_frac <- spec$calibration_frac %||% 0
   plan <- switch(spec$kind,
     spatial = {
       bs <- spec$block_size
@@ -489,22 +519,28 @@ resolve_resampling <- function(spec, data, test_ids = NULL, windows = NULL,
                     block_size = as.numeric(bs),
                     buffer = auto_buffer(spec$buffer),
                     buffer_metric = spec$buffer_metric,
-                    test_ids = test_ids, seed = spec$seed)
+                    test_ids = test_ids, seed = spec$seed,
+                    calibration_frac = cal_frac, calibration_ids = calibration_ids)
     },
     knndm   = do.call(knndm_folds, c(
       list(meta = meta, k = spec$k, predpoints = spec$predpoints,
            test_ids = test_ids, hold_out_test = spec$hold_out_test,
-           crs = spec$crs, project_to = spec$project_to, seed = spec$seed),
+           crs = spec$crs, project_to = spec$project_to, seed = spec$seed,
+           calibration_ids = calibration_ids,
+           hold_out_calibration = isTRUE(spec$hold_out_calibration)),
       spec$extra)),
     random  = random_folds(meta, k = spec$k, test_frac = spec$test_frac,
                            test_ids = test_ids, seed = spec$seed,
-                           group = spec$group),
+                           group = spec$group, calibration_frac = cal_frac,
+                           calibration_ids = calibration_ids),
     holdout = holdout(meta, validation_frac = spec$validation_frac,
                       test_frac = spec$test_frac, test_ids = test_ids,
-                      seed = spec$seed, group = spec$group),
+                      seed = spec$seed, group = spec$group,
+                      calibration_frac = cal_frac, calibration_ids = calibration_ids),
     region  = region_folds(meta, group = spec$group, k = spec$k,
                            test_frac = spec$test_frac, test_ids = test_ids,
-                           seed = spec$seed),
+                           seed = spec$seed, calibration_frac = cal_frac,
+                           calibration_ids = calibration_ids),
     stop("Unknown resampling kind: ", spec$kind, call. = FALSE)
   )
   # Proven against the data, not assumed from the constructor.
@@ -561,6 +597,9 @@ resolve_resampling <- function(spec, data, test_ids = NULL, windows = NULL,
 #' @param max_ram_gb RAM the side-by-side workers may use together. NULL for
 #'   70% of what is available when they start.
 #' @param test_ids   Sample ids forced into the test set.
+#' @param calibration_ids Sample ids forced into the calibration set (see
+#'   `calibration_frac` in [spatial_cv()]): in no fold, kept for the "split"
+#'   intervals [dsm_final()] calibrates.
 #' @param output_dir Where runs go; each run is a directory under it.
 #'   Required: nothing is written where nobody said -- a folder of your
 #'   project, or `tempdir()` for a try.
@@ -602,8 +641,8 @@ dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
                       base_seed = 42L, device = NULL, n_cores = NULL,
                       in_session = !is.null(device), threads_per_unit = 5L,
                       max_ram_gb = NULL,
-                      test_ids = NULL, resume = TRUE, evaluate_test = FALSE,
-                      verbose = TRUE, ...) {
+                      test_ids = NULL, calibration_ids = NULL, resume = TRUE,
+                      evaluate_test = FALSE, verbose = TRUE, ...) {
   # Asked for where it is first used (.check_output_dir()), after every other
   # argument is checked: a call wrong in two ways says the other one first.
   output_dir <- if (missing(output_dir)) NULL else output_dir
@@ -717,7 +756,8 @@ dsm_train <- function(data, model = "cnn", resampling = spatial_cv(),
   } else data$store$window_sizes
 
   plan <- resolve_resampling(resampling, data, test_ids = test_ids,
-                             windows = windows_needed, verbose = verbose)
+                             windows = windows_needed, verbose = verbose,
+                             calibration_ids = calibration_ids)
   .check_repetitions(plan, n_seeds)
 
   if (identical(model$input, "patches")) {

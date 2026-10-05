@@ -4,7 +4,13 @@
 \alias{random_cv}
 \title{Random k-fold. Ignores geography by construction.}
 \usage{
-random_cv(k = 5L, test_frac = 0.15, group = "auto", seed = 42L)
+random_cv(
+  k = 5L,
+  test_frac = 0.15,
+  group = "auto",
+  seed = 42L,
+  calibration_frac = 0
+)
 }
 \arguments{
 \item{k}{Number of folds.}
@@ -17,6 +23,11 @@ column name, or a vector with one label per row, names the groups.}
 
 \item{seed}{Seed for the partition only (see with_local_seed): a fixed plan
 reproduces even when the training seeds change.}
+
+\item{calibration_frac}{Share of ALL the points held out as a calibration
+set for the intervals, carved after the test set by the same criterion;
+0 for none. It trains nothing and chooses nothing: dsm_final() predicts
+it and calibrates its "split" interval there.}
 }
 \value{
 A \code{resample_spec}, as spatial_cv() returns.

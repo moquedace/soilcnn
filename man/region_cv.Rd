@@ -4,7 +4,7 @@
 \alias{region_cv}
 \title{Leave-region-out, on a grouping that already exists (biome, catchment, ...).}
 \usage{
-region_cv(group, k = NULL, test_frac = 0.15, seed = 42L)
+region_cv(group, k = NULL, test_frac = 0.15, seed = 42L, calibration_frac = 0)
 }
 \arguments{
 \item{group}{Group labels, one per row of \code{meta}.}
@@ -15,6 +15,11 @@ region_cv(group, k = NULL, test_frac = 0.15, seed = 42L)
 
 \item{seed}{Seed for this split only; the training seeds do not
 move it.}
+
+\item{calibration_frac}{Share of ALL the points held out as a calibration
+set for the intervals, carved after the test set by the same criterion;
+0 for none. It trains nothing and chooses nothing: dsm_final() predicts
+it and calibrates its "split" interval there.}
 }
 \value{
 A \code{resample_spec}, as spatial_cv() returns.

@@ -23,6 +23,7 @@ dsm_train(
   threads_per_unit = 5L,
   max_ram_gb = NULL,
   test_ids = NULL,
+  calibration_ids = NULL,
   resume = TRUE,
   evaluate_test = FALSE,
   verbose = TRUE,
@@ -100,6 +101,10 @@ another count is refused. 5 was measured best here (T1, T2).}
 70\% of what is available when they start.}
 
 \item{test_ids}{Sample ids forced into the test set.}
+
+\item{calibration_ids}{Sample ids forced into the calibration set (see
+\code{calibration_frac} in \code{\link[=spatial_cv]{spatial_cv()}}): in no fold, kept for the "split"
+intervals \code{\link[=dsm_final]{dsm_final()}} calibrates.}
 
 \item{resume}{Keep the units of \code{run_id} that already finished,
 matched by their hyperparameters rather than their label. A fold plan
