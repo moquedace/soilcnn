@@ -52,21 +52,11 @@ and the Caribbean.
 knitr::include_graphics("figures/workflow.png")
 ```
 
-The figures come from a real application: soil organic carbon stocks at
-0-30 cm over Latin America and the Caribbean, from about 26,000 profiles and
-174 predictors at a nominal 250 m resolution. The completed extraction store
-contains 25,887 profiles. The geographic raster grid has latitude-dependent
-ground dimensions.
-
-```{r, eval = TRUE, echo = FALSE, out.width = "100%", fig.cap = "Figure 2. The full application dataset: profile locations and the predictor footprint. Uneven coverage motivates spatial validation and applicability diagnostics. The map uses a spherical Lambert azimuthal equal-area projection centred at 75 W / 15 S, with equal horizontal and vertical scales."}
-knitr::include_graphics("figures/observations.png")
-```
-
 ```{r}
 library(soilcnn)
 ```
 
-## 1. Points and rasters become a patch store
+## 1. Prepare and load the patch store
 
 `dsm_prepare()` reads the points and every raster in a folder, runs the
 quality control, classifies the predictors, and cuts a patch around each point
@@ -89,6 +79,26 @@ store <- dsm_prepare(
 `windows` is required. A window's ground extent is its width times the
 resolution, so no default would be right at every resolution.
 
+```{r}
+data <- dsm_load(store)
+```
+
+`dsm_load()` opens the store and reads its own tables. It refuses a store whose
+recipe does not fit together. It also refuses one whose manifest says the
+extraction did not finish.
+
+The figures come from a real application: soil organic carbon stocks at
+0-30 cm over Latin America and the Caribbean, from about 26,000 profiles and
+174 predictors at a nominal 250 m resolution. The completed extraction store
+contains 25,887 profiles. The geographic raster grid has latitude-dependent
+ground dimensions.
+
+```{r, eval = TRUE, echo = FALSE, out.width = "100%", fig.cap = "Figure 2. The full application dataset: profile locations and the predictor footprint. Uneven coverage motivates spatial validation and applicability diagnostics. The map uses a spherical Lambert azimuthal equal-area projection centred at 75 W / 15 S, with equal horizontal and vertical scales."}
+knitr::include_graphics("figures/observations.png")
+```
+
+## 2. Understand the multiscale inputs
+
 The network reads a stack of predictor channels around each profile. The
 illustration below uses separate high-resolution rasters at one of the
 application's profiles, in south-eastern Brazil: NDVI, elevation and clay,
@@ -104,6 +114,9 @@ size. Their ground footprints are approximately 77 x 83 m, 231 x 249 m and
 colour ranges, shown by their own bars, to reveal variation at both extents.
 The three window sizes share one range within each channel.
 
+<details class="source-note">
+<summary>Source resolution, units and provenance</summary>
+
 Fine grid spacing does not imply equally fine original information in every
 predictor. The clay source is SoilGrids 2.0, whose source predictions are at
 250 m; alignment on the 28 m grid does not add independent fine-scale soil
@@ -112,6 +125,8 @@ information. Clay is in g/kg, as documented by
 Elevation is in metres
 ([EDTM version 1.1](https://doi.org/10.5281/zenodo.7676373)). NDVI is
 dimensionless.
+
+</details>
 
 ```{r, eval = TRUE, echo = FALSE, out.width = "100%", fig.cap = "Figure 3. Landscape context and native-cell windows from the high-resolution example. The marker identifies the central cell. Bars show source raster values; elevation and clay labels are rounded for readability. Window outlines are enlarged in the detail, using solid (3), dashed (9) and dotted (15) borders. This illustration is separate from the 250 m trial."}
 knitr::include_graphics("figures/patches.png")
@@ -124,16 +139,6 @@ also includes single-scale models and alternative fusion strategies.
 ```{r, eval = TRUE, echo = FALSE, out.width = "100%", fig.cap = "Figure 4. Conceptual multiscale architecture. Predictor scaling is fitted on the training rows of each fold."}
 knitr::include_graphics("figures/architecture.png")
 ```
-
-## 2. Load
-
-```{r}
-data <- dsm_load(store)
-```
-
-`dsm_load()` opens the store and reads its own tables. It refuses a store whose
-recipe does not fit together. It also refuses one whose manifest says the
-extraction did not finish.
 
 ## 3. Decide who trains and who scores
 
@@ -485,6 +490,20 @@ not establish that a theme is uninformative in other models, regions or
 samples. Read each ranking as a description of the
 fitted model, and agreement between designs as evidence of ranking stability
 under the validation choices examined.
+
+## A reference for your own run
+
+Paths below are relative to the corresponding store or run directory.
+
+| Stage | Object | Main output | What to check |
+|:--|:--|:--|:--|
+| Prepare and load | `store`, `data` | `recipe.rds`, `patch_manifest.rds`, `patch_meta.csv` | Completed extraction, predictor alignment and QC |
+| Resolve validation | `plan` | `print(plan)` | Fold geometry, buffers and held-out sets |
+| Tune and select | `fit` | `comparison/`, `fit$by_config` | Validation scores, seed variability and one-SE selection |
+| Freeze and test | Selected configuration | Frozen selection and test scores in the run | Selection recorded before test scoring |
+| Refit and calibrate | `final` | `final_report.md`, interval summaries | Hyperparameters, test coverage and interval width |
+| Predict | `map` | `bands.csv`, VRT bands | Probe agreement, band meanings and applicability |
+| Interpret | `perm`, `shap` | Importance tables; maps from `importance_map()` | Method, units, theme grouping and ranking stability |
 
 ## About the illustrations
 

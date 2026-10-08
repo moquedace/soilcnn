@@ -25,3 +25,7 @@ th { color:var(--blue); background:#f3f6f5; }
 #TOC { background: #f3f6f5; padding: 18px 24px; border-left: 3px solid #60734f; margin: 26px 0 36px; }
 #TOC ul { margin: 6px 0; }
 h3 { margin-top: 2em; color: #253840; border-left: 3px solid #60734f; padding-left: 12px; }
+
+.source-note { margin: 24px 0; padding: 14px 18px; background: #f3f6f5; border-left: 3px solid #8eaab6; font-size: .90em; }
+.source-note summary { cursor: pointer; color: #246589; font-weight: 600; }
+.source-note[open] summary { margin-bottom: 14px; }
