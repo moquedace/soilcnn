@@ -43,16 +43,16 @@ metres_lat<-111132.92-559.82*cos(2*hp[2]*pi/180)+1.175*cos(4*hp[2]*pi/180)
 metres_lon<-111412.84*cos(hp[2]*pi/180)-93.5*cos(3*hp[2]*pi/180)
 pixel_m<-c(hm$resolucao_x[1]*metres_lon,hm$resolucao_y[1]*metres_lat)
 start("patches",1800,2250)
-heading("02 / MODEL INPUT","From landscape to multiscale patches",
-        "An aligned high-resolution example at the same soil profile. Native raster cells are preserved; no interpolation is applied.")
+heading("MODEL INPUT","From landscape to multiscale patches",
+        "Aligned rasters at one soil profile; the windows preserve the input cells.")
 htitles<-c("NDVI / unitless","Elevation / m","Clay / g/kg")
 left<-c(.155,.445,.735); pw<-.215
 for(j in 1:3) {
  x<-left[j]; txt(x,.808,htitles[j],1.02,bold=TRUE)
  tile(hd[[j]],x,.625,x+pw,.784,pal[[j]],hlim[[j]])
  for(k in 1:80) rect(x+(k-1)*pw/80,.61,x+k*pw/80,.616,col=pal[[j]][k],border=NA)
- txt(x,.599,format(round(hlim[[j]][1],2),trim=TRUE),.60,C["muted"])
- txt(x+pw,.599,format(round(hlim[[j]][2],2),trim=TRUE),.60,C["muted"],adj=1)
+ txt(x,.599,format(round(hlim[[j]][1],if(j==1)2 else 0),trim=TRUE),.60,C["muted"])
+ txt(x+pw,.599,format(round(hlim[[j]][2],if(j==1)2 else 0),trim=TRUE),.60,C["muted"],adj=1)
  # Nested native-cell windows, positioned relative to the entire raster crop.
  nx<-length(hcx);ny<-length(hcy)
  for(w in c(15,9,3)) {
@@ -63,6 +63,14 @@ for(j in 1:3) {
   rect(xx-w*dx/2,yy-w*dy/2,xx+w*dx/2,yy+w*dy/2,
        border=C["ink"],lwd=1.2,lty=if(w==3)1 else if(w==9)2 else 3)
  }
+ # A magnified overlay identifies the nested windows without implying a larger ground footprint.
+ zx <- x + .135; zy <- .655; zw <- .066; zh <- zw * 1800 / 2250
+ rect(zx-.005,zy-.006,zx+zw+.005,zy+zh+.018,col=adjustcolor("white",.94),border=C["line"])
+ for(w in c(15,9,3)) rect(zx+zw/2-w/15*zw/2,zy+zh/2-w/15*zh/2,
+                          zx+zw/2+w/15*zw/2,zy+zh/2+w/15*zh/2,
+                          border=C["ink"],lty=if(w==3)1 else if(w==9)2 else 3,lwd=1)
+ txt(zx+zw/2,zy+zh+.010,"Window outlines",.46,C["muted"],adj=.5)
+ segments(xx+15*dx/2,yy,zx-.005,zy+zh/2,col=C["muted"],lwd=.7)
  for(i in 1:3) {
   w<-c(3,9,15)[i];half<-(w-1)/2
   d<-hd[[j]];d<-d[d$x %in% hcx[(hcol-half):(hcol+half)] &
@@ -82,8 +90,8 @@ for(j in 1:3) {
   points(x+pw/2,y+height/2,pch=21,bg="white",col=C["ink"],cex=.65,lwd=1)
  }
  for(k in 1:80) rect(x+(k-1)*pw/80,.032,x+k*pw/80,.04,col=pal[[j]][k],border=NA)
- txt(x,.022,format(round(hpatchlim[[j]][1],2),trim=TRUE),.64,C["muted"])
- txt(x+pw,.022,format(round(hpatchlim[[j]][2],2),trim=TRUE),.64,C["muted"],adj=1)
+ txt(x,.022,format(round(hpatchlim[[j]][1],if(j==1)2 else 0),trim=TRUE),.64,C["muted"])
+ txt(x+pw,.022,format(round(hpatchlim[[j]][2],if(j==1)2 else 0),trim=TRUE),.64,C["muted"],adj=1)
 }
 txt(.035,.693,"Context",.88,bold=TRUE)
 txt(.035,.666,"~4 km",.74,C["muted"])
@@ -92,7 +100,7 @@ for(i in 1:3) {
  txt(.035,y+.012,paste0(w," x ",w),.95,bold=TRUE)
  txt(.035,y-.017,sprintf("~%d x %d m",round(w*pixel_m[1]),round(w*pixel_m[2])),.69,C["muted"])
 }
-txt(.155,.007,sprintf("Cells: ~%.1f x %.1f m. Separate landscape and patch colour ranges; the three window sizes share one range per channel.",pixel_m[1],pixel_m[2]),.65,C["muted"])
+txt(.155,.007,sprintf("Cells: ~%.1f x %.1f m. Windows: solid 3, dashed 9, dotted 15. Patch scales are shared within channels.",pixel_m[1],pixel_m[2]),.65,C["muted"])
 finish()
 writeLines(c(paste("High-resolution source crops:",highres_dir),
              paste("Central profile:",hp[1],hp[2]),

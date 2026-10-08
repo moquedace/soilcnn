@@ -113,7 +113,7 @@ Elevation is in metres
 ([EDTM version 1.1](https://doi.org/10.5281/zenodo.7676373)). NDVI is
 dimensionless.
 
-```{r, eval = TRUE, echo = FALSE, out.width = "100%", fig.cap = "Figure 3. Landscape context and native-cell windows from the high-resolution example. The marker identifies the central cell. Bars show source raster values. This illustration is separate from the 250 m trial."}
+```{r, eval = TRUE, echo = FALSE, out.width = "100%", fig.cap = "Figure 3. Landscape context and native-cell windows from the high-resolution example. The marker identifies the central cell. Bars show source raster values; elevation and clay labels are rounded for readability. Window outlines are enlarged in the detail, using solid (3), dashed (9) and dotted (15) borders. This illustration is separate from the 250 m trial."}
 knitr::include_graphics("figures/patches.png")
 ```
 
