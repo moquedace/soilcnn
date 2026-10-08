@@ -46,6 +46,7 @@ if (requireNamespace("soilcnn", quietly = TRUE)) {
   # Plot cached results without loading the model-training runtime.
   base::source(file.path(root, "R", "metrics.R"))
   base::source(file.path(root, "R", "block_bootstrap.R"))
+  base::source(file.path(root, "R", "resample.R"))
 }
 csv <- function(p) utils::read.csv2(p, stringsAsFactors = FALSE)
 designs <- c(spatial = "Spatial blocks", knndm = "kNNDM", random = "Random folds",
@@ -123,38 +124,66 @@ paired <- do.call(rbind, lapply(setdiff(names(designs), "spatial"), function(d) 
                        weights = "profile", n_boot = 2000L, seed = 20261004L)
   data.frame(design = d, diff = b$difference, lo = b$ci_low, hi = b$ci_high)
 }))
-start("trial_designs", 1800, 1450)
-heading("VALIDATION DESIGNS / THE APPLICATION",
-        "Five designs, one test set",
-        sprintf("Each design's final model on the same %s test profiles; the error against the spatial design's, by 100 km blocks.",
-                format(length(obs), big.mark = ",")))
-lim <- range(c(obs, unlist(lapply(test, `[[`, "pred"))), na.rm = TRUE)
+start("trial_designs", 1800, 1750)
+heading("VALIDATION / THE APPLICATION", "Five designs, one independent test set",
+        sprintf("%s test profiles. Common zoom for the central distribution; log-scale insets retain every extreme.", length(obs)))
+full_lim <- range(c(0, obs, unlist(lapply(test, `[[`, "pred"))), na.rm = TRUE)
+lim <- c(0, as.numeric(quantile(c(obs, unlist(lapply(test, `[[`, "pred"))), .95, na.rm = TRUE)))
+lim[2] <- ceiling(lim[2] / 20) * 20
 for (i in seq_along(designs)) {
   d <- names(designs)[i]; j <- (i - 1) %% 3; row <- (i - 1) %/% 3
-  bx0 <- .07 + j * .31; by0 <- .52 - row * .40; s <- .25
-  rect(bx0, by0, bx0 + s, by0 + s, col = C["pale"], border = NA)
-  segments(bx0, by0, bx0 + s, by0 + s, col = C["line"], lwd = 1)
-  px <- bx0 + (test[[d]]$obs - lim[1]) / diff(lim) * s
-  py <- by0 + (test[[d]]$pred - lim[1]) / diff(lim) * s
-  points(px, py, pch = 16, cex = .3, col = grDevices::adjustcolor(C["blue"], .35))
+  bx0 <- .075 + j * .31; by0 <- .49 - row * .38; sw <- .24
+  sh <- sw * par("pin")[1] / par("pin")[2]
+  rect(bx0, by0, bx0 + sw, by0 + sh, col = C["pale"], border = C["line"])
+  xp <- function(v) bx0 + (v - lim[1]) / diff(lim) * sw
+  yp <- function(v) by0 + (v - lim[1]) / diff(lim) * sh
+  for (v in pretty(lim, 4)) if (v >= lim[1] && v <= lim[2]) {
+    txt(xp(v), by0 - .018, fmt_value(v), .64, C["muted"], adj = .5)
+    txt(bx0 - .010, yp(v), fmt_value(v), .64, C["muted"], adj = 1)
+    segments(xp(v), by0, xp(v), by0 + sh, col = "#E7ECEA", lwd = .6)
+    segments(bx0, yp(v), bx0 + sw, yp(v), col = "#E7ECEA", lwd = .6)
+  }
+  segments(bx0, by0, bx0 + sw, by0 + sh, col = C["muted"], lty = 2, lwd = 1.1)
+  keep <- test[[d]]$obs <= lim[2] & test[[d]]$pred <= lim[2] & test[[d]]$obs >= 0 & test[[d]]$pred >= 0
+  points(xp(test[[d]]$obs[keep]), yp(test[[d]]$pred[keep]), pch = 16, cex = .48,
+         col = grDevices::adjustcolor(C["blue"], .55))
+  # The inset keeps every profile, the extremes beyond the zoom included, on
+  # log1p axes: on a linear 0-to-max scale the bulk piled into one corner and
+  # read as data of the main panel. It sits top left, where these models leave
+  # the fewest points to hide: 0 to 5 of 442 per panel in sample10, against
+  # 27 to 40 top right, on the 1:1 line. Its label sits in its own empty
+  # corner; the dotted square is the main panel's zoom.
+  iw <- .07; ih <- iw * par("pin")[1] / par("pin")[2]
+  ix <- bx0 + .006; iy <- by0 + sh - ih - .006
+  lq <- function(v) log1p(pmax(v, 0)) / log1p(full_lim[2])
+  rect(ix, iy, ix + iw, iy + ih, col = "white", border = C["line"])
+  rect(ix, iy, ix + lq(lim[2]) * iw, iy + lq(lim[2]) * ih, border = C["muted"], lty = 3, lwd = .6)
+  segments(ix, iy, ix + iw, iy + ih, col = C["muted"], lty = 2)
+  points(ix + lq(test[[d]]$obs) * iw, iy + lq(test[[d]]$pred) * ih, pch = 16, cex = .23,
+         col = grDevices::adjustcolor(C["blue"], .5))
+  txt(ix + .004, iy + ih - .0065, paste0("log scale, 0-", fmt_value(full_lim[2])), .46, C["muted"])
   m <- calc_metrics(test[[d]]$obs, test[[d]]$pred)
-  txt(bx0, by0 + s + .03, designs[[d]], .95, bold = TRUE)
-  txt(bx0, by0 - .03, sprintf("CCC %.2f | MAE %.1f | bias %+.1f", m$ccc, m$mae, m$bias), .68, C["muted"])
+  txt(bx0, by0 + sh + .027, designs[[d]], .95, bold = TRUE)
+  txt(bx0, by0 - .043, sprintf("CCC %.2f | MAE %.1f | bias %+.1f", m$ccc, m$mae, m$bias), .66, C["muted"])
 }
-txt(.07, .03, "Observed (x) against predicted (y), t/ha, on one scale; the line is 1:1.", .7, C["muted"])
-# The sixth panel: the paired difference in absolute error, against spatial.
-bx0 <- .69; by0 <- .12; s <- .25
-txt(bx0, by0 + s + .03, "MAE minus spatial's", .95, bold = TRUE)
+# Paired differences retain the same estimates and block resampling.
+bx0 <- .79; bx1 <- .95; by0 <- .11; sh <- .24 * par("pin")[1] / par("pin")[2]
+txt(.695, by0 + sh + .027, "Difference in MAE (t/ha)", .90, bold = TRUE)
 xr <- range(c(0, paired$lo, paired$hi)); xr <- xr + c(-.08, .08) * diff(xr)
-xq <- function(v) bx0 + (v - xr[1]) / diff(xr) * s
-segments(xq(0), by0, xq(0), by0 + s, col = C["muted"], lty = 2)
+xq <- function(v) bx0 + (v - xr[1]) / diff(xr) * (bx1 - bx0)
+for (v in pretty(xr, 4)) if (v >= xr[1] && v <= xr[2]) {
+  segments(xq(v), by0, xq(v), by0 + sh, col = C["line"])
+  txt(xq(v), by0 - .018, fmt_value(v), .62, C["muted"], adj = .5)
+}
+segments(xq(0), by0, xq(0), by0 + sh, col = C["muted"], lty = 2)
 for (k in seq_len(nrow(paired))) {
-  y <- by0 + s - k * s / (nrow(paired) + 1)
+  y <- by0 + sh - k * sh / (nrow(paired) + 1)
   segments(xq(paired$lo[k]), y, xq(paired$hi[k]), y, col = C["earth"], lwd = 2)
   points(xq(paired$diff[k]), y, pch = 16, col = C["earth"])
-  txt(bx0 - .008, y, designs[[paired$design[k]]], .62, C["muted"], adj = 1)
+  txt(bx0 - .012, y, designs[[paired$design[k]]], .58, C["muted"], adj = 1)
 }
-txt(bx0, by0 - .03, "95% interval from whole 100 km blocks", .62, C["muted"])
+txt(.695, by0 - .043, "95% interval / whole 100 km blocks", .60, C["muted"])
+txt(.075, .035, "Observed (x) and predicted (y), t/ha. Dashed line: 1:1. Negative MAE difference favours the alternative to spatial blocks.", .68, C["muted"])
 mark_source("trial_designs", results_from, run)
 finish()
 }
@@ -190,16 +219,30 @@ r_aoa <- terra::rast(band_vrt("aoa"))
 pal_med <- grDevices::hcl.colors(80, "YlGnBu", rev = TRUE)
 pal_wid <- grDevices::hcl.colors(80, "YlOrBr", rev = TRUE)
 start("trial_maps", 2400, 1150, dir = if (rehearsal) kept else fig)
-heading("THE MAP / THE APPLICATION", "What the map says, and where it may be believed",
-        sprintf("The spatial design's final model: the ensemble median, the width of its 90%% %s interval, which follows the level and the DI, and the area of applicability.",
+heading("THE MAP / THE APPLICATION", "Predictions, uncertainty and applicability",
+        sprintf("Spatial model / median, 90%% %s interval width (level + DI), and area of applicability.",
                 if (shown == "split") "split conformal" else "cross-validated"))
-z1 <- raster_panel(r_med, .02, .14, .33, .80, pal_med)
-z2 <- raster_panel(r_wid, .345, .14, .655, .80, pal_wid)
-raster_panel(r_aoa, .67, .14, .98, .80, c("#DADFDA", C[["olive"]]), classes = c(0, 1),
+# Derive limits before reprojection from the same regular sample as vignette_numbers.R.
+draw_xy <- function(n) as.data.frame(terra::spatSample(r_med, size = n, method = "regular", na.rm = TRUE, xy = TRUE, values = FALSE))
+map_xy <- draw_xy(2e5)
+if (!nrow(map_xy)) stop("The map sample is empty")
+if (nrow(map_xy) < .9 * 2e5) map_xy <- draw_xy(ceiling(2e5 * 2e5 / nrow(map_xy)))
+map_values <- function(r) { e <- terra::extract(r, as.matrix(map_xy[, c("x", "y")])); e[[ncol(e)]] }
+map_med <- map_values(r_med); map_wid <- map_values(r_wid)
+map_ok <- is.finite(map_med)
+z1 <- as.numeric(quantile(map_med[map_ok], c(.02, .98), na.rm = TRUE))
+z2 <- as.numeric(quantile(map_wid[map_ok], c(.02, .98), na.rm = TRUE))
+message("Map limits / stock: ", paste(round(z1, 1), collapse = " to "), "; width: ", paste(round(z2, 1), collapse = " to "))
+txt(.175, .795, "A / Predicted stock", .95, bold = TRUE, adj = .5)
+txt(.50, .795, "B / Interval width", .95, bold = TRUE, adj = .5)
+txt(.825, .795, "C / Applicability", .95, bold = TRUE, adj = .5)
+raster_panel(r_med, .02, .14, .33, .765, pal_med, zlim = z1)
+raster_panel(r_wid, .345, .14, .655, .765, pal_wid, zlim = z2)
+raster_panel(r_aoa, .67, .14, .98, .765, c("#858F94", C[["olive"]]), classes = c(0, 1),
              method = "near")
 colour_bar(.08, .07, .19, pal_med, z1, "SOC stock, 0-30 cm (t/ha)")
 colour_bar(.405, .07, .19, pal_wid, z2, "90% interval width (t/ha)")
-rect(.73, .07, .745, .084, col = "#DADFDA", border = NA); txt(.75, .077, "outside", .66, C["muted"])
+rect(.73, .07, .745, .084, col = "#858F94", border = NA); txt(.75, .077, "outside", .66, C["muted"])
 rect(.82, .07, .835, .084, col = C["olive"], border = NA); txt(.84, .077, "inside the AOA", .66, C["muted"])
 if (!rehearsal) mark_source("trial_maps", results_from, run)
 finish()
@@ -276,7 +319,7 @@ iv <- csv(file.path(run, "final_model", "intervals_summary.csv"))
 iv <- iv[iv$level == "pi90" & iv$weighting == "point", ]
 meth <- c(cv = "cv residuals", split = "split (calibration set)", cv_plus = "CV+ (fold models)")
 start("trial_intervals", 1800, 1300)
-heading("UNCERTAINTY / THE APPLICATION", "Do the 90% intervals keep their promise?",
+heading("UNCERTAINTY / THE APPLICATION", "Coverage and width of 90% intervals",
         sprintf("Coverage and mean width on the same %s test profiles. Open: constant width; filled: following the level and the DI.",
                 format(max(iv$n_test, na.rm = TRUE), big.mark = ",")))
 ax0 <- .27; ax1 <- .60; bx0 <- .68; bx1 <- .95
@@ -287,11 +330,11 @@ n_rows <- length(designs) * length(meth)
 gap <- .6                                   # between designs, in rows
 step <- (y_top - y_bot) / (n_rows - 1 + gap * (length(designs) - 1))
 row_y <- function(i, j) y_top - ((i - 1) * length(meth) + (j - 1) + (i - 1) * gap) * step
-cov_lim <- c(min(.6, floor(min(iv$coverage, na.rm = TRUE) * 20) / 20), 1)
+cov_lim <- c(min(.8, floor(min(iv$coverage, na.rm = TRUE) * 20) / 20), 1)
 wid_lim <- c(0, max(iv$mean_width[is.finite(iv$mean_width)], na.rm = TRUE) * 1.08)
 xc <- function(v) ax0 + (v - cov_lim[1]) / diff(cov_lim) * (ax1 - ax0)
 xw <- function(v) bx0 + (v - wid_lim[1]) / diff(wid_lim) * (bx1 - bx0)
-for (v in seq(cov_lim[1], 1, by = .1)) {
+for (v in seq(cov_lim[1], 1, by = .05)) {
   segments(xc(v), y_bot - .02, xc(v), y_top + .02, col = C["line"], lwd = .8)
   txt(xc(v), y_bot - .045, sprintf("%.0f%%", 100 * v), .66, C["muted"], adj = .5)
 }
@@ -325,12 +368,13 @@ for (i in seq_along(designs)) {
       r <- iv[iv$design == d & iv$method == names(meth)[j] & iv$width == w, , drop = FALSE]
       if (nrow(r) != 1L) next
       filled <- identical(w, "level_di")
+      yy <- y + if (filled) -step * .14 else step * .14
       co <- if (filled) C["earth"] else C["blue"]
       if (is.finite(r$coverage)) {
-        points(xc(r$coverage), y, pch = 21, bg = if (filled) co else "white", col = co, cex = 1.1, lwd = 1.3)
+        points(xc(r$coverage), yy, pch = 21, bg = if (filled) co else "white", col = co, cex = 1.1, lwd = 1.3)
       }
       if (is.finite(r$mean_width)) {
-        points(xw(r$mean_width), y, pch = 21, bg = if (filled) co else "white", col = co, cex = 1.1, lwd = 1.3)
+        points(xw(r$mean_width), yy, pch = 21, bg = if (filled) co else "white", col = co, cex = 1.1, lwd = 1.3)
       }
     }
   }
