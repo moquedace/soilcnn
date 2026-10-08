@@ -18,7 +18,7 @@ there to keep the result honest:
 This vignette walks the whole chain, from preparation to interpretation.
 The numbered sections explain the reusable workflow; headings marked
 **Application example** show how it is used for SOC stocks in Latin
-America and the Caribbean. Results marked DRAFT remain provisional.
+America and the Caribbean.
 
 ![Figure 1. The workflow keeps data preparation, validation, tuning and
 final prediction explicit.](figures/workflow.png)
@@ -26,30 +26,12 @@ final prediction explicit.](figures/workflow.png)
 Figure 1. The workflow keeps data preparation, validation, tuning and
 final prediction explicit.
 
-The figures come from a real application: soil organic carbon stocks at
-0-30 cm over Latin America and the Caribbean, from about 26,000 profiles
-and 174 predictors at a nominal 250 m resolution. The completed
-extraction store contains 25,887 profiles. The geographic raster grid
-has latitude-dependent ground dimensions.
-
-![Figure 2. The full application dataset: profile locations and the
-predictor footprint. Uneven coverage motivates spatial validation and
-applicability diagnostics. The map uses a spherical Lambert azimuthal
-equal-area projection centred at 75 W / 15 S, with equal horizontal and
-vertical scales.](figures/observations.png)
-
-Figure 2. The full application dataset: profile locations and the
-predictor footprint. Uneven coverage motivates spatial validation and
-applicability diagnostics. The map uses a spherical Lambert azimuthal
-equal-area projection centred at 75 W / 15 S, with equal horizontal and
-vertical scales.
-
 ``` r
 
 library(soilcnn)
 ```
 
-## 1. Points and rasters become a patch store
+## 1. Prepare and load the patch store
 
 [`dsm_prepare()`](https://moquedace.github.io/soilcnn/reference/dsm_prepare.md)
 reads the points and every raster in a folder, runs the quality control,
@@ -74,6 +56,36 @@ store <- dsm_prepare(
 `windows` is required. A window’s ground extent is its width times the
 resolution, so no default would be right at every resolution.
 
+``` r
+
+data <- dsm_load(store)
+```
+
+[`dsm_load()`](https://moquedace.github.io/soilcnn/reference/dsm_load.md)
+opens the store and reads its own tables. It refuses a store whose
+recipe does not fit together. It also refuses one whose manifest says
+the extraction did not finish.
+
+The figures come from a real application: soil organic carbon stocks at
+0-30 cm over Latin America and the Caribbean, from about 26,000 profiles
+and 174 predictors at a nominal 250 m resolution. The completed
+extraction store contains 25,887 profiles. The geographic raster grid
+has latitude-dependent ground dimensions.
+
+![Figure 2. The full application dataset: profile locations and the
+predictor footprint. Uneven coverage motivates spatial validation and
+applicability diagnostics. The map uses a spherical Lambert azimuthal
+equal-area projection centred at 75 W / 15 S, with equal horizontal and
+vertical scales.](figures/observations.png)
+
+Figure 2. The full application dataset: profile locations and the
+predictor footprint. Uneven coverage motivates spatial validation and
+applicability diagnostics. The map uses a spherical Lambert azimuthal
+equal-area projection centred at 75 W / 15 S, with equal horizontal and
+vertical scales.
+
+## 2. Understand the multiscale inputs
+
 The network reads a stack of predictor channels around each profile. The
 illustration below uses separate high-resolution rasters at one of the
 application’s profiles, in south-eastern Brazil: NDVI, elevation and
@@ -90,6 +102,8 @@ patches have separate colour ranges, shown by their own bars, to reveal
 variation at both extents. The three window sizes share one range within
 each channel.
 
+Source resolution, units and provenance
+
 Fine grid spacing does not imply equally fine original information in
 every predictor. The clay source is SoilGrids 2.0, whose source
 predictions are at 250 m; alignment on the 28 m grid does not add
@@ -101,13 +115,17 @@ Elevation is in metres ([EDTM version
 
 ![Figure 3. Landscape context and native-cell windows from the
 high-resolution example. The marker identifies the central cell. Bars
-show source raster values. This illustration is separate from the 250 m
-trial.](figures/patches.png)
+show source raster values; elevation and clay labels are rounded for
+readability. Window outlines are enlarged in the detail, using solid
+(3), dashed (9) and dotted (15) borders. This illustration is separate
+from the 250 m trial.](figures/patches.png)
 
 Figure 3. Landscape context and native-cell windows from the
 high-resolution example. The marker identifies the central cell. Bars
-show source raster values. This illustration is separate from the 250 m
-trial.
+show source raster values; elevation and clay labels are rounded for
+readability. Window outlines are enlarged in the detail, using solid
+(3), dashed (9) and dotted (15) borders. This illustration is separate
+from the 250 m trial.
 
 A two-branch configuration learns a representation at each scale and
 combines them through a learned gate. This diagram shows the concept;
@@ -119,18 +137,6 @@ fitted on the training rows of each fold.](figures/architecture.png)
 
 Figure 4. Conceptual multiscale architecture. Predictor scaling is
 fitted on the training rows of each fold.
-
-## 2. Load
-
-``` r
-
-data <- dsm_load(store)
-```
-
-[`dsm_load()`](https://moquedace.github.io/soilcnn/reference/dsm_load.md)
-opens the store and reads its own tables. It refuses a store whose
-recipe does not fit together. It also refuses one whose manifest says
-the extraction did not finish.
 
 ## 3. Decide who trains and who scores
 
@@ -171,13 +177,13 @@ nearest training point is distributed like the distance from a map pixel
 to its nearest training point. It needs a sample of where the map will
 be drawn, and it needs the CAST and sf packages.
 
-The five panels below show the plans of \[DRAFT: a test run on 267
-profiles, 1% of the application\], with one test set and one calibration
+The five panels below show the plans of the application run on 2,872
+profiles, a tenth of the store, with one test set and one calibration
 set shared by all five designs. Each panel is fold 1: training,
 validation, calibration, test, and the profiles that fold leaves out.
 They illustrate how the designs split the data, not how the models
-perform. The spatial blocks here are \[DRAFT: 0.1 degree; the full run
-uses 1-degree blocks\].
+perform. The spatial blocks, measured from how these profiles are
+spread, are 5 degrees.
 
 ![Figure 5. Validation geometry: fold 1 of each design, with one test
 set and one calibration set for all five. Hollow points are not used in
@@ -267,16 +273,20 @@ and parameter counts; the frozen test set stays outside this decision.
 ### Application example: model selection
 
 In the application, the spatial design’s thirty configurations fall as
-in Figure 8. The best mean, \[DRAFT: config and CCC\], is not the
-choice: its standard error puts the threshold at \[DRAFT: value\], and
-\[DRAFT: n\] configurations reach it. The rule takes the smallest of
-them, \[DRAFT: config, windows and parameters\], \[DRAFT: k\] times
-fewer parameters than the best for a CCC \[DRAFT: difference\] lower.
-The seed noise floor is \[DRAFT: value\]; interpret it as training
-variability, separately from the uncertainty of the paired difference
-between configurations.
+in Figure 8. The best mean, `cfg_005` at a CCC of 0.341, is not the
+choice: its standard error puts the threshold at 0.317, and 15
+configurations reach it. The rule takes the smallest of them, `cfg_008`
+(one 9 x 9 window, 0.60 million parameters), 3.8 times fewer parameters
+than the best for a CCC 0.013 lower. The seed noise floor is 0.050;
+interpret it as training variability, separately from the uncertainty of
+the paired difference between configurations.
 
-*Figure 8 is drawn from the application run once it completes.*
+![Figure 8. The configurations the spatial design tried in the
+application, with the one-SE threshold and the configuration it
+selects.](figures/trial_selection.png)
+
+Figure 8. The configurations the spatial design tried in the
+application, with the one-SE threshold and the configuration it selects.
 
 ## 5. The baselines that give the number a scale
 
@@ -334,16 +344,27 @@ The five designs of the application, each carried to its final model,
 meet on one test set (Figure 9). The profiles come in clusters, so the
 interval of a difference in error is drawn from whole blocks
 ([`block_bootstrap()`](https://moquedace.github.io/soilcnn/reference/block_bootstrap.md)),
-not from profiles one by one. Every design’s model errs by \[DRAFT:
-range\] t/ha on the same profiles; against the spatial design the
-differences are \[DRAFT: range\] t/ha, and \[DRAFT: which\] intervals
-exclude zero. What the designs differ in more is what they promised: the
-cross-validated CCC of the random folds was \[DRAFT: value\] against
-\[DRAFT: value\] on the test set, while the spatial blocks’ \[DRAFT:
-value\] held (\[DRAFT: value\]). A design is judged by how close its
-estimate comes to the test, not by how good the estimate looks.
+not from profiles one by one. Every design’s model errs by 24.1 to 25.8
+t/ha on the same profiles; against the spatial design the differences
+are -1.7 to -0.6 t/ha, and none of the intervals excludes zero – though,
+drawn profile by profile, those of the random folds and the holdout
+would. What the designs differ in more is what they promised: the
+cross-validated CCC of the random folds was 0.58 against 0.46 on the
+test set, while the spatial blocks’ 0.33 understated it (0.51). A design
+is judged by how close its estimate comes to the test, not by how good
+the estimate looks.
 
-*Figure 9 is drawn from the application run once it completes.*
+![Figure 9. Each design's final model on the same test profiles. Main
+panels share a zoom covering the central distribution; the insets show
+every profile on log scales, their dotted square marking that zoom.
+Metrics use all profiles. The MAE differences relative to spatial blocks
+have 95% intervals from whole 100 km blocks.](figures/trial_designs.png)
+
+Figure 9. Each design’s final model on the same test profiles. Main
+panels share a zoom covering the central distribution; the insets show
+every profile on log scales, their dotted square marking that zoom.
+Metrics use all profiles. The MAE differences relative to spatial blocks
+have 95% intervals from whole 100 km blocks.
 
 ## 7. Refit the chosen configuration
 
@@ -387,16 +408,26 @@ final$per_config[[1]]$intervals$summary
 ### Application example: coverage and interval width
 
 In the application, the five designs’ final models were checked on the
-same test profiles (Figure 10). \[DRAFT: which calibration came closest
-to 90%, by design\]. The split intervals, calibrated on points no model
-trained on, covered \[DRAFT: range\]; the cross-validated ones \[DRAFT:
-range\], and CV+ \[DRAFT: range\]. The width that follows the level and
-the dissimilarity index cost \[DRAFT: how much\] against the constant
-one, and held its coverage in the \[DRAFT: lowest and highest\] fifths
-of the predicted stock. Outside the area of applicability the coverage
-fell to \[DRAFT: value\]: there no calibration speaks for the pixel.
+same test profiles (Figure 10). At a constant width, the split
+intervals, calibrated on points no model trained on, covered 93 to 95%
+in every design, as their guarantee says; the cross-validated ones 90 to
+92%, and CV+ 91 to 95%. The width that follows the level and the
+dissimilarity index is 2 to 64% wider on average and covers less, 86 to
+92%: it spends its width on the high stocks, which it covers (89 to 99%
+in the highest fifth of the predicted stock), and leaves the lowest
+fifth short (49 to 80%). Outside the area of applicability the coverage
+fell as low as 25%, on the few test profiles there (4 to 27 by design):
+there no calibration speaks for the pixel.
 
-*Figure 10 is drawn from the application run once it completes.*
+![Figure 10. The 90% intervals of the five designs on the same test
+profiles: coverage against the nominal 90% level, and the mean width,
+for each calibration at a constant width and at one that follows the
+level and the DI.](figures/trial_intervals.png)
+
+Figure 10. The 90% intervals of the five designs on the same test
+profiles: coverage against the nominal 90% level, and the mean width,
+for each calibration at a constant width and at one that follows the
+level and the DI.
 
 ## 8. The map
 
@@ -445,16 +476,29 @@ less precise predictions; a pixel outside the AOA has predictor
 conditions beyond the applicability criterion derived from validation.
 The two diagnostics describe different aspects of reliability.
 
-*Figure 11 is drawn from the application run once it completes.*
+![Figure 11. The application's map: the ensemble median, the width of
+the 90% conformal interval, and the area of applicability. Continuous
+colour scales use the 2nd and 98th percentiles of the same regular
+sample used in the text, computed before reprojection; values beyond the
+limits are clipped for display.](figures/trial_maps.png)
 
-The median ranges over \[DRAFT: range\] t/ha, with the highest stocks in
-\[DRAFT: regions\] and the lowest in \[DRAFT: regions\]. The interval is
-widest where the stock is high and where the dissimilarity index is
-high, as the scaled calibration intends: \[DRAFT: width range\] t/ha.
-\[DRAFT: share\]% of the area lies inside the AOA; the pixels outside
-are \[DRAFT: where – e.g. the landscapes with few profiles\], and there
-the interval’s coverage is not known, however narrow it is drawn. On the
-test profiles the 90% interval covered \[DRAFT: value\]%.
+Figure 11. The application’s map: the ensemble median, the width of the
+90% conformal interval, and the area of applicability. Continuous colour
+scales use the 2nd and 98th percentiles of the same regular sample used
+in the text, computed before reprojection; values beyond the limits are
+clipped for display.
+
+The median ranges over 9 to 113 t/ha (2nd to 98th percentile of the
+cells), with the highest stocks in the Magellanic subpolar and Valdivian
+forests and the Yucatán forests, and the lowest in the Atacama, Monte
+and Baja California deserts. The interval is widest where the stock is
+high and where the dissimilarity index is high, as the scaled
+calibration intends: 13 to 296 t/ha. 96% of the area lies inside the
+AOA; the pixels outside are mostly in the far south and the high Andes –
+the Magellanic and Valdivian forests, the páramo, the Andean steppe –
+and in the Chocó, landscapes with few profiles, and there the interval’s
+coverage is not known, however narrow it is drawn. On the test profiles
+this 90% interval covered 92%.
 
 ## 9. What the model learned
 
@@ -502,38 +546,58 @@ An importance measured on another model would look just as plausible.
 
 ### Application example: importance by theme
 
-*Figure 12 is drawn from the application run once it completes.*
+![Figure 12. What the application's model learned, by theme: the drop in
+CCC when a theme is permuted and its mean absolute SHAP value in
+separate panels with their original units, and signed SHAP maps on one
+shared scale for the leading themes.](figures/trial_importance.png)
+
+Figure 12. What the application’s model learned, by theme: the drop in
+CCC when a theme is permuted and its mean absolute SHAP value in
+separate panels with their original units, and signed SHAP maps on one
+shared scale for the leading themes.
 
 The two methods answer different questions, and the application shows
 it. SHAP, which splits each prediction among the themes, ranks them
-almost the same way under every validation design (Spearman 0.92 to 0.98
-between the designs’ rankings \[DRAFT: smoke numbers\]): the ranking of
-themes is stable across these designs. Similar rankings alone do not
-establish that the models learned the same spatial relationships.
-Permutation, which scores what the skill loses when a theme is broken,
-agrees less (0.50 to 0.91 \[DRAFT: smoke numbers\]), most of all between
-the holdout and region designs \[DRAFT: which pair\]: where correlated
-themes can stand in for one another, the drop from breaking one depends
-on what the model leaned on, and that is the part a design changes.
-Climate, vegetation productivity, the spectral bands and soil properties
-lead under both \[DRAFT: smoke ranking\]; relief follows \[DRAFT:
-check\]; the categorical maps of land-use change and FAO soil classes
-\[DRAFT: check\] show no detectable contribution in these provisional
-model-specific diagnostics. That does not establish that those themes
-are uninformative in other models, regions or samples. Read each ranking
-as a description of the fitted model, and agreement between designs as
-evidence of ranking stability under the validation choices examined.
+almost the same way under every validation design (Spearman 0.95 to 1.00
+between the designs’ rankings): the ranking of themes is stable across
+these designs. Similar rankings alone do not establish that the models
+learned the same spatial relationships. Permutation, which scores what
+the skill loses when a theme is broken, agrees less (0.42 to 0.93), most
+of all between the spatial and random designs: where correlated themes
+can stand in for one another, the drop from breaking one depends on what
+the model leaned on, and that is the part a design changes. Soil
+properties lead under both, then climate and the spectral bands, then
+vegetation productivity; under permutation the natural vegetation
+habitat shows no detectable contribution in any design. That does not
+establish that a theme is uninformative in other models, regions or
+samples. Read each ranking as a description of the fitted model, and
+agreement between designs as evidence of ranking stability under the
+validation choices examined.
+
+## A reference for your own run
+
+Paths below are relative to the corresponding store or run directory.
+
+| Stage | Object | Main output | What to check |
+|:---|:---|:---|:---|
+| Prepare and load | `store`, `data` | `recipe.rds`, `patch_manifest.rds`, `patch_meta.csv` | Completed extraction, predictor alignment and QC |
+| Resolve validation | `plan` | `print(plan)` | Fold geometry, buffers and held-out sets |
+| Tune and select | `fit` | `comparison/`, `fit$by_config` | Validation scores, seed variability and one-SE selection |
+| Freeze and test | Selected configuration | Frozen selection and test scores in the run | Selection recorded before test scoring |
+| Refit and calibrate | `final` | `final_report.md`, interval summaries | Hyperparameters, test coverage and interval width |
+| Predict | `map` | `bands.csv`, VRT bands | Probe agreement, band meanings and applicability |
+| Interpret | `perm`, `shap` | Importance tables; maps from [`importance_map()`](https://moquedace.github.io/soilcnn/reference/importance_map.md) | Method, units, theme grouping and ranking stability |
 
 ## About the illustrations
 
 Profile locations come from the full SOC 0-30 cm application at 250 m.
 The input-patch illustration uses separate high-resolution raster crops
-at one of its profiles. The continental validation panels come from the
-plans of a test run on 1% of the profiles; the local buffer detail comes
-from the full spatial plan. The model-selection plot of Figure 7 uses
-simulated values. Figures 8 to 12 come from the application run on a
-tenth of the profiles, in whole blocks stratified by region: its
+at one of its profiles. The model-selection plot of Figure 7 uses
+simulated values. The continental validation panels of Figure 5 and
+Figures 8 to 12 come from the application run on a tenth of the
+profiles, in whole blocks stratified by region: its plans, its
 selection, its five designs on one test set, its intervals, its maps and
-its importances. The scripts that draw the figures are in the package’s
+its importances. The local buffer detail of Figure 6 comes from the full
+spatial plan. The scripts that draw the figures are in the package’s
 [GitHub repository](https://github.com/moquedace/soilcnn), under
 `tools/`; they read data and fold plans, and fit no model.
