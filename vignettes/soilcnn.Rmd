@@ -46,7 +46,7 @@ honest:
 This vignette walks the whole chain, from preparation to interpretation.
 The numbered sections explain the reusable workflow; headings marked
 **Application example** show how it is used for SOC stocks in Latin America
-and the Caribbean. Results marked DRAFT remain provisional.
+and the Caribbean.
 
 ```{r, eval = TRUE, echo = FALSE, out.width = "100%", fig.cap = "Figure 1. The workflow keeps data preparation, validation, tuning and final prediction explicit."}
 knitr::include_graphics("figures/workflow.png")
@@ -170,12 +170,12 @@ its nearest training point is distributed like the distance from a map pixel to
 its nearest training point. It needs a sample of where the map will be drawn,
 and it needs the CAST and sf packages.
 
-The five panels below show the plans of [DRAFT: a test run on 267 profiles,
-1% of the application], with one test set and one calibration set shared by
-all five designs. Each panel is fold 1: training, validation, calibration,
-test, and the profiles that fold leaves out. They illustrate how the designs
-split the data, not how the models perform. The spatial blocks here are
-[DRAFT: 0.1 degree; the full run uses 1-degree blocks].
+The five panels below show the plans of the application run on 2,872
+profiles, a tenth of the store, with one test set and one calibration set
+shared by all five designs. Each panel is fold 1: training, validation,
+calibration, test, and the profiles that fold leaves out. They illustrate how
+the designs split the data, not how the models perform. The spatial blocks,
+measured from how these profiles are spread, are 5 degrees.
 
 ```{r, eval = TRUE, echo = FALSE, out.width = "100%", fig.cap = "Figure 5. Validation geometry: fold 1 of each design, with one test set and one calibration set for all five. Hollow points are not used in this fold. All panels use the same equal-area projection and extent."}
 knitr::include_graphics("figures/designs.png")
@@ -244,15 +244,15 @@ counts; the frozen test set stays outside this decision.
 ### Application example: model selection
 
 In the application, the spatial design's thirty configurations fall as in
-Figure 8. The best mean, [DRAFT: config and CCC], is not the choice: its
-standard error puts the threshold at [DRAFT: value], and [DRAFT: n]
-configurations reach it. The rule takes the smallest of them, [DRAFT: config,
-windows and parameters], [DRAFT: k] times fewer parameters than the best for a
-CCC [DRAFT: difference] lower. The seed noise floor is [DRAFT: value];
-interpret it as training variability, separately from the uncertainty of
-the paired difference between configurations.
+Figure 8. The best mean, `cfg_005` at a CCC of 0.341, is not the choice: its
+standard error puts the threshold at 0.317, and 15 configurations reach it.
+The rule takes the smallest of them, `cfg_008` (one 9 x 9 window, 0.60
+million parameters), 3.8 times fewer parameters than the best for a CCC 0.013
+lower. The seed noise floor is 0.050; interpret it as training variability,
+separately from the uncertainty of the paired difference between
+configurations.
 
-```{r, eval = TRUE, echo = FALSE, out.width = "100%", fig.cap = "Figure 8. The configurations the spatial design tried in the application, with the one-SE threshold and the configuration it selects. [DRAFT: drawn from the smoke run, layout only]"}
+```{r, eval = TRUE, echo = FALSE, out.width = "100%", fig.cap = "Figure 8. The configurations the spatial design tried in the application, with the one-SE threshold and the configuration it selects."}
 result_figure("figures/trial_selection.png", "Figure 8")
 ```
 
@@ -305,16 +305,16 @@ both timestamps.
 The five designs of the application, each carried to its final model, meet on
 one test set (Figure 9). The profiles come in clusters, so the interval of a
 difference in error is drawn from whole blocks (`block_bootstrap()`), not
-from profiles one by one. Every design's model errs by [DRAFT: range] t/ha
+from profiles one by one. Every design's model errs by 24.1 to 25.8 t/ha
 on the same profiles; against the spatial design the differences are
-[DRAFT: range] t/ha, and [DRAFT: which] intervals exclude zero. What the
+-1.7 to -0.6 t/ha, and none of the intervals excludes zero -- though, drawn
+profile by profile, those of the random folds and the holdout would. What the
 designs differ in more is what they promised: the cross-validated CCC of the
-random folds was [DRAFT: value] against [DRAFT: value] on the test set, while
-the spatial blocks' [DRAFT: value] held ([DRAFT: value]). A design is judged
-by how close its estimate comes to the test, not by how good the estimate
-looks.
+random folds was 0.58 against 0.46 on the test set, while the spatial blocks'
+0.33 understated it (0.51). A design is judged by how close its estimate
+comes to the test, not by how good the estimate looks.
 
-```{r, eval = TRUE, echo = FALSE, out.width = "100%", fig.cap = "Figure 9. Each design's final model on the same test profiles, and its mean absolute error against the spatial design's with a 95% interval from whole 100 km blocks. [DRAFT: drawn from the smoke run, layout only]"}
+```{r, eval = TRUE, echo = FALSE, out.width = "100%", fig.cap = "Figure 9. Each design's final model on the same test profiles. Main panels share a zoom covering the central distribution; the insets show every profile on log scales, their dotted square marking that zoom. Metrics use all profiles. The MAE differences relative to spatial blocks have 95% intervals from whole 100 km blocks."}
 result_figure("figures/trial_designs.png", "Figure 9")
 ```
 
@@ -354,16 +354,17 @@ final$per_config[[1]]$intervals$summary
 ### Application example: coverage and interval width
 
 In the application, the five designs' final models were checked on the same
-test profiles (Figure 10). [DRAFT: which calibration came closest to 90%, by
-design]. The split intervals, calibrated on points no model trained on,
-covered [DRAFT: range]; the cross-validated ones [DRAFT: range], and CV+
-[DRAFT: range]. The width that follows the level and the dissimilarity index
-cost [DRAFT: how much] against the constant one, and held its coverage in
-the [DRAFT: lowest and highest] fifths of the predicted stock. Outside the
-area of applicability the coverage fell to [DRAFT: value]: there no
-calibration speaks for the pixel.
+test profiles (Figure 10). At a constant width, the split intervals,
+calibrated on points no model trained on, covered 93 to 95% in every design,
+as their guarantee says; the cross-validated ones 90 to 92%, and CV+ 91 to
+95%. The width that follows the level and the dissimilarity index is 2 to 64%
+wider on average and covers less, 86 to 92%: it spends its width on the high
+stocks, which it covers (89 to 99% in the highest fifth of the predicted
+stock), and leaves the lowest fifth short (49 to 80%). Outside the area of
+applicability the coverage fell as low as 25%, on the few test profiles
+there (4 to 27 by design): there no calibration speaks for the pixel.
 
-```{r, eval = TRUE, echo = FALSE, out.width = "100%", fig.cap = "Figure 10. The 90% intervals of the five designs on the same test profiles: coverage against the nominal 90% level, and the mean width, for each calibration at a constant width and at one that follows the level and the DI. [DRAFT: drawn from the smoke run, layout only]"}
+```{r, eval = TRUE, echo = FALSE, out.width = "100%", fig.cap = "Figure 10. The 90% intervals of the five designs on the same test profiles: coverage against the nominal 90% level, and the mean width, for each calibration at a constant width and at one that follows the level and the DI."}
 result_figure("figures/trial_intervals.png", "Figure 10")
 ```
 
@@ -412,18 +413,20 @@ precise predictions; a pixel outside the AOA has predictor conditions beyond
 the applicability criterion derived from validation. The two diagnostics
 describe different aspects of reliability.
 
-```{r, eval = TRUE, echo = FALSE, out.width = "100%", fig.cap = "Figure 11. The application's map: the ensemble median, the width of the 90% conformal interval, and the area of applicability. Continuous colour scales use the 2nd and 98th percentiles, clipping values outside those limits for display. [DRAFT: drawn from the smoke run, layout only]"}
+```{r, eval = TRUE, echo = FALSE, out.width = "100%", fig.cap = "Figure 11. The application's map: the ensemble median, the width of the 90% conformal interval, and the area of applicability. Continuous colour scales use the 2nd and 98th percentiles of the same regular sample used in the text, computed before reprojection; values beyond the limits are clipped for display."}
 result_figure("figures/trial_maps.png", "Figure 11")
 ```
 
-The median ranges over [DRAFT: range] t/ha, with the highest stocks in
-[DRAFT: regions] and the lowest in [DRAFT: regions]. The interval is widest
-where the stock is high and where the dissimilarity index is high, as the
-scaled calibration intends: [DRAFT: width range] t/ha. [DRAFT: share]% of the
-area lies inside the AOA; the pixels outside are [DRAFT: where -- e.g. the
-landscapes with few profiles], and there the interval's coverage is not known,
-however narrow it is drawn. On the test profiles the 90% interval covered
-[DRAFT: value]%.
+The median ranges over 9 to 113 t/ha (2nd to 98th percentile of the cells),
+with the highest stocks in the Magellanic subpolar and Valdivian forests and
+the Yucatán forests, and the lowest in the Atacama, Monte and Baja California
+deserts. The interval is widest where the stock is high and where the
+dissimilarity index is high, as the scaled calibration intends: 13 to 296
+t/ha. 96% of the area lies inside the AOA; the pixels outside are mostly in
+the far south and the high Andes -- the Magellanic and Valdivian forests, the
+páramo, the Andean steppe -- and in the Chocó, landscapes with few profiles,
+and there the interval's coverage is not known, however narrow it is drawn.
+On the test profiles this 90% interval covered 92%.
 
 ## 9. What the model learned
 
@@ -462,26 +465,24 @@ importance measured on another model would look just as plausible.
 
 ### Application example: importance by theme
 
-```{r, eval = TRUE, echo = FALSE, out.width = "100%", fig.cap = "Figure 12. What the application's model learned, by theme: the drop in CCC when a theme is permuted and its mean absolute SHAP value in separate panels with their original units, and signed SHAP maps on one shared scale for the leading themes. [DRAFT: drawn from the smoke run, layout only]"}
+```{r, eval = TRUE, echo = FALSE, out.width = "100%", fig.cap = "Figure 12. What the application's model learned, by theme: the drop in CCC when a theme is permuted and its mean absolute SHAP value in separate panels with their original units, and signed SHAP maps on one shared scale for the leading themes."}
 result_figure("figures/trial_importance.png", "Figure 12")
 ```
 
 The two methods answer different questions, and the application shows it.
 SHAP, which splits each prediction among the themes, ranks them almost the
-same way under every validation design (Spearman 0.92 to 0.98 between the
-designs' rankings [DRAFT: smoke numbers]): the ranking of themes is stable
-across these designs. Similar rankings alone do not establish that the models
-learned the same spatial relationships. Permutation, which scores what the
-skill loses when a theme is broken, agrees less (0.50 to 0.91 [DRAFT: smoke
-numbers]), most of all between the holdout and region designs [DRAFT: which
-pair]: where correlated themes can stand in for one another, the drop from
-breaking one depends on what the model leaned on, and that is the part a
-design changes. Climate, vegetation productivity, the spectral bands and soil
-properties lead under both [DRAFT: smoke ranking]; relief follows [DRAFT:
-check]; the categorical maps of land-use change and FAO soil classes [DRAFT:
-check] show no detectable contribution in these provisional model-specific
-diagnostics. That does not establish that those themes are uninformative in
-other models, regions or samples. Read each ranking as a description of the
+same way under every validation design (Spearman 0.95 to 1.00 between the
+designs' rankings): the ranking of themes is stable across these designs.
+Similar rankings alone do not establish that the models learned the same
+spatial relationships. Permutation, which scores what the skill loses when a
+theme is broken, agrees less (0.42 to 0.93), most of all between the spatial
+and random designs: where correlated themes can stand in for one another, the
+drop from breaking one depends on what the model leaned on, and that is the
+part a design changes. Soil properties lead under both, then climate and the
+spectral bands, then vegetation productivity; under permutation the natural
+vegetation habitat shows no detectable contribution in any design. That does
+not establish that a theme is uninformative in other models, regions or
+samples. Read each ranking as a description of the
 fitted model, and agreement between designs as evidence of ranking stability
 under the validation choices examined.
 
@@ -489,12 +490,12 @@ under the validation choices examined.
 
 Profile locations come from the full SOC 0-30 cm application at 250 m. The
 input-patch illustration uses separate high-resolution raster crops at one of
-its profiles. The continental validation panels come from the plans of a
-test run on 1% of the profiles; the local buffer detail comes from the full
-spatial plan. The model-selection plot of Figure 7 uses simulated values.
-Figures 8 to 12 come from the application run on a tenth of the profiles, in
-whole blocks stratified by region: its selection, its five designs on one test
-set, its intervals, its maps and its importances. The scripts that draw the figures
-are in the package's
+its profiles. The model-selection plot of Figure 7 uses simulated values. The
+continental validation panels of Figure 5 and Figures 8 to 12 come from the
+application run on a tenth of the profiles, in whole blocks stratified by
+region: its plans, its selection, its five designs on one test set, its
+intervals, its maps and its importances. The local buffer detail of Figure 6
+comes from the full spatial plan. The scripts that draw the figures are in
+the package's
 [GitHub repository](https://github.com/moquedace/soilcnn), under `tools/`;
 they read data and fold plans, and fit no model.

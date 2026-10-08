@@ -5,6 +5,7 @@ CGO
 CRAN's
 CUDA
 Chebyshev
+Chocó
 Conv
 DI
 DeepSHAP
@@ -27,6 +28,7 @@ MLP
 MLP's
 MODEL's
 MQI
+Magellanic
 Miscoverage
 NDVI
 NSE
@@ -51,8 +53,10 @@ SpatRaster
 Sundararajan
 TinyTeX
 VRT
+Valdivian
 Wadoux
 WoSIS
+Yucatán
 aoa
 authalic
 avg
@@ -103,7 +107,9 @@ mqi
 mse
 mtime
 mtry
+multiscale
 ncol
+nd
 ndvi
 nodata
 nse
@@ -121,6 +127,7 @@ pnv
 pred
 pred's
 ps
+páramo
 quintile
 quintiles
 rds
@@ -139,6 +146,7 @@ se
 second's
 shap
 soc
+subpolar
 terra
 terra's
 th
