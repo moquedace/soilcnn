@@ -12,7 +12,7 @@
 * Local: Windows 11, R 4.6.1, `R CMD check --as-cran` with the PDF manual,
   and with torch's backend hidden (`TORCH_HOME` set to an empty folder), as
   on CRAN's machines.
-* win-builder: R-devel (2026-09-30 r90605 ucrt), 1 NOTE: new submission and
+* win-builder: R-devel (2026-10-05 r90641 ucrt), 1 NOTE: new submission and
   the words above.
 
 ## Notes for the reviewers
