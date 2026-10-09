@@ -48,7 +48,7 @@
 </nav><div class="container template-home">
 <div class="row">
   <main id="main" class="col-md-9"><div class="section level1">
-<div class="page-header"><h1 id="soilcnn">SoilCNN<a class="anchor" aria-label="anchor" href="#soilcnn"></a>
+<div class="page-header"><h1 id="soilcnn">soilcnn<a class="anchor" aria-label="anchor" href="#soilcnn"></a>
 </h1></div>
 <p align="center">
 <strong>Convolutional Neural Networks for Digital Soil Mapping</strong>
@@ -57,6 +57,9 @@
 <a href="https://github.com/moquedace/soilcnn/actions/workflows/R-CMD-check.yaml" class="external-link"><img src="https://github.com/moquedace/soilcnn/actions/workflows/R-CMD-check.yaml/badge.svg" alt="R CMD check"></a> <img src="https://img.shields.io/badge/R-%3E%3D4.5-276DC3?style=flat-square&amp;logo=r&amp;logoColor=white" alt="R 4.5 or later"><img src="https://img.shields.io/badge/torch-deep%20learning-EE4C2C?style=flat-square&amp;logo=pytorch&amp;logoColor=white" alt="torch"><img src="https://img.shields.io/badge/domain-digital%20soil%20mapping-4CAF50?style=flat-square" alt="digital soil mapping"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT licence"><img src="https://img.shields.io/badge/status-in%20development-orange?style=flat-square" alt="in development"></p>
 <p align="center">
 A <strong>caret-style hyperparameter tuning framework</strong> for dual-branch CNNs applied to <strong>digital soil mapping</strong> with raster predictors — in R, as the package <code>soilcnn</code>.
+</p>
+<p align="center">
+<a href="https://moquedace.github.io/soilcnn/">Website</a> · <a href="https://moquedace.github.io/soilcnn/articles/soilcnn.html">Getting started</a> · <a href="https://moquedace.github.io/soilcnn/reference/">Reference</a>
 </p>
 <hr>
 <div class="section level2">
@@ -88,7 +91,7 @@ A <strong>caret-style hyperparameter tuning framework</strong> for dual-branch C
    dsm_predict()    The map: median, mean, spread, intervals, DI and AOA bands —
                     probed at the profiles first, resumable, as large as the
                     world at 250 m.</code></pre>
-<p>The package was developed on a global model of soil organic carbon stock; the numbers quoted below come from it (see <a href="#where-it-was-developed">where it was developed</a>).</p>
+<p>The package was developed on a global model of soil organic carbon stock, and tested on a continental one; the numbers quoted below come from the first unless they name the second (see <a href="#where-it-was-developed">where it was developed</a>).</p>
 <hr>
 </div>
 <div class="section level2">
@@ -108,7 +111,7 @@ A <strong>caret-style hyperparameter tuning framework</strong> for dual-branch C
 <div class="section level2">
 <h2 id="quickstart">Quickstart<a class="anchor" aria-label="anchor" href="#quickstart"></a>
 </h2>
-<p>The whole chain, one call per step. The vignette (<a href="vignettes/soilcnn.Rmd"><code>vignettes/soilcnn.Rmd</code></a>) walks it with the reasons.</p>
+<p>The whole chain, one call per step. The vignette (<a href="https://moquedace.github.io/soilcnn/articles/soilcnn.html">Getting started</a>) walks it with the reasons, and with the figures of a real application.</p>
 <div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://github.com/moquedace/soilcnn" class="external-link">soilcnn</a></span><span class="op">)</span>                <span class="co"># or pkgload::load_all(".") on the source tree</span></span>
 <span></span>
@@ -748,7 +751,7 @@ ring_01                            8  0.488      -0.001
 </tr>
 <tr>
 <td><a href="R/utils.R"><code>R/utils.R</code></a></td>
-<td>Safe I/O helpers, torch device setup, <code>env_*()</code> overrides, <code><a href="reference/latest_run_dir.html">latest_run_dir()</a></code> — the newest <em>finished</em> run, by time</td>
+<td>Safe I/O helpers, torch device setup, the internal <code>.env_*()</code> readers of environment overrides, <code><a href="reference/latest_run_dir.html">latest_run_dir()</a></code> — the newest <em>finished</em> run, by time</td>
 </tr>
 <tr>
 <td><a href="R/checks.R"><code>R/checks.R</code></a></td>
@@ -800,6 +803,10 @@ ring_01                            8  0.488      -0.001
 <td>
 <code>train_one_cnn()</code> · <code>run_cnn_tuning()</code> · <code>run_cnn_resample()</code>
 </td>
+</tr>
+<tr>
+<td><a href="R/train_workers.R"><code>R/train_workers.R</code></a></td>
+<td>The tuning units <code>(config, fold, seed)</code> trained side by side in worker processes, with fixed threads each, resumable; what <code><a href="reference/dsm_train.html">dsm_train()</a></code> runs underneath</td>
 </tr>
 <tr>
 <td><a href="R/model_registry.R"><code>R/model_registry.R</code></a></td>
@@ -865,6 +872,11 @@ ring_01                            8  0.488      -0.001
 <td><a href="R/importance_plot.R"><code>R/importance_plot.R</code></a></td>
 <td>
 <code><a href="https://rdrr.io/r/graphics/plot.default.html" class="external-link">plot()</a></code> for an importance, a map of SHAP values and a comparison of importances — in base graphics</td>
+</tr>
+<tr>
+<td><a href="R/example_landscape.R"><code>R/example_landscape.R</code></a></td>
+<td>
+<code><a href="reference/example_landscape.html">example_landscape()</a></code> · <code><a href="reference/example_run.html">example_run()</a></code> — the small synthetic landscape the package ships, and a run fitted on it once per session, for the examples, the fast tests and anyone without data</td>
 </tr>
 <tr>
 <td><a href="R/globals.R"><code>R/globals.R</code></a></td>
@@ -952,7 +964,8 @@ ring_01                            8  0.488      -0.001
 <div class="section level2">
 <h2 id="where-it-was-developed">Where it was developed<a class="anchor" aria-label="anchor" href="#where-it-was-developed"></a>
 </h2>
-<p>On a global model of soil organic carbon stock, 0–5 cm (t/ha): WoSIS profiles and 181 raster predictors at 250 m, with 4,154 rows extracted, 3,766 surviving QC and 3,728 reaching the patch store. The numbers quoted above come from it. That project’s scripts, data and records are kept apart from this repository, which holds the package alone.</p>
+<p>On a global model of soil organic carbon stock, 0–5 cm (t/ha): WoSIS profiles and 181 raster predictors at 250 m, with 4,154 rows extracted, 3,766 surviving QC and 3,728 reaching the patch store. The numbers quoted above come from it, unless they name the 0–30 cm trial.</p>
+<p>It was then tested on a continental application, the one the vignette follows: soil organic carbon stock at 0–30 cm over Latin America and the Caribbean, 25,887 profiles and 174 predictors at 250 m, under five validation designs that share one test set and one calibration set. The vignette’s results come from a run on a tenth of the profiles (2,872), in whole blocks. That project’s scripts, data and records are kept apart from this repository, which holds the package alone.</p>
 <hr>
 </div>
 <div class="section level2">

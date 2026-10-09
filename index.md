@@ -1,4 +1,4 @@
-# SoilCNN
+# soilcnn
 
 **Convolutional Neural Networks for Digital Soil Mapping**
 
@@ -14,6 +14,10 @@ development](https://img.shields.io/badge/status-in%20development-orange?style=f
 A **caret-style hyperparameter tuning framework** for dual-branch CNNs
 applied to **digital soil mapping** with raster predictors — in R, as
 the package `soilcnn`.
+
+[Website](https://moquedace.github.io/soilcnn/) · [Getting
+started](https://moquedace.github.io/soilcnn/articles/soilcnn.html) ·
+[Reference](https://moquedace.github.io/soilcnn/reference/)
 
 ------------------------------------------------------------------------
 
@@ -53,7 +57,8 @@ map with its uncertainty — four calls:
                         world at 250 m.
 
 The package was developed on a global model of soil organic carbon
-stock; the numbers quoted below come from it (see [where it was
+stock, and tested on a continental one; the numbers quoted below come
+from the first unless they name the second (see [where it was
 developed](#where-it-was-developed)).
 
 ------------------------------------------------------------------------
@@ -87,9 +92,9 @@ with `pkgload::load_all("<clone>")`.
 
 ## Quickstart
 
-The whole chain, one call per step. The vignette
-([`vignettes/soilcnn.Rmd`](https://moquedace.github.io/soilcnn/vignettes/soilcnn.Rmd))
-walks it with the reasons.
+The whole chain, one call per step. The vignette ([Getting
+started](https://moquedace.github.io/soilcnn/articles/soilcnn.html))
+walks it with the reasons, and with the figures of a real application.
 
 ``` r
 
@@ -754,7 +759,7 @@ uncertainty](#calibrated-uncertainty-and-a-check-that-it-is-calibrated).
 | [`R/prepare.R`](https://moquedace.github.io/soilcnn/R/prepare.R) | [`dsm_prepare()`](https://moquedace.github.io/soilcnn/reference/dsm_prepare.md) — a point table and a folder of aligned rasters become a patch store, with the target transform, the predictor types and the QC rules written into it as a recipe; `dsm_load(store)` then needs nothing else |
 | [`R/final.R`](https://moquedace.github.io/soilcnn/R/final.R) | [`dsm_final()`](https://moquedace.github.io/soilcnn/reference/dsm_final.md): the selected config refitted under N seeds, side by side with fixed threads per seed; the ensemble, the conformal intervals (cv, split, CV+), each checked on the test set, the smearing factor; and `final_report.md`, which declares every hyperparameter of the chosen CNN and whether the search chose it. A resume is held to the settings its run started with |
 | [`R/predict.R`](https://moquedace.github.io/soilcnn/R/predict.R) | [`dsm_predict()`](https://moquedace.github.io/soilcnn/reference/dsm_predict.md): the map, for a grid as large as the world at 250 m – row bands read once through a buffer that keeps its halo, the network fully convolutional where that is exact, workers side by side and resumable; the ensemble bands, the smeared mean, the conformal intervals of every calibration given (cv, split, CV+), each at a constant width and one that follows the level and the DI, and the AOA, one VRT per band; and, first, a probe that must reproduce the final model’s stored predictions at the profiles |
-| [`R/utils.R`](https://moquedace.github.io/soilcnn/R/utils.R) | Safe I/O helpers, torch device setup, `env_*()` overrides, [`latest_run_dir()`](https://moquedace.github.io/soilcnn/reference/latest_run_dir.md) — the newest *finished* run, by time |
+| [`R/utils.R`](https://moquedace.github.io/soilcnn/R/utils.R) | Safe I/O helpers, torch device setup, the internal `.env_*()` readers of environment overrides, [`latest_run_dir()`](https://moquedace.github.io/soilcnn/reference/latest_run_dir.md) — the newest *finished* run, by time |
 | [`R/checks.R`](https://moquedace.github.io/soilcnn/R/checks.R) | `check_ledger()` · `ledger_check()` · `ledger_verdict()` — a ledger whose verdict refuses to pass while a promised check is missing |
 | [`R/metrics.R`](https://moquedace.github.io/soilcnn/R/metrics.R) | [`ccc()`](https://moquedace.github.io/soilcnn/reference/ccc.md) · R² · MAE · NSE · RMSE · MQI · **signed bias**, per split and per quantile group |
 | [`R/cnn_architecture.R`](https://moquedace.github.io/soilcnn/R/cnn_architecture.R) | Conv blocks, residual connections, SE attention, gate types, full model |
@@ -766,6 +771,7 @@ uncertainty](#calibrated-uncertainty-and-a-check-that-it-is-calibrated).
 | [`R/knndm.R`](https://moquedace.github.io/soilcnn/R/knndm.R) | [`knndm_folds()`](https://moquedace.github.io/soilcnn/reference/knndm_folds.md) · [`prediction_sample()`](https://moquedace.github.io/soilcnn/reference/prediction_sample.md) — folds whose geometry matches what prediction faces, not what a block grid happens to give |
 | [`R/diagnostics.R`](https://moquedace.github.io/soilcnn/R/diagnostics.R) | Checks about THIS RUN on real data: patch centres, overlap between splits, run snapshots |
 | [`R/train_cnn.R`](https://moquedace.github.io/soilcnn/R/train_cnn.R) | `train_one_cnn()` · `run_cnn_tuning()` · `run_cnn_resample()` |
+| [`R/train_workers.R`](https://moquedace.github.io/soilcnn/R/train_workers.R) | The tuning units `(config, fold, seed)` trained side by side in worker processes, with fixed threads each, resumable; what [`dsm_train()`](https://moquedace.github.io/soilcnn/reference/dsm_train.md) runs underneath |
 | [`R/model_registry.R`](https://moquedace.github.io/soilcnn/R/model_registry.R) | [`model_spec()`](https://moquedace.github.io/soilcnn/reference/model_spec.md) · [`register_model()`](https://moquedace.github.io/soilcnn/reference/register_model.md) · [`list_models()`](https://moquedace.github.io/soilcnn/reference/list_models.md) |
 | [`R/baselines.R`](https://moquedace.github.io/soilcnn/R/baselines.R) | `rf` · `mlp` · `cnn`, registered |
 | [`R/train_table.R`](https://moquedace.github.io/soilcnn/R/train_table.R) | `run_table_resample()` — tabular models, same comparison table |
@@ -779,6 +785,7 @@ uncertainty](#calibrated-uncertainty-and-a-check-that-it-is-calibrated).
 | [`R/importance.R`](https://moquedace.github.io/soilcnn/R/importance.R) | [`dsm_importance()`](https://moquedace.github.io/soilcnn/reference/dsm_importance.md) and its methods — permutation, context, SHAP (expected and integrated gradients, the kernel), SAGE, ALE; the groups and the one-hot sets; SHAP at points of the map ([`importance_points()`](https://moquedace.github.io/soilcnn/reference/importance_points.md), [`importance_map()`](https://moquedace.github.io/soilcnn/reference/importance_map.md)); [`compare_importance()`](https://moquedace.github.io/soilcnn/reference/compare_importance.md); [`importance_weights()`](https://moquedace.github.io/soilcnn/reference/importance_weights.md) for the AOA. Every model is held to its run’s predictions first |
 | [`R/importance_refit.R`](https://moquedace.github.io/soilcnn/R/importance_refit.R) | [`refit_importance()`](https://moquedace.github.io/soilcnn/reference/refit_importance.md) — leave one covariate out: the final run’s seeds trained again without each variable, in [`dsm_final()`](https://moquedace.github.io/soilcnn/reference/dsm_final.md)’s own workers, once a seed trained again with nothing left out has given the run’s predictions back |
 | [`R/importance_plot.R`](https://moquedace.github.io/soilcnn/R/importance_plot.R) | [`plot()`](https://rdrr.io/r/graphics/plot.default.html) for an importance, a map of SHAP values and a comparison of importances — in base graphics |
+| [`R/example_landscape.R`](https://moquedace.github.io/soilcnn/R/example_landscape.R) | [`example_landscape()`](https://moquedace.github.io/soilcnn/reference/example_landscape.md) · [`example_run()`](https://moquedace.github.io/soilcnn/reference/example_run.md) — the small synthetic landscape the package ships, and a run fitted on it once per session, for the examples, the fast tests and anyone without data |
 | [`R/globals.R`](https://moquedace.github.io/soilcnn/R/globals.R) | The column names dplyr resolves at run time, declared for `R CMD check` — each checked against its use |
 | [`R/zzz.R`](https://moquedace.github.io/soilcnn/R/zzz.R) | `.onLoad()`: registers the built-in models, and fingerprints the code it loaded — every worker compares its own with it before it starts |
 
@@ -882,8 +889,15 @@ refuses to attach while one is there, and says how to remove them:
 On a global model of soil organic carbon stock, 0–5 cm (t/ha): WoSIS
 profiles and 181 raster predictors at 250 m, with 4,154 rows extracted,
 3,766 surviving QC and 3,728 reaching the patch store. The numbers
-quoted above come from it. That project’s scripts, data and records are
-kept apart from this repository, which holds the package alone.
+quoted above come from it, unless they name the 0–30 cm trial.
+
+It was then tested on a continental application, the one the vignette
+follows: soil organic carbon stock at 0–30 cm over Latin America and the
+Caribbean, 25,887 profiles and 174 predictors at 250 m, under five
+validation designs that share one test set and one calibration set. The
+vignette’s results come from a run on a tenth of the profiles (2,872),
+in whole blocks. That project’s scripts, data and records are kept apart
+from this repository, which holds the package alone.
 
 ------------------------------------------------------------------------
 
