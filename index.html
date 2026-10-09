@@ -66,7 +66,7 @@ A <strong>caret-style hyperparameter tuning framework</strong> for dual-branch C
 <h2 id="overview">Overview<a class="anchor" aria-label="anchor" href="#overview"></a>
 </h2>
 <p>Traditional ML frameworks like <code>caret</code> make spatial prediction straightforward: provide a raster stack, a target variable, and a <code>tuneLength</code> — the framework handles the rest.</p>
-<p>This project brings the same philosophy to <strong>convolutional neural networks</strong>, from a folder of rasters and a table of soil profiles to a map with its uncertainty — four calls:</p>
+<p>This project brings the same philosophy to <strong>convolutional neural networks</strong>, from a folder of rasters and a table of soil profiles to a map with its uncertainty and what the model learned — five calls:</p>
 <pre><code>Soil profiles (GPKG)               Rasters (a folder of aligned TIFs)
         │                                       │
         └───────────────┬───────────────────────┘
@@ -90,7 +90,12 @@ A <strong>caret-style hyperparameter tuning framework</strong> for dual-branch C
                         ▼
    dsm_predict()    The map: median, mean, spread, intervals, DI and AOA bands —
                     probed at the profiles first, resumable, as large as the
-                    world at 250 m.</code></pre>
+                    world at 250 m.
+                        │
+                        ▼
+   dsm_importance() What the final model learned — permutation, context, SHAP,
+                    SAGE, refits, ALE — by variable or by theme; SHAP also as
+                    maps over the grid (importance_map()).</code></pre>
 <p>The package was developed on a global model of soil organic carbon stock, and tested on a continental one; the numbers quoted below come from the first unless they name the second (see <a href="#where-it-was-developed">where it was developed</a>).</p>
 <hr>
 </div>
