@@ -31,7 +31,7 @@
 
 Traditional ML frameworks like `caret` make spatial prediction straightforward: provide a raster stack, a target variable, and a `tuneLength` — the framework handles the rest.
 
-This project brings the same philosophy to **convolutional neural networks**, from a folder of rasters and a table of soil profiles to a map with its uncertainty — four calls:
+This project brings the same philosophy to **convolutional neural networks**, from a folder of rasters and a table of soil profiles to a map with its uncertainty and what the model learned — five calls:
 
 ```
 Soil profiles (GPKG)               Rasters (a folder of aligned TIFs)
@@ -58,6 +58,11 @@ Soil profiles (GPKG)               Rasters (a folder of aligned TIFs)
    dsm_predict()    The map: median, mean, spread, intervals, DI and AOA bands —
                     probed at the profiles first, resumable, as large as the
                     world at 250 m.
+                        │
+                        ▼
+   dsm_importance() What the final model learned — permutation, context, SHAP,
+                    SAGE, refits, ALE — by variable or by theme; SHAP also as
+                    maps over the grid (importance_map()).
 ```
 
 The package was developed on a global model of soil organic carbon stock,
