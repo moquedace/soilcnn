@@ -1,4 +1,4 @@
-# SoilCNN
+# soilcnn
 
 <p align="center">
   <strong>Convolutional Neural Networks for Digital Soil Mapping</strong>
@@ -17,6 +17,12 @@
   A <strong>caret-style hyperparameter tuning framework</strong> for dual-branch CNNs applied to
   <strong>digital soil mapping</strong> with raster predictors — in R, as the
   package <code>soilcnn</code>.
+</p>
+
+<p align="center">
+  <a href="https://moquedace.github.io/soilcnn/">Website</a> ·
+  <a href="https://moquedace.github.io/soilcnn/articles/soilcnn.html">Getting started</a> ·
+  <a href="https://moquedace.github.io/soilcnn/reference/">Reference</a>
 </p>
 
 ---
@@ -54,8 +60,9 @@ Soil profiles (GPKG)               Rasters (a folder of aligned TIFs)
                     world at 250 m.
 ```
 
-The package was developed on a global model of soil organic carbon stock;
-the numbers quoted below come from it (see
+The package was developed on a global model of soil organic carbon stock,
+and tested on a continental one; the numbers quoted below come from the first
+unless they name the second (see
 [where it was developed](#where-it-was-developed)).
 
 ---
@@ -85,8 +92,9 @@ To work on the source tree instead, clone the repository and load it with
 
 ## Quickstart
 
-The whole chain, one call per step. The vignette ([`vignettes/soilcnn.Rmd`](vignettes/soilcnn.Rmd))
-walks it with the reasons.
+The whole chain, one call per step. The vignette
+([Getting started](https://moquedace.github.io/soilcnn/articles/soilcnn.html))
+walks it with the reasons, and with the figures of a real application.
 
 ```r
 library(soilcnn)                # or pkgload::load_all(".") on the source tree
@@ -628,7 +636,7 @@ What the interval bands come from instead is [calibrated uncertainty](#calibrate
 | [`R/prepare.R`](R/prepare.R) | `dsm_prepare()` — a point table and a folder of aligned rasters become a patch store, with the target transform, the predictor types and the QC rules written into it as a recipe; `dsm_load(store)` then needs nothing else |
 | [`R/final.R`](R/final.R) | `dsm_final()`: the selected config refitted under N seeds, side by side with fixed threads per seed; the ensemble, the conformal intervals (cv, split, CV+), each checked on the test set, the smearing factor; and `final_report.md`, which declares every hyperparameter of the chosen CNN and whether the search chose it. A resume is held to the settings its run started with |
 | [`R/predict.R`](R/predict.R) | `dsm_predict()`: the map, for a grid as large as the world at 250 m -- row bands read once through a buffer that keeps its halo, the network fully convolutional where that is exact, workers side by side and resumable; the ensemble bands, the smeared mean, the conformal intervals of every calibration given (cv, split, CV+), each at a constant width and one that follows the level and the DI, and the AOA, one VRT per band; and, first, a probe that must reproduce the final model's stored predictions at the profiles |
-| [`R/utils.R`](R/utils.R) | Safe I/O helpers, torch device setup, `env_*()` overrides, `latest_run_dir()` — the newest *finished* run, by time |
+| [`R/utils.R`](R/utils.R) | Safe I/O helpers, torch device setup, the internal `.env_*()` readers of environment overrides, `latest_run_dir()` — the newest *finished* run, by time |
 | [`R/checks.R`](R/checks.R) | `check_ledger()` · `ledger_check()` · `ledger_verdict()` — a ledger whose verdict refuses to pass while a promised check is missing |
 | [`R/metrics.R`](R/metrics.R) | `ccc()` · R² · MAE · NSE · RMSE · MQI · **signed bias**, per split and per quantile group |
 | [`R/cnn_architecture.R`](R/cnn_architecture.R) | Conv blocks, residual connections, SE attention, gate types, full model |
@@ -640,6 +648,7 @@ What the interval bands come from instead is [calibrated uncertainty](#calibrate
 | [`R/knndm.R`](R/knndm.R) | `knndm_folds()` · `prediction_sample()` — folds whose geometry matches what prediction faces, not what a block grid happens to give |
 | [`R/diagnostics.R`](R/diagnostics.R) | Checks about THIS RUN on real data: patch centres, overlap between splits, run snapshots |
 | [`R/train_cnn.R`](R/train_cnn.R) | `train_one_cnn()` · `run_cnn_tuning()` · `run_cnn_resample()` |
+| [`R/train_workers.R`](R/train_workers.R) | The tuning units `(config, fold, seed)` trained side by side in worker processes, with fixed threads each, resumable; what `dsm_train()` runs underneath |
 | [`R/model_registry.R`](R/model_registry.R) | `model_spec()` · `register_model()` · `list_models()` |
 | [`R/baselines.R`](R/baselines.R) | `rf` · `mlp` · `cnn`, registered |
 | [`R/train_table.R`](R/train_table.R) | `run_table_resample()` — tabular models, same comparison table |
@@ -653,6 +662,7 @@ What the interval bands come from instead is [calibrated uncertainty](#calibrate
 | [`R/importance.R`](R/importance.R) | `dsm_importance()` and its methods — permutation, context, SHAP (expected and integrated gradients, the kernel), SAGE, ALE; the groups and the one-hot sets; SHAP at points of the map (`importance_points()`, `importance_map()`); `compare_importance()`; `importance_weights()` for the AOA. Every model is held to its run's predictions first |
 | [`R/importance_refit.R`](R/importance_refit.R) | `refit_importance()` — leave one covariate out: the final run's seeds trained again without each variable, in `dsm_final()`'s own workers, once a seed trained again with nothing left out has given the run's predictions back |
 | [`R/importance_plot.R`](R/importance_plot.R) | `plot()` for an importance, a map of SHAP values and a comparison of importances — in base graphics |
+| [`R/example_landscape.R`](R/example_landscape.R) | `example_landscape()` · `example_run()` — the small synthetic landscape the package ships, and a run fitted on it once per session, for the examples, the fast tests and anyone without data |
 | [`R/globals.R`](R/globals.R) | The column names dplyr resolves at run time, declared for `R CMD check` — each checked against its use |
 | [`R/zzz.R`](R/zzz.R) | `.onLoad()`: registers the built-in models, and fingerprints the code it loaded — every worker compares its own with it before it starts |
 
@@ -740,7 +750,15 @@ refuses to attach while one is there, and says how to remove them:
 
 On a global model of soil organic carbon stock, 0–5 cm (t/ha): WoSIS profiles
 and 181 raster predictors at 250 m, with 4,154 rows extracted, 3,766 surviving
-QC and 3,728 reaching the patch store. The numbers quoted above come from it.
+QC and 3,728 reaching the patch store. The numbers quoted above come from it,
+unless they name the 0–30 cm trial.
+
+It was then tested on a continental application, the one the vignette
+follows: soil organic carbon stock at 0–30 cm over Latin America and the
+Caribbean, 25,887 profiles and 174 predictors at 250 m, under five
+validation designs that share one test set and one calibration set. The
+vignette's results come from a run on a tenth of the profiles (2,872), in
+whole blocks.
 That project's scripts, data and records are kept apart from this repository,
 which holds the package alone.
 
