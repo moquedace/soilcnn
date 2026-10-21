@@ -8,8 +8,8 @@ check](https://github.com/moquedace/soilcnn/actions/workflows/R-CMD-check.yaml/b
 later](https://img.shields.io/badge/R-%3E%3D4.5-276DC3?style=flat-square&logo=r&logoColor=white)![torch](https://img.shields.io/badge/torch-deep%20learning-EE4C2C?style=flat-square&logo=pytorch&logoColor=white)![digital
 soil
 mapping](https://img.shields.io/badge/domain-digital%20soil%20mapping-4CAF50?style=flat-square)![MIT
-licence](https://img.shields.io/badge/license-MIT-blue?style=flat-square)![in
-development](https://img.shields.io/badge/status-in%20development-orange?style=flat-square)
+licence](https://img.shields.io/badge/license-MIT-blue?style=flat-square)[![CRAN
+version](https://www.r-pkg.org/badges/version/soilcnn)](https://CRAN.R-project.org/package=soilcnn)
 
 A **caret-style hyperparameter tuning framework** for dual-branch CNNs
 applied to **digital soil mapping** with raster predictors — in R, as
@@ -72,15 +72,22 @@ developed](#where-it-was-developed)).
 
 ``` r
 
-# install.packages("remotes")
-remotes::install_github("moquedace/soilcnn")
+install.packages("soilcnn")
 torch::install_torch()          # once: the C++ backend the torch package needs
 ```
 
-The tour,
-[`vignette("soilcnn")`](https://moquedace.github.io/soilcnn/articles/soilcnn.md),
-is there only when the install builds it, which needs knitr, rmarkdown
-and pandoc (RStudio ships pandoc):
+The development version, from GitHub:
+
+``` r
+
+# install.packages("remotes")
+remotes::install_github("moquedace/soilcnn")
+```
+
+Installed from CRAN, the tour comes with it:
+[`vignette("soilcnn")`](https://moquedace.github.io/soilcnn/articles/soilcnn.md).
+From GitHub it is there only when the install builds it, which needs
+knitr, rmarkdown and pandoc (RStudio ships pandoc):
 
 ``` r
 
