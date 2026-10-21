@@ -2,8 +2,8 @@
 
 MIT License
 
-Copyright (c) 2026 Cássio Marques Moquedace and Clara Glória Oliveira
-Baldi
+Copyright (c) 2026 Cássio Marques Moquedace, Clara Glória Oliveira Baldi
+and José Alexandre Melo Demattê
 
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the

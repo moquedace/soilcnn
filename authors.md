@@ -6,18 +6,20 @@
 
 - **Clara Glória Oliveira Baldi**. Author, copyright holder.
 
+- **José Alexandre Melo Demattê**. Author, copyright holder.
+
 ## Citation
 
 Source:
 [`inst/CITATION`](https://github.com/moquedace/soilcnn/blob/main/inst/CITATION)
 
-Moquedace CM, Baldi CGO (2026). *soilcnn: Convolutional Neural Networks
-for Digital Soil Mapping*. R package version 0.1.0,
+Moquedace CM, Baldi CGO, Demattê JAM (2026). *soilcnn: Convolutional
+Neural Networks for Digital Soil Mapping*. R package version 0.1.0,
 <https://github.com/moquedace/soilcnn>.
 
     @Manual{,
       title = {{soilcnn}: Convolutional Neural Networks for Digital Soil Mapping},
-      author = {Cássio Marques Moquedace and Clara Glória Oliveira Baldi},
+      author = {Cássio Marques Moquedace and Clara Glória Oliveira Baldi and José Alexandre Melo Demattê},
       year = {2026},
       note = {R package version 0.1.0},
       url = {https://github.com/moquedace/soilcnn},
