@@ -9,7 +9,7 @@
 ## Citation
 
 Source:
-[`inst/CITATION`](https://github.com/moquedace/soilcnn/blob/v0.1.0/inst/CITATION)
+[`inst/CITATION`](https://github.com/moquedace/soilcnn/blob/main/inst/CITATION)
 
 Moquedace CM, Baldi CGO (2026). *soilcnn: Convolutional Neural Networks
 for Digital Soil Mapping*. R package version 0.1.0,

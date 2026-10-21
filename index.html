@@ -48,22 +48,26 @@
 </nav><div class="container template-home">
 <div class="row">
   <main id="main" class="col-md-9"><div class="section level1">
-<div class="page-header"><h1 id="soilcnn">SoilCNN<a class="anchor" aria-label="anchor" href="#soilcnn"></a>
+<div class="page-header"><h1 id="soilcnn">soilcnn<a class="anchor" aria-label="anchor" href="#soilcnn"></a>
 </h1></div>
 <p align="center">
 <strong>Convolutional Neural Networks for Digital Soil Mapping</strong>
 </p>
 <p align="center">
-<a href="https://github.com/moquedace/soilcnn/actions/workflows/R-CMD-check.yaml" class="external-link"><img src="https://github.com/moquedace/soilcnn/actions/workflows/R-CMD-check.yaml/badge.svg" alt="R CMD check"></a> <img src="https://img.shields.io/badge/R-%3E%3D4.5-276DC3?style=flat-square&amp;logo=r&amp;logoColor=white" alt="R 4.5 or later"><img src="https://img.shields.io/badge/torch-deep%20learning-EE4C2C?style=flat-square&amp;logo=pytorch&amp;logoColor=white" alt="torch"><img src="https://img.shields.io/badge/domain-digital%20soil%20mapping-4CAF50?style=flat-square" alt="digital soil mapping"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT licence"><img src="https://img.shields.io/badge/status-in%20development-orange?style=flat-square" alt="in development"></p>
+<a href="https://github.com/moquedace/soilcnn/actions/workflows/R-CMD-check.yaml" class="external-link"><img src="https://github.com/moquedace/soilcnn/actions/workflows/R-CMD-check.yaml/badge.svg" alt="R CMD check"></a> <img src="https://img.shields.io/badge/R-%3E%3D4.5-276DC3?style=flat-square&amp;logo=r&amp;logoColor=white" alt="R 4.5 or later"><img src="https://img.shields.io/badge/torch-deep%20learning-EE4C2C?style=flat-square&amp;logo=pytorch&amp;logoColor=white" alt="torch"><img src="https://img.shields.io/badge/domain-digital%20soil%20mapping-4CAF50?style=flat-square" alt="digital soil mapping"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT licence"><a href="https://CRAN.R-project.org/package=soilcnn" class="external-link"><img src="https://www.r-pkg.org/badges/version/soilcnn" alt="CRAN version"></a>
+</p>
 <p align="center">
 A <strong>caret-style hyperparameter tuning framework</strong> for dual-branch CNNs applied to <strong>digital soil mapping</strong> with raster predictors — in R, as the package <code>soilcnn</code>.
+</p>
+<p align="center">
+<a href="https://moquedace.github.io/soilcnn/">Website</a> · <a href="https://moquedace.github.io/soilcnn/articles/soilcnn.html">Getting started</a> · <a href="https://moquedace.github.io/soilcnn/reference/">Reference</a>
 </p>
 <hr>
 <div class="section level2">
 <h2 id="overview">Overview<a class="anchor" aria-label="anchor" href="#overview"></a>
 </h2>
 <p>Traditional ML frameworks like <code>caret</code> make spatial prediction straightforward: provide a raster stack, a target variable, and a <code>tuneLength</code> — the framework handles the rest.</p>
-<p>This project brings the same philosophy to <strong>convolutional neural networks</strong>, from a folder of rasters and a table of soil profiles to a map with its uncertainty — four calls:</p>
+<p>This project brings the same philosophy to <strong>convolutional neural networks</strong>, from a folder of rasters and a table of soil profiles to a map with its uncertainty and what the model learned — five calls:</p>
 <pre><code>Soil profiles (GPKG)               Rasters (a folder of aligned TIFs)
         │                                       │
         └───────────────┬───────────────────────┘
@@ -87,19 +91,27 @@ A <strong>caret-style hyperparameter tuning framework</strong> for dual-branch C
                         ▼
    dsm_predict()    The map: median, mean, spread, intervals, DI and AOA bands —
                     probed at the profiles first, resumable, as large as the
-                    world at 250 m.</code></pre>
-<p>The package was developed on a global model of soil organic carbon stock; the numbers quoted below come from it (see <a href="#where-it-was-developed">where it was developed</a>).</p>
+                    world at 250 m.
+                        │
+                        ▼
+   dsm_importance() What the final model learned — permutation, context, SHAP,
+                    SAGE, refits, ALE — by variable or by theme; SHAP also as
+                    maps over the grid (importance_map()).</code></pre>
+<p>The package was developed on a global model of soil organic carbon stock, and tested on a continental one; the numbers quoted below come from the first unless they name the second (see <a href="#where-it-was-developed">where it was developed</a>).</p>
 <hr>
 </div>
 <div class="section level2">
 <h2 id="installation">Installation<a class="anchor" aria-label="anchor" href="#installation"></a>
 </h2>
 <div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="co"># install.packages("remotes")</span></span>
-<span><span class="fu">remotes</span><span class="fu">::</span><span class="fu">install_github</span><span class="op">(</span><span class="st">"moquedace/soilcnn"</span><span class="op">)</span></span>
+<code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/utils/install.packages.html" class="external-link">install.packages</a></span><span class="op">(</span><span class="st">"soilcnn"</span><span class="op">)</span></span>
 <span><span class="fu">torch</span><span class="fu">::</span><span class="fu"><a href="https://torch.mlverse.org/docs/reference/install_torch.html" class="external-link">install_torch</a></span><span class="op">(</span><span class="op">)</span>          <span class="co"># once: the C++ backend the torch package needs</span></span></code></pre></div>
-<p>The tour, <code><a href="articles/soilcnn.html">vignette("soilcnn")</a></code>, is there only when the install builds it, which needs knitr, rmarkdown and pandoc (RStudio ships pandoc):</p>
+<p>The development version, from GitHub:</p>
 <div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="co"># install.packages("remotes")</span></span>
+<span><span class="fu">remotes</span><span class="fu">::</span><span class="fu">install_github</span><span class="op">(</span><span class="st">"moquedace/soilcnn"</span><span class="op">)</span></span></code></pre></div>
+<p>Installed from CRAN, the tour comes with it: <code><a href="articles/soilcnn.html">vignette("soilcnn")</a></code>. From GitHub it is there only when the install builds it, which needs knitr, rmarkdown and pandoc (RStudio ships pandoc):</p>
+<div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu">remotes</span><span class="fu">::</span><span class="fu">install_github</span><span class="op">(</span><span class="st">"moquedace/soilcnn"</span>, build_vignettes <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/utils/vignette.html" class="external-link">vignette</a></span><span class="op">(</span><span class="st">"soilcnn"</span><span class="op">)</span></span></code></pre></div>
 <p>Over a copy already installed from the same commit, add <code>force = TRUE</code>: remotes skips a commit it has already installed, and the vignette with it. To work on the source tree instead, clone the repository and load it with <code>pkgload::load_all("&lt;clone&gt;")</code>.</p>
@@ -108,8 +120,8 @@ A <strong>caret-style hyperparameter tuning framework</strong> for dual-branch C
 <div class="section level2">
 <h2 id="quickstart">Quickstart<a class="anchor" aria-label="anchor" href="#quickstart"></a>
 </h2>
-<p>The whole chain, one call per step. The vignette (<a href="vignettes/soilcnn.Rmd"><code>vignettes/soilcnn.Rmd</code></a>) walks it with the reasons.</p>
-<div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
+<p>The whole chain, one call per step. The vignette (<a href="https://moquedace.github.io/soilcnn/articles/soilcnn.html">Getting started</a>) walks it with the reasons, and with the figures of a real application.</p>
+<div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://github.com/moquedace/soilcnn" class="external-link">soilcnn</a></span><span class="op">)</span>                <span class="co"># or pkgload::load_all(".") on the source tree</span></span>
 <span></span>
 <span><span class="va">store</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/dsm_prepare.html">dsm_prepare</a></span><span class="op">(</span>points <span class="op">=</span> <span class="st">"profiles.gpkg"</span>, target <span class="op">=</span> <span class="st">"soc_stock"</span>,</span>
@@ -145,7 +157,7 @@ A <strong>caret-style hyperparameter tuning framework</strong> for dual-branch C
 <h3 id="without-data-of-your-own">Without data of your own<a class="anchor" aria-label="anchor" href="#without-data-of-your-own"></a>
 </h3>
 <p>The package ships a small synthetic landscape – 80 x 80 cells, eight predictors, 160 profiles in clusters, a stock drawn from vegetation, clay, temperature, geology and the topographic position of each cell – and a run fitted on it in about a minute, kept for the session:</p>
-<div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb6"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">ex</span>  <span class="op">&lt;-</span> <span class="fu"><a href="reference/example_landscape.html">example_landscape</a></span><span class="op">(</span><span class="op">)</span>     <span class="co"># the rasters' folder and the profiles</span></span>
 <span><span class="va">run</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/example_run.html">example_run</a></span><span class="op">(</span><span class="op">)</span>           <span class="co"># store, tuning and final model, in tempdir()</span></span>
 <span><span class="va">run</span><span class="op">$</span><span class="va">final</span></span>
@@ -160,7 +172,7 @@ A <strong>caret-style hyperparameter tuning framework</strong> for dual-branch C
 <div class="section level3">
 <h3 id="one-line-decides-who-trains-and-who-scores">One line decides who trains and who scores<a class="anchor" aria-label="anchor" href="#one-line-decides-who-trains-and-who-scores"></a>
 </h3>
-<div class="sourceCode" id="cb6"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb7"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="reference/spatial_cv.html">spatial_cv</a></span><span class="op">(</span>k <span class="op">=</span> <span class="fl">5</span><span class="op">)</span>                        <span class="co"># blocks of ground, buffered</span></span>
 <span><span class="fu"><a href="reference/knndm_cv.html">knndm_cv</a></span><span class="op">(</span>k <span class="op">=</span> <span class="fl">5</span>, predpoints <span class="op">=</span> <span class="va">pts</span><span class="op">)</span>        <span class="co"># folds at the distances the map predicts at</span></span>
 <span><span class="fu"><a href="reference/random_cv.html">random_cv</a></span><span class="op">(</span>k <span class="op">=</span> <span class="fl">10</span><span class="op">)</span>                        <span class="co"># ignores geography, on purpose</span></span>
@@ -199,7 +211,7 @@ A <strong>caret-style hyperparameter tuning framework</strong> for dual-branch C
 <div class="section level3">
 <h3 id="any-registered-model-same-folds-same-tables">Any registered model, same folds, same tables<a class="anchor" aria-label="anchor" href="#any-registered-model-same-folds-same-tables"></a>
 </h3>
-<div class="sourceCode" id="cb7"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb8"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="reference/list_models.html">list_models</a></span><span class="op">(</span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">rf</span>  <span class="op">&lt;-</span> <span class="fu"><a href="reference/dsm_train.html">dsm_train</a></span><span class="op">(</span><span class="va">data</span>, model <span class="op">=</span> <span class="st">"rf"</span>, resampling <span class="op">=</span> <span class="va">plan</span>,</span>
@@ -219,7 +231,7 @@ A <strong>caret-style hyperparameter tuning framework</strong> for dual-branch C
 </h2>
 <p>Three things cost this project real time before they were made structural.</p>
 <p><strong>The split is not stored with the data.</strong> <code><a href="reference/dsm_prepare.html">dsm_prepare()</a></code> writes points, coordinates, the target and the predictor types — and nothing about who trains. A fold plan decides that when training starts, from coordinates, in seconds:</p>
-<div class="sourceCode" id="cb8"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb9"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">plan</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/holdout.html">holdout</a></span><span class="op">(</span><span class="va">meta</span>, validation_frac <span class="op">=</span> <span class="fl">0.15</span>, test_frac <span class="op">=</span> <span class="fl">0.15</span><span class="op">)</span></span>
 <span><span class="va">plan</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/random_folds.html">random_folds</a></span><span class="op">(</span><span class="va">meta</span>, k <span class="op">=</span> <span class="fl">5</span>, test_frac <span class="op">=</span> <span class="fl">0.15</span><span class="op">)</span></span>
 <span><span class="va">plan</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/spatial_folds.html">spatial_folds</a></span><span class="op">(</span><span class="va">meta</span>, k <span class="op">=</span> <span class="fl">5</span>, test_frac <span class="op">=</span> <span class="fl">0.15</span>, block_size <span class="op">=</span> <span class="fl">2</span>, buffer <span class="op">=</span> <span class="fl">0.034</span><span class="op">)</span></span>
@@ -293,7 +305,7 @@ See <a href="docs/architecture.html"><code>docs/architecture.md</code></a> for f
 <h3 id="the-test-set-stays-frozen-and-the-optimism-is-measured">The test set stays frozen, and the optimism is measured<a class="anchor" aria-label="anchor" href="#the-test-set-stays-frozen-and-the-optimism-is-measured"></a>
 </h3>
 <p>Tuning never scores the test set. Once the choice is locked — recorded on disk, with a timestamp and a commit — the whole grid <em>can</em> be scored on it, and that measures something worth publishing:</p>
-<div class="sourceCode" id="cb10"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb11"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="reference/freeze_selection.html">freeze_selection</a></span><span class="op">(</span><span class="va">run_dir</span>, <span class="st">"cfg_014"</span>, rule <span class="op">=</span> <span class="st">"one_se"</span><span class="op">)</span>   <span class="co"># dsm_final() does this</span></span>
 <span><span class="fu"><a href="reference/score_test_grid.html">score_test_grid</a></span><span class="op">(</span><span class="va">run_dir</span>, <span class="va">data</span>, device <span class="op">=</span> <span class="va">device</span><span class="op">)</span>         <span class="co"># afterwards, any time</span></span></code></pre></div>
 <pre><code>chosen by validation : cfg_014   test CCC 0.4612   (rank 6 of 24 on test)
@@ -306,7 +318,7 @@ SELECTION OPTIMISM   : +0.0368 CCC</code></pre>
 </h3>
 <p>Two independent routes to the same question, which is the point — if they disagree, one of the measurements is wrong and that is worth knowing.</p>
 <p><em>From the outside</em>, the baselines race the CNN against a forest fed the same neighbourhood with the arrangement thrown away. <em>From the inside</em>, <code><a href="reference/occlusion_report.html">occlusion_report()</a></code> hides part of the patch of a trained network and re-predicts:</p>
-<div class="sourceCode" id="cb12"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb13"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="reference/occlusion_report.html">occlusion_report</a></span><span class="op">(</span><span class="va">run_dir</span>, <span class="va">data</span>, config_id <span class="op">=</span> <span class="st">"cfg_014"</span>, device <span class="op">=</span> <span class="va">device</span><span class="op">)</span></span></code></pre></div>
 <pre><code>scope                n_pixels_hidden    ccc   delta_ccc
 baseline                           0  0.489
@@ -320,7 +332,7 @@ ring_01                            8  0.488      -0.001
 <div class="section level3">
 <h3 id="calibrated-uncertainty-and-a-check-that-it-is-calibrated">Calibrated uncertainty, and a check that it is calibrated<a class="anchor" aria-label="anchor" href="#calibrated-uncertainty-and-a-check-that-it-is-calibrated"></a>
 </h3>
-<div class="sourceCode" id="cb14"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb15"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">cal</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/conformal_calibrate.html">conformal_calibrate</a></span><span class="op">(</span><span class="va">val</span><span class="op">$</span><span class="va">obs</span>, <span class="va">val</span><span class="op">$</span><span class="va">pred</span>, alpha <span class="op">=</span> <span class="fl">0.1</span><span class="op">)</span>   <span class="co"># 90%</span></span>
 <span><span class="va">iv</span>  <span class="op">&lt;-</span> <span class="fu"><a href="reference/conformal_interval.html">conformal_interval</a></span><span class="op">(</span><span class="va">cal</span>, <span class="va">test</span><span class="op">$</span><span class="va">pred</span>, lower_limit <span class="op">=</span> <span class="fl">0</span><span class="op">)</span></span>
 <span><span class="fu"><a href="reference/picp_report.html">picp_report</a></span><span class="op">(</span><span class="va">test</span><span class="op">$</span><span class="va">obs</span>, <span class="va">iv</span><span class="op">$</span><span class="va">lower</span>, <span class="va">iv</span><span class="op">$</span><span class="va">upper</span>, group <span class="op">=</span> <span class="va">test</span><span class="op">$</span><span class="va">block</span>, alpha <span class="op">=</span> <span class="fl">0.1</span><span class="op">)</span></span></code></pre></div>
@@ -368,7 +380,7 @@ ring_01                            8  0.488      -0.001
 <div class="section level3">
 <h3 id="a-median-surface-and-a-mean-surface-and-they-are-not-the-same-map">A median surface and a mean surface, and they are not the same map<a class="anchor" aria-label="anchor" href="#a-median-surface-and-a-mean-surface-and-they-are-not-the-same-map"></a>
 </h3>
-<div class="sourceCode" id="cb15"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb16"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">sm</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/smearing_from_run.html">smearing_from_run</a></span><span class="op">(</span><span class="va">tuning_dir</span>, <span class="va">config_id</span><span class="op">)</span>   <span class="co"># Duan (1983), one scalar</span></span>
 <span><span class="va">mean_surface</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/smear.html">smear</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log1p</a></span><span class="op">(</span><span class="va">median_surface</span><span class="op">)</span>, <span class="va">sm</span>, lower_limit <span class="op">=</span> <span class="fl">0</span><span class="op">)</span></span></code></pre></div>
 <p>Train on <code>log1p</code> with a SmoothL1 loss and the network estimates a conditional <strong>median</strong> in log space. <code><a href="https://rdrr.io/r/base/Log.html" class="external-link">expm1()</a></code> of a median is the median of the stock — not its mean. On a right-skewed target the two are far apart, and the gap lands entirely on anyone who sums the map:</p>
@@ -399,7 +411,7 @@ ring_01                            8  0.488      -0.001
 <div class="section level3">
 <h3 id="two-models-compared-on-clustered-test-points">Two models compared on clustered test points<a class="anchor" aria-label="anchor" href="#two-models-compared-on-clustered-test-points"></a>
 </h3>
-<div class="sourceCode" id="cb16"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb17"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">d</span>   <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/MathFun.html" class="external-link">abs</a></span><span class="op">(</span><span class="va">test</span><span class="op">$</span><span class="va">pred_a</span> <span class="op">-</span> <span class="va">test</span><span class="op">$</span><span class="va">obs</span><span class="op">)</span> <span class="op">-</span> <span class="fu"><a href="https://rdrr.io/r/base/MathFun.html" class="external-link">abs</a></span><span class="op">(</span><span class="va">test</span><span class="op">$</span><span class="va">pred_b</span> <span class="op">-</span> <span class="va">test</span><span class="op">$</span><span class="va">obs</span><span class="op">)</span>   <span class="co"># what is compared</span></span>
 <span><span class="fu"><a href="reference/spatial_correlogram.html">spatial_correlogram</a></span><span class="op">(</span><span class="va">test</span><span class="op">$</span><span class="va">x</span>, <span class="va">test</span><span class="op">$</span><span class="va">y</span>, <span class="va">d</span><span class="op">)</span>            <span class="co"># does it resemble itself nearby, and how far?</span></span>
 <span><span class="va">blk</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/equal_area_blocks.html">equal_area_blocks</a></span><span class="op">(</span><span class="va">test</span><span class="op">$</span><span class="va">x</span>, <span class="va">test</span><span class="op">$</span><span class="va">y</span>, size_km <span class="op">=</span> <span class="fl">100</span><span class="op">)</span></span>
@@ -438,7 +450,7 @@ ring_01                            8  0.488      -0.001
 <h2 id="what-the-model-learned">What the model learned<a class="anchor" aria-label="anchor" href="#what-the-model-learned"></a>
 </h2>
 <p><code><a href="reference/dsm_importance.html">dsm_importance()</a></code> asks a final model which variables it uses, and the method is an argument, the way the validation design is one in <code><a href="reference/dsm_train.html">dsm_train()</a></code>:</p>
-<div class="sourceCode" id="cb17"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb18"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="reference/dsm_importance.html">dsm_importance</a></span><span class="op">(</span><span class="va">final</span>, <span class="va">data</span><span class="op">)</span>                                      <span class="co"># permutation, on the test set</span></span>
 <span><span class="fu"><a href="reference/dsm_importance.html">dsm_importance</a></span><span class="op">(</span><span class="va">final</span>, <span class="va">data</span>, <span class="fu"><a href="reference/permutation_importance.html">permutation_importance</a></span><span class="op">(</span>within <span class="op">=</span> <span class="fl">5</span><span class="op">)</span><span class="op">)</span>  <span class="co"># donors from the same 5-unit block</span></span>
 <span><span class="fu"><a href="reference/dsm_importance.html">dsm_importance</a></span><span class="op">(</span><span class="va">final</span>, <span class="va">data</span>, <span class="fu"><a href="reference/context_importance.html">context_importance</a></span><span class="op">(</span><span class="op">)</span><span class="op">)</span>                <span class="co"># how far from the point it reads</span></span>
@@ -499,7 +511,7 @@ ring_01                            8  0.488      -0.001
 <p>A variable is a channel, or the channels of one categorical — the one-hot sets are inferred from the names and checked against the data — or a group of yours. With many correlated predictors, themes (climate, relief, vegetation, …) are the unit a reader can use. Of the signal two near-copies share, a permutation credits neither, a refit without one finds it in the other, and SAGE splits it between them. <code>rows = "folds"</code> scores the tuning run’s fold models on their own validation rows instead of the final seeds on the test set — the way two validation designs are compared on what their models learned. <code><a href="reference/compare_importance.html">compare_importance()</a></code> sets importances side by side and says how far their rankings agree, and <code><a href="https://rdrr.io/r/graphics/plot.default.html" class="external-link">plot()</a></code> draws the figure each one answers with.</p>
 <p><strong>Nothing is measured against a model that is not the run’s.</strong> Before anything is perturbed, each model must give back, point by point, the predictions its run wrote. SHAP values must add up to the prediction less the reference, and SAGE values to the loss the model explains. A refit first trains a seed again with nothing left out and must get the run’s predictions back: in the SOC 0-30 cm trial’s test run, a seed trained again five days later did, to a difference of 0.</p>
 <p>SHAP runs at points of the map too, and becomes maps:</p>
-<div class="sourceCode" id="cb18"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb19"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">pts</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/importance_points.html">importance_points</a></span><span class="op">(</span><span class="va">final</span>, <span class="va">data</span>, extent <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="op">-</span><span class="fl">55</span>, <span class="op">-</span><span class="fl">53</span>, <span class="op">-</span><span class="fl">31</span>, <span class="op">-</span><span class="fl">29</span><span class="op">)</span><span class="op">)</span>   <span class="co"># a tile, every cell</span></span>
 <span><span class="va">imp</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/dsm_importance.html">dsm_importance</a></span><span class="op">(</span><span class="va">final</span>, <span class="va">data</span>, <span class="fu"><a href="reference/shap_importance.html">shap_importance</a></span><span class="op">(</span><span class="op">)</span>, at <span class="op">=</span> <span class="va">pts</span><span class="op">)</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/graphics/plot.default.html" class="external-link">plot</a></span><span class="op">(</span><span class="fu"><a href="reference/importance_map.html">importance_map</a></span><span class="op">(</span><span class="va">imp</span>, output_dir <span class="op">=</span> <span class="st">"shap_tile"</span><span class="op">)</span><span class="op">)</span>  <span class="co"># per variable, the dominant one, the prediction</span></span></code></pre></div>
@@ -748,7 +760,7 @@ ring_01                            8  0.488      -0.001
 </tr>
 <tr>
 <td><a href="R/utils.R"><code>R/utils.R</code></a></td>
-<td>Safe I/O helpers, torch device setup, <code>env_*()</code> overrides, <code><a href="reference/latest_run_dir.html">latest_run_dir()</a></code> — the newest <em>finished</em> run, by time</td>
+<td>Safe I/O helpers, torch device setup, the internal <code>.env_*()</code> readers of environment overrides, <code><a href="reference/latest_run_dir.html">latest_run_dir()</a></code> — the newest <em>finished</em> run, by time</td>
 </tr>
 <tr>
 <td><a href="R/checks.R"><code>R/checks.R</code></a></td>
@@ -800,6 +812,10 @@ ring_01                            8  0.488      -0.001
 <td>
 <code>train_one_cnn()</code> · <code>run_cnn_tuning()</code> · <code>run_cnn_resample()</code>
 </td>
+</tr>
+<tr>
+<td><a href="R/train_workers.R"><code>R/train_workers.R</code></a></td>
+<td>The tuning units <code>(config, fold, seed)</code> trained side by side in worker processes, with fixed threads each, resumable; what <code><a href="reference/dsm_train.html">dsm_train()</a></code> runs underneath</td>
 </tr>
 <tr>
 <td><a href="R/model_registry.R"><code>R/model_registry.R</code></a></td>
@@ -867,6 +883,11 @@ ring_01                            8  0.488      -0.001
 <code><a href="https://rdrr.io/r/graphics/plot.default.html" class="external-link">plot()</a></code> for an importance, a map of SHAP values and a comparison of importances — in base graphics</td>
 </tr>
 <tr>
+<td><a href="R/example_landscape.R"><code>R/example_landscape.R</code></a></td>
+<td>
+<code><a href="reference/example_landscape.html">example_landscape()</a></code> · <code><a href="reference/example_run.html">example_run()</a></code> — the small synthetic landscape the package ships, and a run fitted on it once per session, for the examples, the fast tests and anyone without data</td>
+</tr>
+<tr>
 <td><a href="R/globals.R"><code>R/globals.R</code></a></td>
 <td>The column names dplyr resolves at run time, declared for <code>R CMD check</code> — each checked against its use</td>
 </tr>
@@ -919,7 +940,7 @@ ring_01                            8  0.488      -0.001
 <h2 id="dependencies">Dependencies<a class="anchor" aria-label="anchor" href="#dependencies"></a>
 </h2>
 <p>The package’s own are <code>DESCRIPTION</code>’s Imports:</p>
-<div class="sourceCode" id="cb19"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb20"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/utils/install.packages.html" class="external-link">install.packages</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span></span>
 <span>  <span class="st">"torch"</span>, <span class="st">"coro"</span>,                          <span class="co"># deep learning</span></span>
 <span>  <span class="st">"dplyr"</span>, <span class="st">"readr"</span>, <span class="st">"tibble"</span>, <span class="st">"purrr"</span>,      <span class="co"># data wrangling</span></span>
@@ -934,11 +955,11 @@ ring_01                            8  0.488      -0.001
 <div class="section level3">
 <h3 id="loading-it">Loading it<a class="anchor" aria-label="anchor" href="#loading-it"></a>
 </h3>
-<div class="sourceCode" id="cb20"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb21"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu">pkgload</span><span class="fu">::</span><span class="fu"><a href="https://pkgload.r-lib.org/reference/load_all.html" class="external-link">load_all</a></span><span class="op">(</span><span class="st">"&lt;clone&gt;"</span><span class="op">)</span>                <span class="co"># the source tree, as it stands</span></span>
 <span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://github.com/moquedace/soilcnn" class="external-link">soilcnn</a></span><span class="op">)</span>                            <span class="co"># an installed copy</span></span></code></pre></div>
 <p>To install a copy from a clone, build the tarball first:</p>
-<div class="sourceCode" id="cb21"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb22"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">tgz</span> <span class="op">&lt;-</span> <span class="fu">pkgbuild</span><span class="fu">::</span><span class="fu"><a href="https://pkgbuild.r-lib.org/reference/build.html" class="external-link">build</a></span><span class="op">(</span><span class="st">"&lt;clone&gt;"</span>, dest_path <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/tempfile.html" class="external-link">tempdir</a></span><span class="op">(</span><span class="op">)</span><span class="op">)</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/utils/install.packages.html" class="external-link">install.packages</a></span><span class="op">(</span><span class="va">tgz</span>, repos <span class="op">=</span> <span class="cn">NULL</span>, type <span class="op">=</span> <span class="st">"source"</span><span class="op">)</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/utils/vignette.html" class="external-link">vignette</a></span><span class="op">(</span><span class="st">"soilcnn"</span><span class="op">)</span>                         <span class="co"># the tour, built into the copy</span></span></code></pre></div>
@@ -952,13 +973,14 @@ ring_01                            8  0.488      -0.001
 <div class="section level2">
 <h2 id="where-it-was-developed">Where it was developed<a class="anchor" aria-label="anchor" href="#where-it-was-developed"></a>
 </h2>
-<p>On a global model of soil organic carbon stock, 0–5 cm (t/ha): WoSIS profiles and 181 raster predictors at 250 m, with 4,154 rows extracted, 3,766 surviving QC and 3,728 reaching the patch store. The numbers quoted above come from it. That project’s scripts, data and records are kept apart from this repository, which holds the package alone.</p>
+<p>On a global model of soil organic carbon stock, 0–5 cm (t/ha): WoSIS profiles and 181 raster predictors at 250 m, with 4,154 rows extracted, 3,766 surviving QC and 3,728 reaching the patch store. The numbers quoted above come from it, unless they name the 0–30 cm trial.</p>
+<p>It was then tested on a continental application, the one the vignette follows: soil organic carbon stock at 0–30 cm over Latin America and the Caribbean, 25,887 profiles and 174 predictors at 250 m, under five validation designs that share one test set and one calibration set. The vignette’s results come from a run on a tenth of the profiles (2,872), in whole blocks. That project’s scripts, data and records are kept apart from this repository, which holds the package alone.</p>
 <hr>
 </div>
 <div class="section level2">
 <h2 id="citation">Citation<a class="anchor" aria-label="anchor" href="#citation"></a>
 </h2>
-<div class="sourceCode" id="cb22"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb23"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/utils/citation.html" class="external-link">citation</a></span><span class="op">(</span><span class="st">"soilcnn"</span><span class="op">)</span></span></code></pre></div>
 <blockquote>
 <p>Moquedace CM, Baldi CGO (2026). <em>soilcnn: Convolutional Neural Networks for Digital Soil Mapping</em>. R package, <a href="https://github.com/moquedace/soilcnn" class="external-link uri">https://github.com/moquedace/soilcnn</a>.</p>
