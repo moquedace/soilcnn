@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/torch-deep%20learning-EE4C2C?style=flat-square&logo=pytorch&logoColor=white" alt="torch"/>
   <img src="https://img.shields.io/badge/domain-digital%20soil%20mapping-4CAF50?style=flat-square" alt="digital soil mapping"/>
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT licence"/>
-  <img src="https://img.shields.io/badge/status-in%20development-orange?style=flat-square" alt="in development"/>
+  <a href="https://CRAN.R-project.org/package=soilcnn"><img src="https://www.r-pkg.org/badges/version/soilcnn" alt="CRAN version"/></a>
 </p>
 
 <p align="center">
@@ -75,12 +75,19 @@ unless they name the second (see
 ## Installation
 
 ```r
-# install.packages("remotes")
-remotes::install_github("moquedace/soilcnn")
+install.packages("soilcnn")
 torch::install_torch()          # once: the C++ backend the torch package needs
 ```
 
-The tour, `vignette("soilcnn")`, is there only when the install builds it,
+The development version, from GitHub:
+
+```r
+# install.packages("remotes")
+remotes::install_github("moquedace/soilcnn")
+```
+
+Installed from CRAN, the tour comes with it: `vignette("soilcnn")`. From
+GitHub it is there only when the install builds it,
 which needs knitr, rmarkdown and pandoc (RStudio ships pandoc):
 
 ```r
