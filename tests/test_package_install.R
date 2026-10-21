@@ -177,9 +177,10 @@ ok["installed_loader_points_at_the_copy"] <- identical(got$loader$path, got$lib_
 ok["installed_worker_opens_the_same_copy"] <-
   identical(got$worker$hash, got$loader$code_hash) &&
   identical(normalizePath(got$worker$path, winslash = "/"), got$lib_path)
-ok["installed_citation_names_both_authors"] <-
+ok["installed_citation_names_the_three_authors"] <-
   identical(got$citation_authors,
-            c("C\u00e1ssio Marques Moquedace", "Clara Gl\u00f3ria Oliveira Baldi"))
+            c("C\u00e1ssio Marques Moquedace", "Clara Gl\u00f3ria Oliveira Baldi",
+              "Jos\u00e9 Alexandre Melo Dematt\u00ea"))
 
 cat("  tarball                  : ", basename(tgz), " (", length(listed), " files)\n", sep = "")
 cat("  installed models         : ", paste(got$models, collapse = ", "), "\n", sep = "")

@@ -4,7 +4,8 @@ Version: 0.1.0
 Authors@R: c(
     person(c("Cássio", "Marques"), "Moquedace", , "cassiomoquedace@gmail.com",
            role = c("aut", "cre", "cph")),
-    person(c("Clara", "Glória", "Oliveira"), "Baldi", role = c("aut", "cph")))
+    person(c("Clara", "Glória", "Oliveira"), "Baldi", role = c("aut", "cph")),
+    person(c("José", "Alexandre", "Melo"), "Demattê", role = c("aut", "cph")))
 Description: A framework, built on 'torch', for mapping a soil property from
     point observations and a stack of aligned rasters with a convolutional
     network that reads the neighbourhood of each point. It extracts the

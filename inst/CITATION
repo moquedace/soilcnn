@@ -5,7 +5,8 @@ bibentry(
   header  = "To cite soilcnn in publications use:",
   title   = "{soilcnn}: Convolutional Neural Networks for Digital Soil Mapping",
   author  = c(person(c("Cássio", "Marques"), "Moquedace"),
-              person(c("Clara", "Glória", "Oliveira"), "Baldi")),
+              person(c("Clara", "Glória", "Oliveira"), "Baldi"),
+              person(c("José", "Alexandre", "Melo"), "Demattê")),
   year    = "2026",
   note    = paste("R package version", meta$Version),
   url     = "https://github.com/moquedace/soilcnn"
