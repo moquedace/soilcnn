@@ -2,6 +2,8 @@
 
 ## soilcnn 0.1.0
 
+CRAN release: 2026-10-21
+
 First release.
 
 - Patch store from points and aligned rasters

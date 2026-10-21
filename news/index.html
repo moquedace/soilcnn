@@ -30,11 +30,11 @@
   <main id="main" class="col-md-9"><div class="page-header">
 
       <h1>Changelog</h1>
-      <small>Source: <a href="https://github.com/moquedace/soilcnn/blob/main/NEWS.md" class="external-link"><code>NEWS.md</code></a></small>
+      <small>Source: <a href="https://github.com/moquedace/soilcnn/blob/v0.1.0/NEWS.md" class="external-link"><code>NEWS.md</code></a></small>
     </div>
 
     <div class="section level2">
-<h2 class="pkg-version" data-toc-text="0.1.0" id="soilcnn-010">soilcnn 0.1.0<a class="anchor" aria-label="anchor" href="#soilcnn-010"></a></h2>
+<h2 class="pkg-version" data-toc-text="0.1.0" id="soilcnn-010">soilcnn 0.1.0<a class="anchor" aria-label="anchor" href="#soilcnn-010"></a></h2><p class="text-muted">CRAN release: 2026-10-21</p>
 <p>First release.</p>
 <ul><li>Patch store from points and aligned rasters (<code><a href="../reference/dsm_prepare.html">dsm_prepare()</a></code>, <code><a href="../reference/dsm_load.html">dsm_load()</a></code>), with a subsample by whole spatial blocks, stratified by region on request.</li>
 <li>Resampling specs for spatial blocks, kNNDM, random folds, a holdout and groups (<code><a href="../reference/spatial_cv.html">spatial_cv()</a></code>, <code><a href="../reference/knndm_cv.html">knndm_cv()</a></code>, <code><a href="../reference/random_cv.html">random_cv()</a></code>, <code><a href="../reference/holdout_cv.html">holdout_cv()</a></code>, <code><a href="../reference/region_cv.html">region_cv()</a></code>), with buffers that keep training patches from touching validation and test patches, and an optional calibration set carved beside the test set by the same criterion (<code>calibration_frac</code>).</li>
